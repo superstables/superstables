@@ -46,7 +46,9 @@
 // A request can outlive the command that made it (a host may end every process of a command when the command ends). A later
 // worker of the same approval takes it over (HostedSettings.resume) instead of creating one: it checks that it asks for the
 // same thing (`intent`), reads the request from the site first, whatever the clock says, and polls it as the first worker would.
-// It never creates a request, and it never cancels one just because the command that took it over ended.
+// It never creates a request, and it never cancels one just because the command that took it over ended. Until it has read the
+// request on the site it decides nothing: a failed read, a token it cannot renew, or a site that is down leaves the approval open
+// (onTakeover is called at the first answer that is about the request, which is when its results start to count).
 //
 // Every approval checks the site's owner against the owner recorded at setup (`account`): a request the site ties to another
 // address is cancelled and refused before the link is shown, and at any later point.
@@ -277,7 +279,7 @@ export interface HostedSettings {
   resumable?: boolean;
   /** This worker finishes the recorded request an earlier worker made: it creates none (see the header). */
   resume?: HostedRecord;
-  /** Called once this worker has checked that the recorded request is the one its command asks for and has it in hand. */
+  /** Called once the site has answered about the recorded request (after the check that it is the one this command asks for): from then on this worker's results count. */
   onTakeover?: () => void;
 }
 
@@ -523,7 +525,6 @@ export class HostedApprovals {
         : taken.intent !== intent ? "this command asks for something other than the recorded request"
         : "";
       if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. No new request was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
-      this.s.onTakeover?.();
     }
     const answer = taken
       ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
@@ -878,6 +879,14 @@ export class HostedApprovals {
     // A request an earlier worker made may be past its expiry already, with the owner's answer on the site: it is read before any
     // expiry is acted on, however long that takes (a site that cannot be read decides nothing; the worker's own deadline ends it).
     let freshUntil = p.fresh ? Infinity : 0;
+    // when the first read of a request taken over succeeded: the time the owner has to send is counted from then at the earliest
+    let readFrom = 0;
+    const tookOver = () => {
+      if (freshUntil !== Infinity) return;
+      freshUntil = 0;
+      readFrom = Date.now();
+      this.s.onTakeover?.();
+    };
     // Every cancellation of this approval (the deadline, a refused owner, close()) is the one shared call. What its answer
     // shows of the wallet is taken in, and written to the log, before the call resolves: close() may be followed by an exit.
     this.learners.set(p.id, (c) => {
@@ -931,7 +940,7 @@ export class HostedApprovals {
       }
       // past the expiry (and, once the wallet was asked, the time for its hash to come back) without a final answer: the
       // request may still be open on the site, so a transaction is never reported as "nothing sent"
-      if (now > expiry + (walletAsked ? grace : 30_000) && now >= freshUntil) {
+      if (now > Math.max(expiry, readFrom) + (walletAsked ? grace : 30_000) && now >= freshUntil) {
         return end("expired", walletAsked ? `the wallet was asked to send, but no transaction came back from ${this.name}` : `no final answer from ${this.s.site} by the time the approval link expired; the request may still be open there`, tx);
       }
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((expiry - now) / 1000)));
@@ -947,16 +956,22 @@ export class HostedApprovals {
           }
         }
         // an access token the site expired: one renewal with a fresh agent signature, then the same read again
-        if (r.status === 401 && r.code === "token_expired" && !renewed) {
+        if (r.status === 401 && r.code === "token_expired" && (!renewed || freshUntil === Infinity)) {
           renewed = true;
           if (await this.renewed(p)) continue;
         }
-        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
+        // Before a request taken over has been read once, a token that cannot be renewed or a refused read is no answer about the
+        // request: only the site saying it does not know the request (404, 410) or its documented refusal is.
+        const answered = [404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code));
+        if (answered || ([401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
+          tookOver();
+          return end(tx ? "expired" : "rejected", `${this.s.site} no longer answers for this request (${r.reason})`, tx);
+        }
         await sleep(Math.min(5000, 1000 + (Date.now() - lastContact) / 10));
         continue;
       }
       lastContact = Date.now();
-      freshUntil = 0;
+      tookOver();
       const v = r.view;
       const state = String(v.state);
       const seenNow = seenOf(this.w, v);
@@ -1039,6 +1054,13 @@ export class HostedApprovals {
     let readAt = 0;
     // as in poll(): a request taken over is read before any expiry is acted on
     let freshUntil = p.fresh ? Infinity : 0;
+    let readFrom = 0;
+    const tookOver = () => {
+      if (freshUntil !== Infinity) return;
+      freshUntil = 0;
+      readFrom = Date.now();
+      this.s.onTakeover?.();
+    };
     /** The link was refused (no valid owner proof): its steps were withdrawn when the site confirmed it, else unknown. */
     let refusedLink: { withdrawn: boolean } | null = null;
     const asked = () => steps.some((s) => s.walletAsked);
@@ -1202,18 +1224,21 @@ export class HostedApprovals {
         }
         if (withdrawn) return finish(owner ? null : `the approval link expired without a completed approval, and the request was cancelled on ${this.name}; nothing was sent`);
       }
-      if (now > deadline + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
+      if (now > Math.max(deadline, readFrom) + (asked() ? grace : (this.s.quietGraceMs ?? 30_000)) && now >= freshUntil) return finish(`no final answer from ${this.s.site} in time; the request may still be open there`);
       const waitS = Math.max(0, Math.min(this.s.pollWaitS ?? 20, Math.ceil((deadline - now) / 1000)));
       readAt = Date.now();
       const r = await readSiteRequest({ site: this.s.site, id: p.id, token: p.token, wait: waitS, fetchImpl: this.s.fetchImpl });
       if (!r.ok) {
         if (r.asked) unexplain();
         // an access token the site expired: one renewal with a fresh agent signature, then the same read again
-        if (r.status === 401 && r.code === "token_expired" && !renewed) {
+        if (r.status === 401 && r.code === "token_expired" && (!renewed || freshUntil === Infinity)) {
           renewed = true;
           if (await this.renewed(p)) continue;
         }
-        if ([401, 403, 404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code))) {
+        // as in poll(): before the request has been read once, only the site's own "unknown request" or refusal is an answer
+        const answered = [404, 410].includes(r.status ?? 0) || (r.status === 400 && accountRefusalNext(r.code));
+        if (answered || ([401, 403].includes(r.status ?? 0) && freshUntil !== Infinity)) {
+          tookOver();
           // withdraw it first: an answer that confirms it is the only proof the steps were never asked
           if (!cancelTried) {
             cancelTried = true;
@@ -1225,7 +1250,7 @@ export class HostedApprovals {
         continue;
       }
       lastContact = Date.now();
-      freshUntil = 0;
+      tookOver();
       const v = r.view;
       const trusted = own(v);
       // first of all: what this answer shows of the wallet, before its owner proof, step states or finality are looked at

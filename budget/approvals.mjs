@@ -16,8 +16,9 @@
 // owner approves. A hosted request the site still holds is then finished by the next `wait`: restartWorker starts the same worker
 // command again with RESUME_ENV set, and the rail script takes the recorded request over (hosted.ts) instead of creating one,
 // then does what the first worker would have done. Until that finishes, the record holds the chain (lockHeld): no second
-// request starts before the first is reconciled. Such an approval is ended only by a worker that has the request in hand, or, after
-// MAX_FAILED_RESTARTS restarts that never got that far, by the way an approval whose worker is gone has always ended.
+// request starts before the first is reconciled. No automatic path ends such an approval except a worker that has read the
+// request on the site: not wait, not a startup that failed, not a count of failed restarts. Only the owner can end it otherwise
+// (--replace, which the site must confirm, or the owner's terminal unlock of the chain, which does not reconcile the request).
 //
 // Files, under $SUPERSTABLES_HOME/budget/approvals/ (paths.mjs), no key material in any of them:
 //   <id>.json               the record (mode 600): command, rail, chain, pid (with its start), link, terms, and the final RESULT once known;
@@ -700,16 +701,10 @@ function launchWorker(id, { cmd, args, cwd, env = process.env }) {
 
 /**
  * Whether a later command can finish this approval: a hosted request of a rail script that stored what it needs to be run again
- * (`resumable`), whose worker command was recorded, and that no result has ended.
+ * (`resumable`), whose worker command was recorded, and that no result has ended. However many restarts failed and however
+ * long ago the request expired: only a worker that read the request on the site decides what became of it.
  */
-export const canResume = (record) => Boolean(record && !record.final && !record.foreground && record.hosted?.token && record.hosted.resumable === true && Array.isArray(record.workerArgs) && (record.resumes ?? 0) - (record.resume?.takenOver ?? 0) < MAX_FAILED_RESTARTS);
-
-/**
- * How many times in a row a restarted worker may end without having taken the site's request over (a refusal before it, a crash,
- * a worker that would not start) before the approval is given up as it always was: the site is asked to cancel it, else unknown.
- * One that took the request over, even to find the owner has not decided, counts as no failure.
- */
-export const MAX_FAILED_RESTARTS = 5;
+export const canResume = (record) => Boolean(record && !record.final && !record.foreground && record.hosted?.token && record.hosted.resumable === true && Array.isArray(record.workerArgs));
 
 /**
  * Start the worker of approval `id` again, to finish a hosted request whose first worker was ended (the host stopped every
@@ -720,6 +715,13 @@ export const MAX_FAILED_RESTARTS = 5;
  * @returns {{ started: boolean, record: any }}
  */
 export function restartWorker(id, { cmd, script, cwd, env = process.env }) {
+  const open = readApproval(id);
+  // The chain is this approval's, or free for it: an owner who cleared the chain's lock by hand (unlock) and started another
+  // approval since must not get two open requests from a restart.
+  if (canResume(open) && readLock(open.rail, open.chain)?.id !== id) {
+    const taken = claim(open.rail, open.chain, id);
+    if (!taken.ok) return { started: false, record: open, blockedBy: taken.pending };
+  }
   let launched = null;
   let record;
   try {
@@ -782,7 +784,17 @@ export async function startDetached({ id, command, rail, chain, cmd, args, cwd, 
   const at = { offset: 0, ino: undefined, text: "" };
   // The worker is stopped and never showed a link. A final it stored stands; one that may have sent is unknown; only one
   // that never was about to send fails. recordFinalWith frees the chain and removes any access token the worker recorded.
-  const endWithoutLink = (reason, failedReason) => {
+  // A hosted request the site may hold (the rail recorded it before the worker went) is never ended here: the owner can still
+  // approve it. Everything the approval started is stopped, and its record and chain stay for `wait`.
+  const holdOpen = async () => {
+    const open = readApproval(id);
+    if (!canResume(open)) return null;
+    await stopRecord(open);
+    return processesAlive(readApproval(id)) ? { kind: "unstopped", record: readApproval(id), reason: "the background approval stopped after it asked the site, but its processes would not stop; the chain stays held" } : { kind: "open", record: readApproval(id) };
+  };
+  const endWithoutLink = async (reason, failedReason) => {
+    const held = await holdOpen();
+    if (held) return held;
     const { record, stored } = recordFinalWith(id, (before) => recordMayHaveSent(before)
       ? sentUnknown(before, `${reason}, after its command was about to broadcast a transaction`)
       : { code: 1, result: { ok: false, command, rail, chain, state: "failed", id, next: "check wallet activity and budget status before retrying", reason } });
@@ -972,7 +984,7 @@ function sentUnknown(record, reason) {
  * A hosted request whose worker is gone and that a later command can finish (canResume) returns { final: false, resume: true }
  * instead of being ended, every time: the caller starts the worker again (restartWorker), and a worker that ends with no
  * result leaves the approval open for the next `wait`. Only an approval that cannot be finished (not resumable, or restarted
- * MAX_FAILED_RESTARTS times without the request taken over) ends the way an approval whose worker is gone always has.
+ * a worker that read the request on the site) ends the way an approval whose worker is gone always has.
  */
 export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
   const first = readApproval(id);
@@ -1005,6 +1017,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       // decided from the record as stored under its lock: a worker another command started meanwhile keeps the approval open
       const { record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)));
       const stored = ended ?? readApproval(id);
+      if (!stored?.final) continue;
       return { final: true, code: stored.final.code, result: stored.final.result, record: stored };
     }
     const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });

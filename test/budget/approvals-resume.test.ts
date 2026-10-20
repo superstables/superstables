@@ -107,29 +107,12 @@ describe("waitFor, with the worker gone", () => {
     expect(JSON.stringify(approvals.readApproval(id))).not.toContain("ssbt_");
   });
 
-  it("an approval whose restarted workers never took the request over, MAX_FAILED_RESTARTS times, ends the way it always did", async () => {
-    const id = await openApproval({ resumes: approvals.MAX_FAILED_RESTARTS });
-    expect(approvals.canResume(approvals.readApproval(id))).toBe(false);
-    const r = await approvals.waitFor(id, 0);
-    expect(r).toMatchObject({ final: true, code: 5 });
-  });
-
-  it("a restart that did take the request over is no failure, however many there were", async () => {
-    const id = await openApproval({ resumes: 40, resume: { takenOver: 38 } });
+  it("no count of failed restarts and no age ends it: only a worker that read the request on the site decides", async () => {
+    const id = await openApproval({ resumes: 40, resume: { takenOver: 0 }, hosted: { ...RESUMABLE, expiresAt: Date.now() - 3_600_000, deadline: Date.now() - 3_600_000 } });
     expect(approvals.canResume(approvals.readApproval(id))).toBe(true);
     expect(await approvals.waitFor(id, 0)).toMatchObject({ final: false, resume: true });
-  });
-
-  it("never ends an approval on a worker that another command started while it was asking the site to cancel", async () => {
-    const id = await openApproval({ resumes: approvals.MAX_FAILED_RESTARTS });
-    // the worker is back by the time the abandoned result is decided: the record is left open
-    const live = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
-    const fields = createIdentitySource().fields(live.pid!);
-    approvals.updateApproval(id, () => ({ ...fields, pid: live.pid! }));
-    const r = await approvals.waitFor(id, 200);
-    expect(r).toMatchObject({ final: false });
     expect(approvals.readApproval(id)?.final).toBeUndefined();
-    killGroup(live.pid!);
+    expect(JSON.stringify(approvals.readApproval(id))).toContain("ssbt_");
   });
 });
 
@@ -179,6 +162,64 @@ describe("restartWorker", () => {
     const done = await openApproval();
     approvals.recordFinal(done, 0, { ok: true });
     expect(approvals.restartWorker(done, { cmd: process.execPath, script: script(), cwd: home }).started).toBe(false);
+  });
+});
+
+describe("restartWorker and the chain", () => {
+  it("does not start a worker while another approval holds the chain (an owner cleared this one's lock and began another)", async () => {
+    const id = await openApproval();
+    const other = await openApproval();
+    await holdChain(other);
+    const file = join(home, "worker-blocked.mjs");
+    writeFileSync(file, "setTimeout(() => {}, 1000);");
+    const r = approvals.restartWorker(id, { cmd: process.execPath, script: file, cwd: home });
+    expect(r.started).toBe(false);
+    expect((r as { blockedBy?: { id: string } }).blockedBy?.id).toBe(other);
+    expect(approvals.readApproval(id)?.resumes).toBeUndefined();
+  });
+
+  it("takes the chain back when it is free, and keeps it for the approval", async () => {
+    const id = await openApproval();
+    const file = join(home, "worker-free.mjs");
+    writeFileSync(file, "setTimeout(() => {}, 1000);");
+    const r = approvals.restartWorker(id, { cmd: process.execPath, script: file, cwd: home });
+    expect(r.started).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
+    killGroup(r.record.pid);
+  });
+});
+
+describe("a worker that goes between recording its hosted request and showing a link", () => {
+  it("leaves the approval open: the request, its token and the chain stay for wait, and nothing is called failed", async () => {
+    const file = join(home, `worker-gone-${Math.random().toString(16).slice(2)}.mjs`);
+    writeFileSync(file, `
+      import { recordHosted, WORKER_ENV } from ${JSON.stringify(new URL("../../budget/approvals.mjs", import.meta.url).pathname)};
+      recordHosted(process.env[WORKER_ENV], ${JSON.stringify(RESUMABLE)});
+      process.exit(1);
+    `);
+    const id = approvals.newApprovalId();
+    expect(approvals.claim("evm", "base-sepolia", id).ok).toBe(true);
+    const r = await approvals.startDetached({ id, command: "grant", rail: "evm", chain: "base-sepolia", cmd: process.execPath, args: [file], cwd: home, timeoutS: 30 });
+    expect(r.kind).toBe("open");
+    const rec = approvals.readApproval(id)!;
+    expect(rec.final).toBeUndefined();
+    expect(rec.hosted?.token).toBeTruthy();
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
+    expect(approvals.canResume(rec)).toBe(true);
+  });
+
+  it("a request that is not resumable still ends as failed, as before", async () => {
+    const file = join(home, `worker-gone2-${Math.random().toString(16).slice(2)}.mjs`);
+    writeFileSync(file, `
+      import { recordHosted, WORKER_ENV } from ${JSON.stringify(new URL("../../budget/approvals.mjs", import.meta.url).pathname)};
+      recordHosted(process.env[WORKER_ENV], ${JSON.stringify(HOSTED)});
+      process.exit(1);
+    `);
+    const id = approvals.newApprovalId();
+    expect(approvals.claim("evm", "base-sepolia", id).ok).toBe(true);
+    const r = await approvals.startDetached({ id, command: "grant", rail: "evm", chain: "base-sepolia", cmd: process.execPath, args: [file], cwd: home, timeoutS: 30 });
+    expect(r.kind).toBe("failed");
+    expect(approvals.readApproval(id)?.final).toBeDefined();
   });
 });
 

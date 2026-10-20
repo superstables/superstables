@@ -154,13 +154,42 @@ describe("a hosted request taken over by a later worker", () => {
     expect(await h.settled).toEqual({ status: "sent", address: OWNER, hash: HASH });
   });
 
-  it("onTakeover is called once the recorded request is checked and in hand, and not for a request it refuses", async () => {
+  it("onTakeover is called at the first answer about the recorded request, and not for a request it refuses", async () => {
     const record = await firstWorker();
+    Object.assign(site.requests[0], { state: "confirmed", tx_hash: HASH, wallet_asked: true });
     let taken = 0;
-    await grant(client({ resume: record, onTakeover: () => taken++ }));
+    const h = await grant(client({ resume: record, onTakeover: () => taken++ }));
+    await h.settled;
     expect(taken).toBe(1);
     await grant(client({ resume: { ...record, intent: "0".repeat(64) }, onTakeover: () => taken++ })).catch(() => {});
     expect(taken).toBe(1);
+  });
+
+  it("a token that cannot be renewed, or a refused read, is no answer about the request: it stays open until the site answers", async () => {
+    for (const asked of ["tx", "link"] as const) {
+      const record = asked === "tx" ? await firstWorker() : await (async () => {
+        gone = false;
+        await client({ fetchImpl: deadFetch }).request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+        gone = true;
+        return records.at(-1)!;
+      })();
+      const r = site.requests.at(-1)!;
+      r.expired = true;
+      site.renewAnswer = () => ({ status: 503, body: {} });
+      let taken = 0;
+      const c = client({ resume: record, onTakeover: () => taken++ });
+      const h = asked === "tx" ? await grant(c) : await c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000 });
+      const raced = await Promise.race([h.settled.then(() => "settled"), new Promise((x) => setTimeout(() => x("open"), 1500))]);
+      expect(raced, asked).toBe("open");
+      expect(taken, asked).toBe(0);
+      expect(r.cancels, asked).toBe(0);
+      // the site answers again
+      site.renewAnswer = undefined;
+      if (asked === "tx") Object.assign(r, { state: "confirmed", tx_hash: HASH, wallet_asked: true });
+      else Object.assign(r, { state: "linked", owner: OWNER });
+      expect(await h.settled, asked).toMatchObject({ status: asked === "tx" ? "sent" : "connected" });
+      expect(taken, asked).toBe(1);
+    }
   });
 
   it("a link with steps: the bundle settles from the recorded request, with the owner proof checked", async () => {

@@ -283,14 +283,15 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     Object.assign(site.requests[0], { state: "expired", reason: "the link expired", reason_code: "expired" });
     for (const s of site.requests[0].steps!) Object.assign(s, { state: "skipped" });
     const done = await budget(["wait", "--shown", "--id", id, "--timeout", "60"]);
-    expect(done.result).toMatchObject({ final: true });
-    expect(done.code).not.toBe(0);
+    expect(done.result).toMatchObject({ final: true, state: "refused_precheck", linked: false });
+    expect(done.code).toBe(3);
+    expect(done.result.reason).toMatch(/expired|nothing was sent/i);
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
     expect(existsSync(lockPath())).toBe(false);
     expect(site.posts).toHaveLength(1);
   }, 240_000);
 
-  it("a record whose request is not the one the command asks for: nothing is created or cancelled and the approval stays open; after five such restarts it ends as an approval whose worker is gone always did", async () => {
+  it("a record whose request is not the one the command asks for: nothing is created or cancelled, and the approval stays open however often wait is run", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
     await endEveryProcess(id);
@@ -298,21 +299,42 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const r = record(id);
     writeFileSync(path, JSON.stringify({ ...r, hosted: { ...r.hosted, intent: "0".repeat(64) } }));
     approveSetup();
-    const first = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
-    expect(first.code).toBe(5);
-    expect(first.result).toMatchObject({ state: "unknown", final: false });
-    expect(record(id).final).toBeUndefined();
+    for (let n = 1; n <= 2; n++) {
+      const w = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
+      expect(w.code).toBe(5);
+      expect(w.result).toMatchObject({ state: "unknown", final: false });
+      expect(record(id).final).toBeUndefined();
+      expect(record(id).resumes).toBe(n);
+    }
     expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/cannot be finished: this command asks for something other than the recorded request/);
     expect(site.posts).toHaveLength(1);
     expect(site.requests[0].cancels).toBe(0);
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+    expect(record(id).hosted.token).toMatch(/^ssbt_/);
     expect(existsSync(lockPath())).toBe(true);
-    // enough restarts that never took the request over: the old ending, which asks the site and reports unknown
-    writeFileSync(path, JSON.stringify({ ...record(id), resumes: 5 }));
-    const last = await budget(["wait", "--shown", "--id", id, "--timeout", "30"]);
-    expect(last.result).toMatchObject({ state: "unknown", final: true });
+    // the record is put right: the next wait finishes it
+    writeFileSync(path, JSON.stringify({ ...record(id), hosted: { ...record(id).hosted, intent: r.hosted.intent } }));
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true });
+    expect(lines("B4_CAP")).toBe(1);
+  }, 300_000);
+
+  it("only the rail script of the first worker is gone (the worker itself runs on): nothing is called failed, and wait finishes the approval", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    const r = record(id);
+    process.kill(-r.railPgid, "SIGKILL");
+    // the worker sees its rail script end with no RESULT
+    for (let i = 0; i < 100 && alive(r.pid); i++) await new Promise((x) => setTimeout(x, 100));
+    expect(alive(r.pid)).toBe(false);
+    expect(record(id).final).toBeUndefined();
+    expect(record(id).hosted.token).toMatch(/^ssbt_/);
+    approveSetup();
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.result).toMatchObject({ state: "ok", final: true, owner: OWNER });
+    expect(lines("B4_CAP")).toBe(1);
     expect(site.posts).toHaveLength(1);
-  }, 240_000);
+  }, 300_000);
 
   it("the restarted worker stops while this wait is still reading: nothing is decided, and the next wait finishes the approval", async () => {
     await fakeChain(0n, 10000n);
@@ -320,8 +342,9 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     await endEveryProcess(id);
     const waiting = budget(["wait", "--shown", "--id", id, "--timeout", "40"]);
     // the restarted worker is recorded once it started
-    for (let i = 0; i < 200 && !record(id).resumes; i++) await new Promise((x) => setTimeout(x, 100));
-    await new Promise((x) => setTimeout(x, 2500));
+    for (let i = 0; i < 300 && !(record(id).resumes && record(id).resume?.takenOver === record(id).resumes); i++) await new Promise((x) => setTimeout(x, 100));
+    // it has read the request on the site: this is a worker that had the request in hand when it was ended
+    expect(record(id).resume?.takenOver).toBe(record(id).resumes);
     await endEveryProcess(id);
     const stopped = await waiting;
     expect(stopped.code).toBe(5);

@@ -265,6 +265,7 @@ export function ownerPageFor(rail: OwnerRail) {
       process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: `the recorded site is not usable: ${site.error}`, next: site.ownerCommand ? `${site.ownerCommand} in the owner's own terminal, or superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted --new-owner to move this chain to ${DEFAULT_SITE}` : `run superstables budget setup ${rail.railFlag ?? "--rail evm"} --hosted again, with --site if you use another site` }));
     }
     if (kind === "transaction" && !HOSTED_KIND[action]) {
+      if (resuming()) throw new Error(`${action} has no hosted approval, so a resumed command cannot finish one`);
       console.error(`${action}: the owner's steps of recover use the approval page on this machine (127.0.0.1), not ${site.origin}. Hosted approvals cover setup, grant, revoke and fund-agent.`);
       return undefined;
     }
