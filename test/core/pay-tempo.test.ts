@@ -170,6 +170,80 @@ describe("a referred pay on Tempo Moderato", () => {
   });
 });
 
+describe("a challenge an earlier payment used, under another referral", () => {
+  const FIRST = "ref_AAECAwQFBgcICQoLDA0ODw";
+  const OTHER = "ref_EBESExQVFhcYGRobHB0eHw";
+
+  /** The first payment of `challengeId`, paid and settled under `firstId` (none when undefined). */
+  async function paidFirst(firstId: string | undefined) {
+    const s = await stack({ challengeId: "the-same-challenge" });
+    if (firstId) referred(s, firstId);
+    const first = await startTempoPayment(s);
+    const prepared = await postJson(`${first.link}/account`, { address: first.owner });
+    await postJson(`${first.link}/sending`, { address: first.owner });
+    const hash = s.chain.send(first.owner, prepared.body.transaction);
+    await postJson(`${first.link}/sent`, { address: first.owner, hash });
+    expect((await s.engine.waitForAttempt(first.attempt.id, 15_000)).state).toBe("settled");
+    expect(s.records.getAttempt(first.attempt.id)?.paymentMemo?.slice(32, 52) === "0".repeat(20)).toBe(firstId === undefined);
+    return { s, first };
+  }
+
+  /** The seller hands the same challenge out again: the second attempt is refused before the wallet is asked. */
+  async function expectRefused(s: Stack, firstId: string) {
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const second = await s.engine.waitForAttempt(s.engine.startPayment(q.id).id, 10_000);
+    expect(second).toMatchObject({ state: "failed", refusal: "invalid" });
+    expect(second.reason).toBe(
+      `the seller's payment challenge is one an earlier payment already used (attempt ${firstId}), so a transfer for it could not be told apart from that payment's; nothing was sent. Quote again for a new challenge`,
+    );
+    expect(second.approvalUrl).toBeUndefined();
+    expect(second.paymentMemo).toBeUndefined();
+    expect(s.chain.transfers.size).toBe(1);
+    expect(s.seller.credentials).toHaveLength(1);
+  }
+
+  it("refuses the same challenge under a different referral id", async () => {
+    const { s, first } = await paidFirst(FIRST);
+    referred(s, OTHER);
+    await expectRefused(s, first.attempt.id);
+  });
+
+  it("refuses the same challenge when the referral has gone", async () => {
+    const { s, first } = await paidFirst(FIRST);
+    process.env.SUPERSTABLES_REFERRALS = "off";
+    try {
+      await expectRefused(s, first.attempt.id);
+    } finally {
+      delete process.env.SUPERSTABLES_REFERRALS;
+    }
+  });
+
+  it("refuses the same challenge under a referral, after a payment without one", async () => {
+    const { s, first } = await paidFirst(undefined);
+    referred(s, FIRST);
+    await expectRefused(s, first.attempt.id);
+  });
+
+  it("asks one wallet only, when two approvals for the same challenge carry different referrals", async () => {
+    const s = await stack({ challengeId: "the-same-challenge" });
+    referred(s, FIRST);
+    const a = await startTempoPayment(s);
+    referred(s, OTHER);
+    const b = await startTempoPayment(s);
+    const callA = (await postJson(`${a.link}/account`, { address: a.owner })).body.transaction as { data: Hex };
+    const callB = (await postJson(`${b.link}/account`, { address: b.owner })).body.transaction as { data: Hex };
+    // The two memos differ in the referral's bytes only
+    expect(memoOfCall(callA.data)).not.toBe(memoOfCall(callB.data));
+    expect(memoOfCall(callA.data).slice(0, 32)).toBe(memoOfCall(callB.data).slice(0, 32));
+    expect((await postJson(`${a.link}/sending`, { address: a.owner })).status).toBe(200);
+    const refused = await postJson(`${b.link}/sending`, { address: b.owner });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatch(/one an earlier payment already used/);
+    expect(await s.engine.waitForAttempt(b.attempt.id, 5_000)).toMatchObject({ state: "failed", refusal: "invalid" });
+    await postJson(`${a.link}/reject`, { by: "wallet" });
+  });
+});
+
 describe("pay on Tempo Moderato", () => {
   it("records the memo before the wallet is asked, checks the owner's transfer on chain, then calls the seller once", async () => {
     const s = await stack();

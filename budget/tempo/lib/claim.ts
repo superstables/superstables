@@ -1,8 +1,11 @@
-// One challenge, one purchase. A claim file per payment memo under ops/tempo-moderato/claims/, created only if none exists
-// (O_EXCL), before the agent key signs. The memo (mppx's, from the challenge's realm and id) is what binds a payment on chain
-// to one purchase: two operations with one memo would both match one payment. Claims are never removed.
+// One challenge, one purchase. A claim file per challenge under ops/tempo-moderato/claims/, created only if none exists
+// (O_EXCL), before the agent key signs. The challenge is named by its payment memo (mppx's, from the challenge's realm and id)
+// with the referral's slot zeroed: the same challenge paid under another referral, or none, is the same challenge. The memo
+// is what binds a payment on chain to one purchase: two operations with one memo would both match one payment. Claims are
+// never removed.
 import { closeSync, constants, fstatSync, fsyncSync, openSync, readSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
+import { tempoChallengeKey } from '../../../src/core/referral-memo.mjs'
 import { durableDirectory } from '../../journal.mjs'
 import { OPS_DIR } from './ops.ts'
 
@@ -13,7 +16,7 @@ const OP_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 export function claimChallenge(memo: string, op: string): string {
   if (!/^0x[0-9a-fA-F]{64}$/.test(memo)) throw new Error('the payment memo is not 32 bytes of hex')
   durableDirectory(CLAIMS_DIR)
-  const path = join(CLAIMS_DIR, memo.slice(2).toLowerCase())
+  const path = join(CLAIMS_DIR, tempoChallengeKey(memo).slice(2))
   let fd: number
   try {
     fd = openSync(path, 'wx', 0o600)
