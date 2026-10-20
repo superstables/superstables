@@ -9,6 +9,8 @@
 // here, and no new top-up is created while an earlier one may have been paid. Only `superstables seller credit`
 // and the site can say what became of it. "Nothing was charged" is said only when nothing was signed.
 
+import { join } from "node:path";
+import { withFileLock } from "../core/lock.js";
 import { shownTransaction } from "../core/pay.js";
 import { SecretEchoedError, quote as takeQuote } from "../core/quote.js";
 import { SellerTextError, untrustedJson, untrustedText, untrustedUrl } from "../core/text.js";
@@ -20,6 +22,7 @@ import {
   TOP_UP_NETWORK,
   createTopUp,
   earlierTopUpProblem,
+  holdsSecret,
   readSellerCredit,
   redactSecret,
   scrubbed,
@@ -42,8 +45,14 @@ export const TOP_UP_COMMAND = "superstables seller top-up";
 /** The command that reads the balance, and rechecks pending top-ups on the way. */
 export const CREDIT_COMMAND = "superstables seller credit";
 
+/** The lock file in the records folder, and how long a second command waits for it: a create and a quote take seconds. */
+const TOP_UP_LOCK = "top-up.lock";
+const TOP_UP_LOCK_WAIT_MS = 120_000;
+
 /** How a top-up is created and paid. The defaults are the client's own paths; tests replace them. */
 export interface TopUpPorts {
+  /** Run the check, the create and the quote while holding the lock that keeps two top-up commands from both passing the check. */
+  locked<T>(work: () => Promise<T>): Promise<T>;
   /** The seller's credit, as the site lists it now (and after it rechecked its pending top-ups). */
   credit(options: { site: URL; apiKey: string }): Promise<SellerCredit>;
   /** The payments this machine has recorded, newest first. */
@@ -61,6 +70,7 @@ export interface TopUpPorts {
  */
 export function clientPorts(deps: PaymentContext, options: { apiKey: string; wait?: number }): TopUpPorts {
   return {
+    locked: (work) => withFileLock(join(deps.records.ensureDir(), TOP_UP_LOCK), work, TOP_UP_LOCK_WAIT_MS),
     credit: (read) => readSellerCredit(read),
     attempts: () => deps.records.listAttempts(),
     create: (made) => createTopUp(made),
@@ -119,12 +129,48 @@ async function topUpSteps(input: {
   say: (line: string) => void;
   ports: TopUpPorts;
 }): Promise<TopUpResult> {
-  const { site, apiKey, amount, say, ports } = input;
+  const { apiKey, amount, say, ports } = input;
+
+  // The check, the create and the quote are one step under a lock, so two commands cannot both pass the check. The
+  // owner's decision is not: the payment starts after the lock is released, and its attempt is what a later check sees.
+  const prepared = await ports.locked(() => prepare(input));
+  if ("message" in prepared) return prepared;
+  const { topUp, quote } = prepared;
+
+  let attempt: Attempt;
+  try {
+    attempt = await ports.pay(quote, say);
+  } catch (err) {
+    if (err instanceof PaymentStartedError) return startedPayment(topUp, amount, quote, err, apiKey);
+    // Any other throw is from before the payment started.
+    return {
+      topUp,
+      amount,
+      quote,
+      message: `The payment was not started: ${messageOf(err)}. Nothing was paid.`,
+      next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again when the cause is fixed.`,
+      exitCode: err instanceof CliError ? err.exitCode : EXIT.failed,
+    };
+  }
+  return { topUp: latestTopUp(topUp, attempt), amount, quote, attempt, ...paidOutcome(quote, attempt, apiKey) };
+}
+
+/**
+ * Everything before the payment: refuse while an earlier top-up is in doubt, create the top-up, check it, and take the
+ * quote of its pay link. A result is an answer that ends the command; otherwise the top-up and the quote to pay.
+ */
+async function prepare(input: {
+  site: URL;
+  apiKey: string;
+  amount: TopUpAmount;
+  ports: TopUpPorts;
+}): Promise<TopUpResult | { topUp: TopUp; quote: Quote }> {
+  const { site, apiKey, amount, ports } = input;
 
   // A top-up already in doubt comes first: another one now could pay twice. Reading the credit also makes the site
   // recheck its pending payments, so a payment that has since been settled stops being in doubt.
   const earlier = earlierTopUpProblem({ site, credit: await ports.credit({ site, apiKey }), attempts: ports.attempts() });
-  if (earlier) throw new CliError(`No top-up was created and nothing was paid: ${earlier}.`, EXIT.refused);
+  if (earlier) throw new CliError(`${capitalised(earlier)}.`, EXIT.refused);
 
   const topUp = await ports.create({ site, apiKey, amount: amount.decimal });
 
@@ -137,8 +183,8 @@ async function topUpSteps(input: {
     return {
       topUp,
       amount,
-      message: `The site already has this top-up paid: ${amount.decimal} USDC.`,
-      next: `\`${CREDIT_COMMAND}\` shows the balance and the top-up's status.`,
+      message: `The site gave this top-up as already paid (${amount.decimal} USDC). This command did not pay it.`,
+      next: `Confirm with \`${CREDIT_COMMAND}\`, which shows the balance and the top-up's status.`,
       exitCode: EXIT.done,
     };
   }
@@ -197,22 +243,7 @@ async function topUpSteps(input: {
     };
   }
 
-  let attempt: Attempt;
-  try {
-    attempt = await ports.pay(quote, say);
-  } catch (err) {
-    if (err instanceof PaymentStartedError) return startedPayment(topUp, amount, quote, err, apiKey);
-    // Any other throw is from before the payment started.
-    return {
-      topUp,
-      amount,
-      quote,
-      message: `The payment was not started: ${messageOf(err)}. Nothing was paid.`,
-      next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again when the cause is fixed.`,
-      exitCode: err instanceof CliError ? err.exitCode : EXIT.failed,
-    };
-  }
-  return { topUp: latestTopUp(topUp, attempt), amount, quote, attempt, ...paidOutcome(quote, attempt, apiKey) };
+  return { topUp, quote };
 }
 
 /**
@@ -361,7 +392,7 @@ const IN_FLIGHT_CODES = new Set(["payment_pending", "payment_already_used", "pay
  * answer says. Only the words this client knows are taken from the body; none of it is repeated.
  */
 function siteWord(status: number | undefined, body: string | undefined, apiKey: string): SiteWord {
-  if (body?.includes(apiKey)) return "echo";
+  if (body && holdsSecret(body, apiKey)) return "echo";
   const seen = answerFields(body);
   if (seen.moneyMoved !== undefined && seen.moneyMoved !== false) return "in_flight";
   if (status === 409 || status === 502 || (seen.code !== undefined && IN_FLIGHT_CODES.has(seen.code))) return "in_flight";
@@ -397,8 +428,8 @@ function readOutcome(word: SiteWord, status: number | undefined, amount: string)
   switch (word) {
     case "paid":
       return {
-        message: `The site says this top-up is already paid${http}, so this command pays nothing more.`,
-        next: `Do not pay again. \`${CREDIT_COMMAND}\` shows the balance and the top-up's status.`,
+        message: `The site says this top-up is already paid${http}. This command did not pay it, and pays nothing more.`,
+        next: `Do not pay again. Confirm with \`${CREDIT_COMMAND}\`, which shows the balance and the top-up's status.`,
         exitCode: EXIT.done,
       };
     case "in_flight":

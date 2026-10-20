@@ -206,6 +206,12 @@ export class Records {
     this.dir = dir;
   }
 
+  /** The folder, made private if it is not there yet: for a lock taken before the first record is written. */
+  ensureDir(): string {
+    privateDir(this.dir);
+    return this.dir;
+  }
+
   /** A fresh record id. Random, never derived from anything the seller controls. */
   static newId(): string {
     return randomUUID();

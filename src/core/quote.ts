@@ -8,7 +8,7 @@
 import { detectPayment, type SellerChallenge } from "./x402.js";
 import { judgeOffers } from "./rails/index.js";
 import type { Offer } from "./rails/types.js";
-import { SellerTextError, untrustedText } from "./text.js";
+import { SellerTextError, mentionsSecret, untrustedText } from "./text.js";
 import { chainName, payNetworkFor } from "./routes.js";
 import { evaluatePolicy, policyAmount, policyChecks, type Policy } from "./policy.js";
 import { resolveRequest } from "./discovery.js";
@@ -50,7 +50,7 @@ export async function quote(input: QuoteInput, deps: QuoteDeps): Promise<Quote> 
   const { url, request, service } = resolveTarget(input);
 
   const challenge: SellerChallenge = await detectPayment(url);
-  if (deps.secret && JSON.stringify(challenge).includes(deps.secret)) throw new SecretEchoedError();
+  if (deps.secret && mentionsSecret(JSON.stringify(challenge), deps.secret)) throw new SecretEchoedError();
   const { chosen, others } = firstSupported(challenge, url, deps.chain);
 
   const asset = chosen.terms.asset;

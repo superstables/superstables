@@ -194,11 +194,14 @@ it asked for:
 Any mismatch is refused, and nothing is paid. The payment asks for the terms again before the owner
 is asked, and refuses changed ones, as `pay` does.
 
-Before it creates anything, the command reads the credit and refuses (exit 3) while an earlier top-up
-may have been paid: the site lists one as `pending`, or this machine has a payment for one of the
-site's top-ups that is not over, ended unknown, or was paid without the credit confirmed, and the site
-does not list that top-up as paid or retired. Run `superstables seller credit`, and
-`superstables status <attempt>` for the payment, to see where it stands.
+Before it creates anything, the command reads the credit and refuses (exit 3, having created and paid
+nothing) while an earlier top-up is in doubt: the site lists one as `pending`, a payment on this
+machine is still under way, or a payment that ended in doubt (unknown, or paid and not yet confirmed on
+chain) is for a top-up the site does not list. The site's word settles an ended payment for a top-up
+it lists: anything but `pending` releases it, and so does `retired`, even if an old payment may have
+paid that top-up's old address. Run `superstables seller credit` to see where a top-up stands, and
+`superstables status <attempt>` to search the chain for a payment: once it ends the attempt, paid and
+confirmed or failed with the chain saying it was never made, the attempt holds nothing back.
 
 Top-ups are on Base Sepolia in test USDC for now. The credit is added once the payment's block is
 final on chain; `superstables seller credit` shows when it has landed. If the site reports a payment
@@ -206,7 +209,8 @@ as pending (409 `payment_pending`) or cannot confirm it (502), or answers with `
 than `false` on any status, whether the money moved is unknown: do not pay that top-up again, do not
 ask for another, and run `superstables seller credit` later. That holds for the first read of the pay
 link, for the payment's own read of it after the quote, and for the answer to the payment. A pay link
-that answers 200 means the site counts the top-up as paid. A retired top-up (410 `top_up_retired`)
+that answers 200 means the site counts the top-up as paid; this command did not pay it, so confirm
+with `superstables seller credit`. A retired top-up (410 `top_up_retired`)
 cannot be paid at all; ask for a new one. The command says "nothing was charged" only when nothing
 was signed, and a failure while it follows a payment that started is reported from that payment's
 record, as unknown when the record is not final.

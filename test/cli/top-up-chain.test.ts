@@ -10,6 +10,7 @@
 import { mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { encodePaymentResponseHeader } from "@x402/core/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clientPorts, runTopUp, topUpJson, type TopUpResult } from "../../src/cli/top-up.js";
 import type { PaymentContext } from "../../src/cli/context.js";
@@ -74,6 +75,15 @@ const challenge = (description = "Superstables seller credit: 10 test USDC on Ba
       },
     ],
   });
+
+const challengeJson = await challenge().json();
+const receiptHeader = (wallet: FakeWallet) =>
+  encodePaymentResponseHeader({
+    success: true,
+    transaction: `0x${"ab".repeat(32)}`,
+    network: TOP_UP_NETWORK.caip2,
+    payer: wallet.address,
+  } as Parameters<typeof encodePaymentResponseHeader>[0]);
 
 const credit = (topUps: unknown[] = []) =>
   reply(200, { balance: "0", balance_atomic: "0", top_ups_available: true, entries: [], top_ups: topUps });
@@ -223,6 +233,8 @@ describe("a payment that may be in flight, read before the owner is asked", () =
       expect(result.next).toContain("superstables seller credit");
       expect(result.next).not.toContain("superstables seller top-up");
       expect(result.message).toContain("already paid");
+      expect(result.message).toContain("did not pay it");
+      expect(result.next).toContain("Confirm with `superstables seller credit`");
       expect(seen.paid).toBe(0);
     }
   });
@@ -247,6 +259,21 @@ describe("a payment that may be in flight, read before the owner is asked", () =
 });
 
 describe("a payment the owner approved", () => {
+  it("settles through the real engine, and shows the site's latest word on the top-up", async () => {
+    site.paid = () => reply(200, { top_up: view({ status: "pending" }) }, { "payment-response": receiptHeader(wallet) });
+    const lines: string[] = [];
+    const deps = context();
+    const result = await topUp(deps, lines);
+    expect(seen).toMatchObject({ create: 1, paid: 1 });
+    expect(result.attempt?.state).toBe("settled");
+    expect(result.exitCode).toBe(0);
+    // The site made it open; its answer to the payment says pending, and that is what is shown.
+    expect(result.topUp.status).toBe("pending");
+    expect(result.message).toContain("Paid 10");
+    expect(topUpJson(result)).toMatchObject({ state: "settled", exit_code: 0, top_up: { id: ID, status: "pending" } });
+    expect(shown(result, lines)).not.toContain(KEY);
+  });
+
   it("is unknown when the site answers the payment with 409, 429 or 502 and money_moved unknown", async () => {
     for (const answer of [pending, () => failure(429, "rate_limited", { money_moved: "unknown" }), () => failure(502, "payment_outcome_unknown", { money_moved: "unknown" })]) {
       site.paid = answer;
@@ -283,13 +310,20 @@ describe("a second top-up while an earlier one may have been paid", () => {
     expect((await topUp(deps)).attempt?.state).toBe("uncertain");
     expect(seen.create).toBe(1);
 
-    // The site lists the top-up as still open, which does not say the payment was never made.
-    site.credit = () => credit([view()]);
-    await expect(topUp(context(dirs[0]))).rejects.toThrow(/earlier top-up is not settled.*a new top-up could pay twice.*seller credit/is);
-    expect(seen.create).toBe(1);
+    // The site no longer lists the top-up (it fell off the recent list), so only the record speaks.
     const refusal = await topUp(context(dirs[0])).catch((err: unknown) => err);
     expect(refusal).toBeInstanceOf(CliError);
     expect((refusal as CliError).exitCode).toBe(3);
+    expect((refusal as CliError).message).toMatch(/earlier top-up is not settled.*a new top-up could pay twice.*created and paid nothing.*seller credit.*status <attempt>/is);
+    expect(seen.create).toBe(1);
+  });
+
+  it("is released by the site's word on a top-up it lists, and by nothing else", async () => {
+    site.paid = pending;
+    expect((await topUp(context())).attempt?.state).toBe("uncertain");
+    site.credit = () => credit([view()]);
+    expect((await topUp(context(dirs[0]))).exitCode).toBe(5);
+    expect(seen.create).toBe(2);
   });
 
   it("does not create another while the site lists a top-up as pending", async () => {
@@ -308,11 +342,44 @@ describe("a second top-up while an earlier one may have been paid", () => {
     expect(result.exitCode).toBe(5);
   });
 
+  it("is released once `status` has the chain confirm a paid attempt, though the site no longer lists its top-up", async () => {
+    site.paid = () => new Response("{}", { status: 500, headers: { "payment-response": receiptHeader(wallet) } });
+    const first = context();
+    const paid = (await topUp(first)).attempt;
+    expect(paid?.state).toBe("paid_service_failed");
+    await expect(topUp(context(dirs[0]))).rejects.toThrow(/status <attempt>/);
+    expect(seen.create).toBe(1);
+    // What `superstables status` records once the chain shows the payment.
+    first.records.saveAttempt({ ...(paid as NonNullable<typeof paid>), chain: "verified" });
+    expect((await topUp(context(dirs[0]))).exitCode).toBe(4);
+    expect(seen.create).toBe(2);
+  });
+
   it("is not stopped by an earlier top-up that was refused before anything was signed", async () => {
     site.unpaid = (n) => (n === 1 ? challenge() : failure(429, "rate_limited"));
     expect((await topUp(context())).exitCode).toBe(1);
     expect((await topUp(context(dirs[0]))).exitCode).toBe(1);
     expect(seen.create).toBe(2);
+  });
+});
+
+describe("two top-up commands at once", () => {
+  it("let only one pass the check: the other waits for the lock and then finds the first one's payment", async () => {
+    let release: (res: Response) => void = () => undefined;
+    site.paid = () => new Promise<Response>((resolve) => (release = resolve));
+    const first = context();
+    const second = context(dirs[0]);
+    const both = Promise.allSettled([topUp(first), topUp(second)]);
+    // The one that got the lock pays and waits for the site; the other is refused when it takes the lock.
+    for (let i = 0; i < 500 && seen.paid === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+    expect(seen.paid).toBe(1);
+    release(failure(500, "internal_error"));
+    const outcomes = await both;
+    expect(outcomes.map((o) => o.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const refused = outcomes.find((o) => o.status === "rejected") as PromiseRejectedResult;
+    expect(refused.reason).toBeInstanceOf(CliError);
+    expect((refused.reason as CliError).exitCode).toBe(3);
+    expect(seen.create).toBe(1);
   });
 });
 
@@ -395,5 +462,40 @@ describe("a site that echoes the API key", () => {
     const err = await topUp(context()).catch((e: unknown) => e);
     expect((err as SellerApiError).code).toBe("key_echoed");
     expect(seen.create).toBe(0);
+  });
+
+  it("is refused in the quote's own 402 header, plain, as base64 or base64url, escaped in the JSON, or split by an invisible character", async () => {
+    const asked = (description: string) => JSON.stringify({ ...(challengeJson as object), resource: { url: PAY_URL, description } });
+    const texts = [
+      asked(`pay with ${KEY}`),
+      asked(`pay with ${KEY}`).replace(KEY, `\\u0073${KEY.slice(1)}`),
+      asked(`pay with ${KEY.slice(0, 5)}\u200b${KEY.slice(5)}`),
+    ];
+    for (const text of texts) {
+      for (const encoded of [Buffer.from(text).toString("base64"), Buffer.from(text).toString("base64url")]) {
+        site.unpaid = () => new Response("{}", { status: 402, headers: { "content-type": "application/json", "payment-required": encoded } });
+        const deps = context();
+        const result = await topUp(deps);
+        expectUnknown(result);
+        expect(deps.records.listAttempts()).toEqual([]);
+        await expectClean(deps, shown(result));
+      }
+    }
+  });
+
+  it("is refused in the engine's read when the JSON writes it with escapes, and in a field split by an invisible character", async () => {
+    const escaped = `{"error":{"code":"payment_pending","message":"see \\u0073${KEY.slice(1)}","money_moved":"unknown"}}`;
+    site.unpaid = (n) => (n === 1 ? challenge() : new Response(escaped, { status: 409, headers: { "content-type": "application/json" } }));
+    const deps = context();
+    const result = await topUp(deps);
+    expectUnknown(result);
+    await expectClean(deps, shown(result));
+
+    const split = `${KEY.slice(0, 5)}\u200b${KEY.slice(5)}`;
+    site.create = () => reply(201, { top_up: view({ status: split }) });
+    const created = context();
+    const err = await topUp(created).catch((e: unknown) => e);
+    expect((err as SellerApiError).code).toBe("key_echoed");
+    await expectClean(created, String(err));
   });
 });

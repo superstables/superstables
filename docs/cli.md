@@ -725,9 +725,13 @@ The site is held to the trust of an owner action: SUPERSTABLES_SITE when set, el
 else www.superstables.com, and it must be www.superstables.com or a site the owner allowed in their
 settings (staging, this machine). There is no flag that sends the key anywhere else.
 
-No new top-up is created while an earlier one may have been paid: the site lists one as pending, or
-this machine has a payment for one that is not over or ended unknown and the site does not list it
-as paid. `superstables seller credit` and `superstables status <attempt>` say where it stands.
+No new top-up is created while an earlier one is in doubt: the site lists one as pending, a payment
+on this machine is still under way, or one that ended in doubt (unknown, or paid and not yet
+confirmed on chain) is for a top-up the site does not list. A top-up the site lists as anything but
+pending is not held back by an ended payment, and neither is a retired one, even if an old payment
+may have paid its old address. `superstables seller credit` rechecks pending top-ups, and
+`superstables status <attempt>` searches the chain and ends the attempt, which then holds nothing
+back.
 
 The credit is added once the payment's block is final on chain. A payment the site reports as
 pending, or cannot confirm, or answers with money_moved other than false, on any HTTP status, is
@@ -746,9 +750,9 @@ Prints: the top-up's id, amount, chain, status, the payment's outcome and transa
   state, chain, chain_final, message, next, exit_code.
 Exit codes: 0 paid (also when the site says this top-up is already paid), 1 nothing was signed (the
   site refused, the pay link was not payable, or the approval expired), 2 bad input (no key, a bad
-  amount or site), 3 refused (the answer or the 402 named another top-up, an earlier top-up may have
-  been paid, or a spend policy refused it), 4 paid but the site's answer failed, 5 unknown (a
-  payment may have moved: do not pay again) (the full table: superstables --help)
+  amount or site), 3 refused (the answer or the 402 named another top-up, an earlier top-up is in
+  doubt and none was created, or a spend policy refused it), 4 paid but the site's answer failed, 5
+  unknown (a payment may have moved: do not pay again) (the full table: superstables --help)
 ```
 
 ## superstables seller credit

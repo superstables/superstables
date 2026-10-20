@@ -304,6 +304,12 @@ describe("redactSecret", () => {
     expect(redactSecret(`a ${KEY} b ${KEY}`, KEY)).toBe("a [redacted] b [redacted]");
     expect(redactSecret("nothing here", "")).toBe("nothing here");
   });
+
+  it("finds a key split by invisible characters, and keeps the text that has none", () => {
+    const split = `${KEY.slice(0, 5)}\u200b${KEY.slice(5, 9)}\u2060${KEY.slice(9)}`;
+    expect(redactSecret(`a ${split} b`, KEY)).toBe("a [redacted] b");
+    expect(redactSecret("a\u200bb", KEY)).toBe("a\u200bb");
+  });
 });
 
 describe("keyGuardedFetch", () => {
@@ -316,8 +322,13 @@ describe("keyGuardedFetch", () => {
   });
 
   it("refuses an answer with the key in its body or in a header, plain or base64", async () => {
+    const escaped = `{"x":"\\u0073${KEY.slice(1)}"}`;
+    const split = `{"x":"${KEY.slice(0, 5)}\u200b${KEY.slice(5)}"}`;
     const answers = [
       () => new Response(`{"x":"${KEY}"}`),
+      () => new Response(escaped),
+      () => new Response(split),
+      () => new Response("{}", { headers: { "payment-response": Buffer.from(escaped).toString("base64url") } }),
       () => new Response("{}", { headers: { "x-echo": KEY } }),
       () => new Response("{}", { headers: { "payment-required": Buffer.from(`{"x":"${KEY}"}`).toString("base64") } }),
     ];
@@ -342,13 +353,34 @@ describe("earlierTopUpProblem", () => {
     expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ status: "pending" })]), attempts: [] })).toContain(`top-up ${ID} is pending`);
   });
 
-  it("names a payment on this machine that may have moved money, until the site lists its top-up as paid or retired", () => {
-    for (const state of ["awaiting_approval", "approved", "submitting", "uncertain", "paid_service_failed"]) {
-      expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp()]), attempts: [attempt(state)] }), state).toContain("attempt a-1");
+  it("holds a new top-up back while a payment is under way, whatever the site lists", () => {
+    for (const state of ["awaiting_approval", "approved", "submitting"]) {
+      for (const listed of [[], [topUp()], [topUp({ status: "paid" })]]) {
+        expect(earlierTopUpProblem({ site: SITE, credit: credit(listed), attempts: [attempt(state)] }), state).toContain("attempt a-1");
+      }
+    }
+  });
+
+  it("holds back a payment that ended in doubt for a top-up the site does not list, and lets the site's word release it", () => {
+    for (const state of ["uncertain", "paid_service_failed"]) {
+      expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt(state)] }), state).toContain("attempt a-1");
+      for (const listed of [topUp(), topUp({ status: "paid" }), topUp({ retired: true })]) {
+        expect(earlierTopUpProblem({ site: SITE, credit: credit([listed]), attempts: [attempt(state)] }), state).toBeUndefined();
+      }
     }
     expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("uncertain", { transaction: "0x1" })] })).toContain("attempt a-1");
-    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ status: "paid" })]), attempts: [attempt("uncertain")] })).toBeUndefined();
-    expect(earlierTopUpProblem({ site: SITE, credit: credit([topUp({ retired: true })]), attempts: [attempt("paid_service_failed")] })).toBeUndefined();
+  });
+
+  it("names the way out: the credit read and the status of the attempt", () => {
+    const refusal = earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("uncertain")] });
+    expect(refusal).toContain("created and paid nothing");
+    expect(refusal).toContain("`superstables seller credit`");
+    expect(refusal).toContain("`superstables status <attempt>`");
+  });
+
+  it("lets a paid attempt go once the chain confirmed it, though the site no longer lists its top-up", () => {
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("paid_service_failed", { chain: "verified" })] })).toBeUndefined();
+    expect(earlierTopUpProblem({ site: SITE, credit: credit([]), attempts: [attempt("paid_service_failed", { chain: "unchecked" })] })).toContain("attempt a-1");
   });
 
   it("counts a failed attempt only when it names a transaction the chain has not called unpaid", () => {

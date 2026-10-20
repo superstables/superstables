@@ -10,7 +10,7 @@
 import { BASE_SEPOLIA, fromAtomicString, toAtomicExact } from "../core/chain.js";
 import { readBody, readCapped } from "../core/http.js";
 import { siteFor } from "../core/owner-settings.js";
-import { untrustedJson, untrustedText } from "../core/text.js";
+import { mentionsSecret, redactSecret, untrustedJson, untrustedText } from "../core/text.js";
 import type { Attempt } from "../core/types.js";
 
 /** The seller API key: a secret the seller portal issues (sssk_ followed by base64url characters). */
@@ -77,10 +77,7 @@ export class SellerApiError extends Error {
   }
 }
 
-/** Replace a secret with a word, for text that came from somewhere else. */
-export function redactSecret(text: string, secret: string): string {
-  return secret ? text.split(secret).join("[redacted]") : text;
-}
+export { redactSecret };
 
 /** A USD amount as the site takes it: a plain decimal, at least 1, with at most the token's decimal places. */
 export function parseTopUpAmount(input: string): TopUpAmount {
@@ -288,7 +285,7 @@ export function keyGuardedFetch(apiKey: string, inner: typeof fetch = (input, in
     const res = await inner(input, init);
     const copy = res.clone();
     const { text } = await readBody(copy, MAX_ANSWER_BYTES * 16, SELLER_API_TIMEOUT_MS);
-    if (holdsSecret(text, res.headers, apiKey)) {
+    if (holdsSecret(text, apiKey, res.headers)) {
       res.body?.cancel().catch(() => undefined);
       throw new SellerApiError("key_echoed", KEY_ECHOED_MESSAGE, res.status);
     }
@@ -296,15 +293,25 @@ export function keyGuardedFetch(apiKey: string, inner: typeof fetch = (input, in
   };
 }
 
-function holdsSecret(text: string, headers: Headers, secret: string): boolean {
+/**
+ * Whether an answer holds the key: in its body or a header, plain or as base64, as written, with its JSON escapes
+ * read (a key spelled \u0073ssk_... is the key), or split by invisible characters.
+ */
+export function holdsSecret(text: string, secret: string, headers?: Headers): boolean {
   if (!secret) return false;
-  if (text.includes(secret)) return true;
-  let held = false;
-  headers.forEach((value) => {
-    // A header such as PAYMENT-REQUIRED carries its JSON as base64.
-    if (value.includes(secret) || Buffer.from(value, "base64").toString("utf8").includes(secret)) held = true;
-  });
-  return held;
+  const texts = [text];
+  // A header such as PAYMENT-REQUIRED carries its JSON as base64.
+  headers?.forEach((value) => texts.push(value, Buffer.from(value, "base64").toString("utf8")));
+  return texts.some((one) => mentionsSecret(one, secret) || mentionsSecret(jsonText(one), secret));
+}
+
+/** The text of a JSON document with its escapes read, or an empty text when it is not JSON. */
+function jsonText(text: string): string {
+  try {
+    return JSON.stringify(JSON.parse(text));
+  } catch {
+    return "";
+  }
 }
 
 /** The id of the top-up whose pay link a URL is on this site, or undefined for any other URL. */
@@ -319,19 +326,28 @@ export function topUpIdFromPayUrl(url: string, site: URL): string | undefined {
   }
 }
 
-/** An attempt whose payment may have moved, or may still: it is not over, or it ended without the chain's word that nothing was paid. */
+/** An attempt that is not over: its payment may still be on its way. */
+const LIVE_STATES = ["awaiting_approval", "approved", "submitting"];
+
+/**
+ * An attempt whose payment may have moved and is not settled: it is not over, it ended unknown, a paid one the chain
+ * has not confirmed, or one that failed after naming a transaction the chain has not called unpaid.
+ */
 function mayHavePaid(attempt: Attempt): boolean {
-  if (["awaiting_approval", "approved", "submitting", "uncertain", "paid_service_failed"].includes(attempt.state)) return true;
+  if (LIVE_STATES.includes(attempt.state) || attempt.state === "uncertain") return true;
+  if (attempt.state === "paid_service_failed") return attempt.chain !== "verified";
   return attempt.state === "failed" && attempt.chain !== "unpaid" && attempt.transaction !== undefined;
 }
 
 /**
  * Why another top-up must not be created yet, or undefined when none is in doubt. A top-up is in doubt when the site
- * lists one as pending, or when this machine has a payment for one of this site's top-ups that may have moved money and
- * the site does not list that top-up as paid (or retired). Creating and paying another meanwhile could pay twice.
+ * lists one as pending, when a payment on this machine is still under way, or when one that ended in doubt (and is not
+ * confirmed on chain) is for a top-up the site does not list. The site's word on a top-up it lists settles an ended
+ * payment: a payment that claims a top-up turns it pending, so a top-up it lists as anything else was not claimed, and
+ * a retired top-up cannot be paid. Creating and paying another while one is in doubt could pay twice.
  */
 export function earlierTopUpProblem(input: { site: URL; credit: SellerCredit; attempts: Attempt[] }): string | undefined {
-  const listed = new Map(input.credit.topUps.map((topUp) => [topUp.id.toLowerCase(), topUp]));
+  const listed = new Set(input.credit.topUps.map((topUp) => topUp.id.toLowerCase()));
   const doubts: string[] = [];
   for (const topUp of input.credit.topUps) {
     if (topUp.status === "pending") doubts.push(`top-up ${display(topUp.id)} is pending on the site`);
@@ -339,15 +355,15 @@ export function earlierTopUpProblem(input: { site: URL; credit: SellerCredit; at
   for (const attempt of input.attempts) {
     const id = topUpIdFromPayUrl(attempt.url, input.site);
     if (!id || !mayHavePaid(attempt)) continue;
-    const site = listed.get(id);
-    if (site && (site.status === "paid" || site.retired)) continue;
+    if (listed.has(id) && !LIVE_STATES.includes(attempt.state)) continue;
     doubts.push(`top-up ${id} has a payment (attempt ${attempt.id}, ${attempt.state}) that may have moved money`);
   }
   if (doubts.length === 0) return undefined;
   const shown = doubts.slice(0, 3).join("; ") + (doubts.length > 3 ? `; and ${doubts.length - 3} more` : "");
   return (
-    `an earlier top-up is not settled: ${shown}. A new top-up could pay twice. Run \`superstables seller credit\` to see ` +
-    "where it stands (it rechecks pending top-ups), and `superstables status <attempt>` to search a payment on chain"
+    `an earlier top-up is not settled: ${shown}. A new top-up could pay twice, so this command created and paid nothing. It clears when \`superstables seller credit\` ` +
+    "(it rechecks pending top-ups) lists the top-up as anything but pending, or when `superstables status <attempt>` ends the " +
+    "attempt: paid and confirmed on chain, or failed with the chain saying it was never made"
   );
 }
 
@@ -386,7 +402,7 @@ async function call(options: {
     throw new SellerApiError("invalid_response", `the seller API's answer could not be read (${messageOf(err)})`, res.status);
   }
   // An answer that holds the key is not read at all: nothing of it is parsed, kept or repeated.
-  if (holdsSecret(text, res.headers, options.apiKey)) throw new SellerApiError("key_echoed", KEY_ECHOED_MESSAGE, res.status);
+  if (holdsSecret(text, options.apiKey, res.headers)) throw new SellerApiError("key_echoed", KEY_ECHOED_MESSAGE, res.status);
   let body: unknown;
   try {
     body = JSON.parse(text) as unknown;

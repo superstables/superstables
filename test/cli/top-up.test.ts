@@ -69,6 +69,7 @@ function ports(
   options: { created?: TopUp; quote?: () => Promise<Quote>; pay?: () => Promise<Attempt>; credit?: SellerCredit; attempts?: Attempt[] } = {},
 ) {
   const made: TopUpPorts = {
+    locked: (work) => work(),
     credit: vi.fn(async () => options.credit ?? { asset: "USDC", topUps: [], entries: [] }),
     attempts: vi.fn(() => options.attempts ?? []),
     create: vi.fn(async () => options.created ?? topUp()),
@@ -158,6 +159,7 @@ describe("seller top-up", () => {
       expect(made.pay, status).not.toHaveBeenCalled();
       expect(result.exitCode).toBe(status === "paid" ? 0 : 5);
       expect(result.next).not.toContain("seller top-up");
+      if (status === "paid") expect(result.next).toContain("Confirm with `superstables seller credit`");
     }
   });
 
@@ -331,7 +333,7 @@ describe("seller top-up", () => {
 
   it("refuses before creating anything while an earlier top-up may have been paid", async () => {
     const made = ports({ attempts: [attempt("uncertain", { url: PAY_URL })] });
-    await expect(run(made)).rejects.toThrow(/an earlier top-up is not settled/);
+    await expect(run(made)).rejects.toThrow(/an earlier top-up is not settled.*created and paid nothing.*seller credit/is);
     expect(made.create).not.toHaveBeenCalled();
     const pendingOnSite = ports({ credit: { asset: "USDC", topUps: [topUp({ status: "pending" })], entries: [] } });
     await expect(run(pendingOnSite)).rejects.toThrow(/pending on the site/);

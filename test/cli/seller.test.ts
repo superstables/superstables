@@ -153,7 +153,18 @@ describe("superstables seller", () => {
     expect(result.code).toBe(3);
     expect(creates).toBe(0);
     expect(result.stderr).toContain("pending on the site");
+    expect(result.stderr).toContain("created and paid nothing");
     expect(result.stderr).toContain("superstables seller credit");
+  });
+
+  it("does not claim that nothing was paid when the command stops on an error it did not expect", async () => {
+    creditAnswer = () => ({ status: 200, body: { balance: "0", top_ups: [], entries: [] } });
+    createAnswer = () => ({ status: 500, body: { error: { code: "internal_error", message: "boom" } } });
+    const result = await run(["seller", "top-up", "10"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("boom");
+    expect(result.stderr).toContain("superstables seller credit");
+    expect(result.stderr).not.toMatch(/nothing was paid/i);
   });
 
   it("shows a retired top-up as retired and the ledger's source_id as its reference", async () => {
