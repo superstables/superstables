@@ -699,7 +699,7 @@ if (process.env[WORKER_ENV] && !WORKER_ID) {
   process.exit(0);
 }
 // a worker never runs `wait`: a `wait` that carries a worker's variable (by hand) adopts nothing and writes no process into any record
-if (WORKER_ID && !process.argv.slice(2).includes("wait")) adoptWorker(WORKER_ID);
+if (WORKER_ID && process.argv[2] !== "wait") adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
@@ -2338,9 +2338,10 @@ async function abandonOwnerApproval(record, f) {
     };
   });
   } catch (err) {
-    if (err?.code !== "RECORD_BUSY") throw err;
-    // the record is locked by a process that is still running (a worker starting its rail script, another command): nothing was changed
-    return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record is busy, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in a minute` });
+    // nothing was changed. Busy: the record is locked by a process that is still running (a worker starting its rail script, another
+    // command). Any other error is the file system's (the folder cannot be written, the disk is full).
+    const busy = err?.code === "RECORD_BUSY";
+    return emit(5, { ...base, state: "unknown", final: false, reason: busy ? `the approval's record is busy, so nothing was ended: ${clean(err.message)}` : `the approval's record could not be locked, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in 30 seconds` });
   }
   if (out.kind === "abandoned") {
     log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
@@ -2348,7 +2349,7 @@ async function abandonOwnerApproval(record, f) {
   }
   if (out.kind === "ended") return null;
   if (!out.record) return emit(2, { ...base, state: "failed", reason: `approval ${id} no longer exists under ${approvalsDir()}`, next: "check the id and the home the command ran under; nothing was changed" });
-  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait a minute, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
+  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait 30 seconds, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 

@@ -2,7 +2,7 @@
 // record, and frees the chain; a worker's own final, a worker that runs again, and a restart cannot be undone or doubled by it.
 // Small scripts stand in for the worker. No network.
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -233,5 +233,52 @@ describe("spawnRail", () => {
     expect(out.ended).toBe(false);
     expect(out.child.pid).toBeGreaterThan(0);
     killGroup(out.child.pid);
+  });
+});
+
+describe("the record lock's errors and a result that is already stored", () => {
+  it("a record locked by a live process answers RECORD_BUSY at the deadline", async () => {
+    const id = await open({}, liveWorker());
+    const holder = liveWorker();
+    writeFileSync(join(home, "budget", "approvals", `${id}.json.lock`), JSON.stringify({ ...holder, owner: "test" }));
+    const saved = approvals.recordLockOptions.timeoutMs;
+    approvals.recordLockOptions.timeoutMs = 300;
+    try {
+      await expect(approvals.abandonApproval(id, build)).rejects.toMatchObject({ code: "RECORD_BUSY" });
+      expect(approvals.readApproval(id)?.final).toBeUndefined();
+    } finally {
+      approvals.recordLockOptions.timeoutMs = saved;
+      rmSync(join(home, "budget", "approvals", `${id}.json.lock`), { force: true });
+      killGroup(holder.pid);
+      killGroup(approvals.readApproval(id)!.pid);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)("a file system error is not reported as busy: its own code stays", async () => {
+    const id = await open({}, liveWorker());
+    const dir = join(home, "budget", "approvals");
+    chmodSync(dir, 0o500);
+    try {
+      const err = await approvals.abandonApproval(id, build).catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err.code).toBe("EACCES");
+      expect(err.code).not.toBe("RECORD_BUSY");
+    } finally {
+      chmodSync(dir, 0o700);
+      killGroup(approvals.readApproval(id)!.pid);
+    }
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+  });
+
+  it("recordFinal does not replace a result that is already stored, and frees nothing a second time", async () => {
+    const id = await open();
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true, tag: "first" });
+    // another approval takes the chain after the first ended
+    writeFileSync(lockFile(), JSON.stringify({ id: "oa-20261020999999-aaaaaaaa", ...(await goneWorker()), createdAt: Date.now() }));
+    const again = approvals.recordFinal(id, 0, { ok: true, state: "ok", final: true, tag: "second" });
+    expect(again?.final).toMatchObject({ code: 5, result: { tag: "first" } });
+    expect(approvals.readApproval(id)?.final).toMatchObject({ code: 5, result: { tag: "first" } });
+    // the lock that another approval holds is not removed by the second call
+    expect(JSON.parse(readFileSync(lockFile(), "utf8")).id).toBe("oa-20261020999999-aaaaaaaa");
   });
 });

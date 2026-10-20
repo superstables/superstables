@@ -4,7 +4,7 @@
 // scripts against a fake superstables.com and a fake Base Sepolia RPC. No network, no real key.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -415,6 +415,22 @@ describe("wait --abandon on a background owner approval", () => {
       expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
       expect(existsSync(lockPath())).toBe(true);
     } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } rmSync(join(approvals(), `${id}.json.lock`), { force: true }); }
+  }, 120_000);
+
+  it.skipIf(process.getuid?.() === 0)("a record that cannot be locked for a file system reason: nothing is stored, final false, and it is not called busy", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const before = readFileSync(join(approvals(), `${id}.json`), "utf8");
+    chmodSync(approvals(), 0o500);
+    try {
+      const run = await budget(abandonArgs(id), {}, typed(id));
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ state: "unknown", final: false, id });
+      expect(run.result.reason).toMatch(/could not be locked/);
+      expect(run.result.reason).not.toMatch(/busy/);
+    } finally { chmodSync(approvals(), 0o700); }
+    expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
   }, 120_000);
 
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {

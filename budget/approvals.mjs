@@ -250,7 +250,8 @@ async function holdingRecordLock(id, fn) {
     acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
   } catch (err) {
     // the lock is held by a process that is still running: the caller can say so and ask to be run again
-    if (err && typeof err === "object") err.code = "RECORD_BUSY";
+    // only the deadline's error says "busy" (a file system error already carries its own code, EACCES or ENOSPC for instance)
+    if (err && typeof err === "object" && !err.code) err.code = "RECORD_BUSY";
     throw err;
   }
   heldRecordLocks.add(id);
@@ -598,7 +599,7 @@ export function setRailGroup(id, pgid, selfStartedAt) {
 export function spawnRail(id, spawn) {
   let child = null;
   let ended = false;
-  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for a minute nothing
+  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for 30 seconds nothing
   // ends the approval (startingUp), because a rail script may be running that the record does not name.
   const marked = update(id, (before) => (before.final ? null : { railSpawning: Date.now() }));
   if (marked?.final) return { child: null, ended: true };
@@ -757,9 +758,15 @@ export const hasTakenOver = (id, generation) => {
  * recorded here, and only here.
  */
 export function recordFinal(id, code, result) {
-  // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too)
-  const record = update(id, (before) => ({ state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) }));
-  if (record) release(record.rail, record.chain, id);
+  // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
+  // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
+  let stored = false;
+  const record = update(id, (before) => {
+    if (before.final) return null;
+    stored = true;
+    return { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+  });
+  if (record && stored) release(record.rail, record.chain, id);
   return record;
 }
 
