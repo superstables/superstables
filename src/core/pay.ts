@@ -1611,8 +1611,9 @@ function receiptFor(input: {
   };
 }
 
-/** A tip read may lag settlement. Retry only unknown reads, never the payment, within one six-second deadline. */
+/** A tip read may lag settlement. Retry missing receipts or unread blocks within an extra six-second deadline. */
 async function checkAfterSettlement(rail: X402Rail, payment: PaymentFacts, options: ChainReadOptions): Promise<ChainCheck> {
+  let check = await rail.checkPayment(payment, options);
   const deadline = AbortSignal.timeout(6_000);
   const bounded: ChainReadOptions = {
     ...options,
@@ -1622,8 +1623,7 @@ async function checkAfterSettlement(rail: X402Rail, payment: PaymentFacts, optio
       signal: init?.signal ? AbortSignal.any([init.signal, deadline]) : deadline,
     }),
   };
-  let check = await rail.checkPayment(payment, bounded);
-  for (let reads = 1; reads < 3 && check.chain === "unchecked" && !check.included && !check.removed && !deadline.aborted; reads++) {
+  for (let reads = 1; reads < 3 && check.chain === "unchecked" && (check.missing || check.unread) && !check.included && !check.removed && !deadline.aborted; reads++) {
     await delay(1_000, undefined, { signal: deadline }).catch(() => {});
     if (deadline.aborted) break;
     check = await rail.checkPayment(payment, bounded);

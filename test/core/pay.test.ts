@@ -3,6 +3,7 @@
 // are the product: a settled payment with a receipt, a refusal that signed nothing, and the
 // two awkward cases — the service failed after being paid, and we cannot tell what happened.
 
+import { setTimeout as delay } from "node:timers/promises";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -11,9 +12,10 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { decodePaymentResponseHeader, decodePaymentSignatureHeader, encodePaymentResponseHeader } from "@x402/core/http";
 import { recoverTypedDataAddress } from "viem";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_POLICY, type Policy } from "../../src/core/policy.js";
 import { PaymentEngine, QuoteUsedError, recheckChain, shownAttempt, shownReceipt } from "../../src/core/pay.js";
+import { evmRail } from "../../src/core/rails/evm.js";
 import { paymentReceipt, startFakeBaseSepolia } from "../helpers/fake-base-sepolia.js";
 import { attemptView, messageFor } from "../../src/cli/views.js";
 import { Records, attemptRunner } from "../../src/core/records.js";
@@ -70,6 +72,7 @@ async function stack(options: { walletUrl?: string; policy?: Partial<Policy> } =
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(open.splice(0).map((s) => s.close()));
 });
 
@@ -708,6 +711,89 @@ describe("PaymentEngine", () => {
     expect(s.seller.seen.filter(r => r.paid)).toHaveLength(1);
     expect(s.records.spentToday("USDC")).toBe(0.01);
     expect(() => engine.startPayment(q.id)).toThrow(QuoteUsedError);
+  });
+
+  it.each(["no recorded nonce", "chain not read", "receipt for another transaction"])("does not retry a post-settlement answer with %s", async (answer) => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    if (answer === "no recorded nonce") vi.spyOn(evmRail, "signedFacts").mockReturnValue({});
+    if (answer === "receipt for another transaction") chain.dynamic = () => ({ transactionHash: `0x${"cd".repeat(32)}` });
+    const check = vi.spyOn(evmRail, "checkPayment");
+    const engine = new PaymentEngine({
+      records: s.records, policy: DEFAULT_POLICY, rpcUrl: chain.url,
+      fetchImpl: async (input, init) => {
+        const response = await fetch(input, init);
+        if (answer === "chain not read" && new Headers(init?.headers).has("payment-signature")) chain.down = true;
+        return response;
+      },
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+    });
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 10_000);
+    expect(final).toMatchObject({ state: "settled", chain: "unchecked" });
+    expect(final.chainReason).toContain(answer === "no recorded nonce" ? "signed authorization was not recorded"
+      : answer === "chain not read" ? "could not be asked which chain" : "receipt for another transaction");
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(s.facilitator.calls).toEqual({ verify: 1, settle: 1 });
+  });
+
+  it("keeps the first post-settlement read's ten-second per-call timeout", async () => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    chain.dynamic = () => {
+      const a = s.facilitator.lastAuthorization!;
+      return paymentReceipt({ payer: a.from, to: a.to, value: a.value, nonce: a.nonce });
+    };
+    const fetchImpl = globalThis.fetch;
+    let reads = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input) === chain.url && JSON.parse(String(init?.body)).method === "eth_getTransactionReceipt") {
+        reads++;
+        await delay(6_500, undefined, { signal: init?.signal ?? undefined });
+      }
+      return fetchImpl(input, init);
+    });
+    const engine = new PaymentEngine({
+      records: s.records, policy: DEFAULT_POLICY, rpcUrl: chain.url,
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+    });
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 15_000);
+    expect(final).toMatchObject({ state: "settled", chain: "verified", chainFinal: true });
+    expect(reads).toBe(1);
+    expect(s.facilitator.calls).toEqual({ verify: 1, settle: 1 });
+  });
+
+  it("bounds the extra post-settlement reads after a slow first read", async () => {
+    const s = await stack();
+    const chain = await startFakeBaseSepolia();
+    open.push(chain);
+    const fetchImpl = globalThis.fetch;
+    let reads = 0;
+    let retryAborted = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      if (String(input) === chain.url && JSON.parse(String(init?.body)).method === "eth_getTransactionReceipt") {
+        reads++;
+        if (reads === 1) await delay(6_500, undefined, { signal: init?.signal ?? undefined });
+        else {
+          try { await delay(60_000, undefined, { signal: init?.signal ?? undefined }); }
+          catch (error) { retryAborted = init?.signal?.aborted === true; throw error; }
+        }
+      }
+      return fetchImpl(input, init);
+    });
+    const engine = new PaymentEngine({
+      records: s.records, policy: DEFAULT_POLICY, rpcUrl: chain.url,
+      signer: new WalletSigner({ url: s.wallet.url, agentToken: s.wallet.token, pollMs: 5, timeoutMs: 3_000 }),
+    });
+    const q = await quote({ url: s.url }, { records: s.records, policy: DEFAULT_POLICY });
+    const final = await engine.waitForAttempt(engine.startPayment(q.id).id, 16_000);
+    expect(final).toMatchObject({ state: "settled", chain: "unchecked" });
+    expect(reads).toBe(2);
+    expect(retryAborted).toBe(true);
+    expect(s.facilitator.calls).toEqual({ verify: 1, settle: 1 });
   });
 
   it("a failed settlement that names a transaction is never 'nothing was paid': the chain decides", async () => {

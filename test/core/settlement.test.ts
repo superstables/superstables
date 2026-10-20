@@ -80,7 +80,7 @@ describe("checkSettlement", () => {
     if (head === "0x10" || head === "0x11") {
       expect(result).toMatchObject({ chain: "unchecked", removed: true, missing: true });
     } else {
-      expect(result).toEqual({ chain: "unchecked", reason: "the transaction's block could not be verified" });
+      expect(result).toEqual({ chain: "unchecked", unread: true, reason: "the transaction's block could not be verified" });
     }
   });
 
