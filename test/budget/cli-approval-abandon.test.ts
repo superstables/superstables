@@ -376,7 +376,8 @@ describe("wait --abandon on a background owner approval", () => {
     writeFileSync(publicPath(), `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${AGENT}\n`);
     const trace = join(home, "pause-trace.json");
     const hook = `--import ${pathToFileURL(resolve(fileURLToPath(new URL("../../", import.meta.url)), "test/helpers/pause-after-rail-spawn.mjs")).href}`;
-    const launcher = budget(setupArgs(), { NODE_OPTIONS: hook, PAUSE_TRACE: trace });
+    // the test account guard (and with it a development owner-settings file that allows the fake site) travels in NODE_OPTIONS: keep it
+    const launcher = budget(setupArgs(), { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), PAUSE_TRACE: trace });
     for (let i = 0; i < 200 && !existsSync(trace); i++) await new Promise((x) => setTimeout(x, 100));
     expect(existsSync(trace)).toBe(true);
     const { worker, rail, id } = JSON.parse(readFileSync(trace, "utf8"));
