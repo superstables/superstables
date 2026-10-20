@@ -99,6 +99,12 @@ Start here, one purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
+Seller credit (a seller account on superstables.com):
+  superstables seller credit                          the prepaid credit referral fees come out of
+  superstables seller top-up <amount>                 add to it with test USDC on Base Sepolia
+  The seller API key comes from SUPERSTABLES_SELLER_API_KEY and goes only to the Superstables
+  origin, never into this output. A top-up is paid like any purchase: the owner approves it.
+
 Start here, budget: superstables budget setup --rail evm
   \`superstables setup\` is for pay only. Budgets are a separate tool; each subcommand takes --help.
   An owner command prints an approval link: an agent may start it and hand it to the owner,
@@ -119,6 +125,7 @@ Start here, budget: superstables budget setup --rail evm
 Who runs what:
   owner   setup, wallet init, wallet serve, wallet open, policy init, owner settings, and every approval
   agent   find, quote, pay, status, receipts, attempts, doctor
+  seller  seller credit and seller top-up, with the seller account's key
   Either may run the read-only commands.
 
 Owner settings:
@@ -149,6 +156,7 @@ Environment:
                                  (most are simulated; the market data service returns live prices)
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
+  SUPERSTABLES_REFERRALS         off: do not remember or send the referral tokens of index listings
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
                                  (https, or http on this machine); wallets adding the chain get the public RPC;
                                  unset: the RPC set with superstables owner settings rpc, else the chain's public one
@@ -161,10 +169,12 @@ Environment:
                                  socket in the wallet folder; its page is on http://127.0.0.1:${DEFAULT_WALLET_PORT})
   SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
+  SUPERSTABLES_SELLER_API_KEY    the seller API key seller credit and seller top-up send to superstables.com
+                                 (never printed)
 
 Output:
-  find, quote, pay, status, receipts and attempts take --json: one JSON value on stdout, progress
-  and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
+  find, quote, pay, status, receipts, attempts and the seller commands take --json: one JSON value
+  on stdout, progress and notes on stderr. An error under --json is {"error", "exit_code"} on stdout.
 
 ${EXIT_CODE_TABLE}
 `;

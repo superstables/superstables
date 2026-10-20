@@ -49,8 +49,9 @@ export class LocalKeySigner implements Signer {
     if (!judged.supported) throw new SignRefused("invalid", judged.reason);
     if (req.x402Version === 1 && !network.v1Name) throw new SignRefused("invalid", `x402 v1 has no name for ${network.label}, so this wallet does not sign a v1 payment there`);
     if (isSameAddress(judged.offer.terms.recipient, this.account.address)) throw new SignRefused("invalid", "the recipient is the account paying, so this payment was not signed");
-    // The seller's window is clamped to ten minutes in there, and validAfter is backdated for v1, as the page does.
-    const typed = buildTypedData({ network, requirement: judged.offer.requirement, x402Version: req.x402Version }, this.account.address);
+    // The seller's window is clamped to ten minutes in there, and validAfter is backdated for v1, as the page does. The nonce
+    // is the one the payment engine chose, so a referred payment carries its referral (core/referral-nonce.ts).
+    const typed = buildTypedData({ network, requirement: judged.offer.requirement, x402Version: req.x402Version, nonce: req.nonce }, this.account.address);
     const domain = { ...typed.domain, verifyingContract: typed.domain.verifyingContract as `0x${string}` };
     const message = {
       from: typed.message.from as `0x${string}`,

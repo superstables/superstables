@@ -13,11 +13,14 @@ export type {
   AttemptState,
   AttemptTransition,
   ChainMismatch,
+  ListingReferral,
   PaymentContext,
   PaymentTerms,
   Quote,
+  QuoteReferral,
   QuoteStatus,
   Receipt,
+  ReferralRecord,
   ResolvedRequest,
   ServiceListing,
   ServiceOutcome,
@@ -88,6 +91,8 @@ export { Records } from "./core/records.js";
 
 export { DEMO_SERVICE_ID, HOSTED_DEMO_SERVICE_URL, HOSTED_CATALOGUE_URL, INDEX_URL, DEFAULT_INDEX_URL, indexUrl, demoService, externalCoinPriceService, catalogue, allListings, fetchHostedCatalogue, hostedCatalogueUrl, clearHostedCatalogueCache, demoServicesEnabled, EXTERNAL_COIN_PRICE_ID, findServices, getService, resolveRequest } from "./core/discovery.js";
 export type { DiscoveryResult, FindServicesOptions } from "./core/discovery.js";
+export { REFERRALS_FILE, referralFor, referralsEnabled, rememberReferrals } from "./core/referrals.js";
+export type { ActiveReferral, RememberedReferral } from "./core/referrals.js";
 
 export { FACILITATORS, FACILITATOR_TIMEOUT_MS, facilitatorClient, firstThatWorks, settleWith, verifyWith } from "./core/facilitator.js";
 export type { Via } from "./core/facilitator.js";

@@ -24,6 +24,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { connect } from "node:net";
 import { join } from "node:path";
 import type { PaymentRequirements } from "@x402/core/types";
+import type { Hex } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { DEFAULT_NETWORK, evmNetworkFor, isSameAddress, networkFor, usdcBalance } from "../core/chain.js";
 import { DEFAULT_WALLET_PORT, accountPolicyPath, ensureDir, policyPath, retiredListPath, walletDir, walletSocketPath } from "../core/home.js";
@@ -151,6 +152,8 @@ interface WalletRequestRecord {
   /** The seller's requirement verbatim: what an approval signs, byte for byte. */
   requirement?: PaymentRequirements;
   x402Version: 1 | 2;
+  /** The authorization's nonce the agent's payment engine chose, so a referred payment carries its referral. */
+  nonce?: Hex;
   result?: Eip3009SignResult;
   /** The latest time (ms) a signature is handed out: the client's wait plus a short grace. */
   serveUntil: number;
@@ -437,6 +440,11 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       tryAudit(record);
       return record;
     }
+    if (request.nonce !== undefined && !(typeof request.nonce === "string" && /^0x[0-9a-fA-F]{64}$/.test(request.nonce))) {
+      record.reason = "the request's authorization nonce is not 32 bytes of hex";
+      audit(record);
+      return record;
+    }
 
     // The single source of truth for what the owner is shown, and for what gets signed.
     const judged = termsFor(request.requirements as RawAccept, version);
@@ -453,6 +461,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
     }
     record.verified = { ...judged.terms, payer: account.address };
     record.requirement = judged.requirement;
+    if (request.nonce) record.nonce = request.nonce;
     record.decimals = policyAmount(judged.terms).decimals ?? DEFAULT_NETWORK.usdc.decimals;
     // The recipient is never the account paying: the transfer would move nothing, yet the payment would count as paid.
     if (isSameAddress(judged.terms.recipient, account.address)) {
@@ -530,6 +539,7 @@ export async function startWallet(options: StartWalletOptions = {}): Promise<Wal
       // Exactly the requirement that was checked and shown, not a rebuilt one.
       requirements: record.requirement as PaymentRequirements,
       x402Version: record.x402Version,
+      ...(record.nonce ? { nonce: record.nonce } : {}),
     });
     record.result = result;
     record.status = "signed";

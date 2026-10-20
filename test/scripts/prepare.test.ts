@@ -19,7 +19,7 @@ function packageWithoutTools() {
   const root = mkdtempSync(join(tmpdir(), "superstables-prepare-"));
   temps.push(root);
   mkdirSync(join(root, "scripts"));
-  for (const f of ["prepare.mjs", "package-root.mjs"]) copyFileSync(join(scripts, f), join(root, "scripts", f));
+  for (const f of ["prepare.mjs", "package-root.mjs", "shrinkwrap.mjs"]) copyFileSync(join(scripts, f), join(root, "scripts", f));
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe", type: "module" }));
   mkdirSync(join(root, "dist"));
   writeFileSync(join(root, "dist", "leaked-secret.txt"), "x");

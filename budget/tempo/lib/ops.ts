@@ -44,7 +44,9 @@ export type Op = {
     maxDecimal?: string
   }
   startBlock?: string
-  memo?: string // the payment memo, known before signing; indexed on chain, finds this purchase without its tx hash
+  // the seller's referral, decided when the operation first starts (null: none) and kept by every later run under the same --op
+  referral?: JournalReferral | null
+  memo?: string // the payment memo, known before signing; indexed on chain, finds this purchase without its tx hash; names the referral through MPP's client id
   expectedTx?: string // hash of the signed transaction, when known
   signedHash?: string // buy.ts: hash of the seller-bound signed payload (informational; a sponsored tx's final hash differs)
   validBefore?: number // unix seconds after which the signed payment can no longer land: estimated after signing (pull), read from the signed transaction before it is sent (push)
@@ -55,6 +57,9 @@ export type Op = {
   reason?: string
   history: { at: string; state: OpState; note?: string }[]
 }
+
+/** A referral the Superstables index gave for the seller's origin, as an operation froze it. */
+export type JournalReferral = { id: string; listingId: string; terms: string; token: string }
 
 // 64 random bits: an op id names a journal and its locks, and must neither collide nor be guessed
 export const newOpId = () => `tempo-${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}-${randomBytes(8).toString('hex')}`

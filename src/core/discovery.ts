@@ -24,7 +24,10 @@ import { SUPPORTED_NETWORKS } from "./rails/index.js";
 import { chainName, isKnownChainName, isKnownRail, payNetworkFor, routesFor } from "./routes.js";
 import { sellerUrlProblem } from "./seller-url.mjs";
 import { SellerTextError, untrustedText } from "./text.js";
-import type { ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
+import { isReferralToken } from "../seller/referral.js";
+import { rememberReferrals } from "./referrals.js";
+import type { Records } from "./records.js";
+import type { ListingReferral, ResolvedRequest, ServiceListing, ServiceParam } from "./types.js";
 
 export const DEMO_SERVICE_ID = "superstables-demo-market-data";
 export const EXTERNAL_COIN_PRICE_ID = "x402-coin-api.vercel.app";
@@ -108,6 +111,11 @@ export interface FindServicesOptions {
   probe?: boolean;
   /** Include Superstables' testnet services from the hosted catalogue (most simulated). Default: the SUPERSTABLES_DEMO_SERVICES switch. */
   demoServices?: boolean;
+  /**
+   * Where the referrals of returned index listings are remembered, so a later paid request to the same origin can
+   * carry them: these records' folder. Default: the records folder under SUPERSTABLES_HOME.
+   */
+  records?: Pick<Records, "dir">;
 }
 
 /** Discovery never fails because a remote source did: what went wrong comes back as a warning. */
@@ -251,7 +259,7 @@ export async function allListings(
  * because those are the listings that can be paid; index results follow.
  */
 export async function findServices(options: FindServicesOptions = {}): Promise<DiscoveryResult> {
-  const { query = "", limit = DEFAULT_LIMIT, includeIndex = true, probe = false, demoServices } = options;
+  const { query = "", limit = DEFAULT_LIMIT, includeIndex = true, probe = false, demoServices, records } = options;
 
   // Network sources (the hosted catalogue and the index) are both behind includeIndex, so a
   // caller that asked for no network gets none. They are read side by side.
@@ -288,15 +296,17 @@ export async function findServices(options: FindServicesOptions = {}): Promise<D
   const services = probe
     ? await Promise.all(ordered.map((listing) => (listing.source === "demo-catalogue" && listing.actionable ? probeDemo(listing) : listing)))
     : ordered;
+  // The referrals of the index listings returned, for a later payment to the same origin (core/referrals.ts).
+  rememberReferrals(services, records?.dir);
   return { services, warnings };
 }
 
 /** One listing by id, from either source. Undefined when nothing has that id. */
 export async function getService(
   id: string,
-  options: { includeIndex?: boolean; probe?: boolean; demoServices?: boolean } = {},
+  options: { includeIndex?: boolean; probe?: boolean; demoServices?: boolean; records?: Pick<Records, "dir"> } = {},
 ): Promise<ServiceListing | undefined> {
-  const { includeIndex = true, probe = false, demoServices } = options;
+  const { includeIndex = true, probe = false, demoServices, records } = options;
   // Built-in first, without a network round trip: the demo service is known offline.
   const builtIn = catalogue().find((s) => s.id === id);
   if (builtIn) return probe ? await probeDemo(builtIn) : builtIn;
@@ -304,12 +314,14 @@ export async function getService(
   const listed = listings.find((s) => s.id === id);
   if (listed) return probe ? await probeDemo(listed) : listed;
   if (!includeIndex || !indexUrl()) return undefined;
+  let found: ServiceListing | undefined;
   try {
-    const found = await fetchIndex(id, DEFAULT_LIMIT);
-    return found.find((s) => s.id === id);
+    found = (await fetchIndex(id, DEFAULT_LIMIT)).find((s) => s.id === id);
   } catch {
     return undefined; // an unreachable index is not an answer, and not a crash either
   }
+  if (found) rememberReferrals([found], records?.dir);
+  return found;
 }
 
 /**
@@ -635,6 +647,8 @@ interface IndexRow {
   price?: { display?: string; usd?: number };
   live?: boolean;
   last_seen_live?: string;
+  /** Present only for a listing whose seller has an agreement in force. */
+  referral?: { token?: unknown; expires_at?: unknown; terms?: unknown };
 }
 
 async function fetchIndex(query: string, limit: number): Promise<ServiceListing[]> {
@@ -719,7 +733,20 @@ function fromIndexRow(row: IndexRow): ServiceListing {
     // routes, with `pay` and the budget routes off where the endpoint cannot carry a credential safely. This is the field
     // the CLI gates a payment on, so it is where the rule belongs.
     routes: secure ? routes : { pay: false, budget: [] },
+    ...referralOf(row),
   };
+}
+
+/**
+ * A row's referral, when it is well formed: the token goes into a request header, so anything but a compact JWS is
+ * dropped here, and the terms version is the row's own text, bounded.
+ */
+function referralOf(row: IndexRow): { referral?: ListingReferral } {
+  const r = row.referral;
+  if (!r || typeof r !== "object" || !isReferralToken(r.token) || typeof r.expires_at !== "string") return {};
+  const expires = Date.parse(r.expires_at);
+  if (!Number.isFinite(expires)) return {};
+  return { referral: { token: r.token, expiresAt: new Date(expires).toISOString(), terms: untrustedText(r.terms, 60) } };
 }
 
 /**

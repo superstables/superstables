@@ -1,10 +1,11 @@
 // The local key signer (the wallet process) signs over USDC's own EIP-712 domain, from this client's network table,
 // whatever the offer's `extra` says or leaves out. The approval page does the same, so both signers agree.
 
-import { verifyTypedData } from "viem";
+import { recoverTypedDataAddress, verifyTypedData } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_NETWORK, usdcRequirement } from "../../src/core/chain.js";
+import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.js";
 import { LocalKeySigner } from "../../src/core/signer/local.js";
 
 const TYPES = {
@@ -50,6 +51,51 @@ describe("LocalKeySigner", () => {
     expect(valid).toBe(true);
     // The requirement it was handed is left as it was.
     expect(requirements.extra).toEqual({});
+  });
+
+  it("signs the nonce it is handed, so a marked authorization recovers to the key and names its referral", async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    const signer = new LocalKeySigner(account);
+    const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw", (size) => Buffer.alloc(size, 0xaa));
+    const requirements = usdcRequirement(0.01, `0x${"22".repeat(20)}`);
+
+    const signed = await signer.sign({ kind: "eip3009", x402Version: 2, requirements, nonce } as Parameters<LocalKeySigner["sign"]>[0]);
+
+    const auth = signed.payload.authorization as Record<string, string>;
+    expect(auth.nonce).toBe("0x53535246000102030405060708090a0b0c0d0e0faaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(nonceReferral(auth.nonce)).toBe("ref_AAECAwQFBgcICQoLDA0ODw");
+    const recovered = await recoverTypedDataAddress({
+      domain: {
+        name: DEFAULT_NETWORK.usdc.eip712.name,
+        version: DEFAULT_NETWORK.usdc.eip712.version,
+        chainId: DEFAULT_NETWORK.chainId,
+        verifyingContract: DEFAULT_NETWORK.usdc.address,
+      },
+      types: TYPES,
+      primaryType: "TransferWithAuthorization",
+      message: {
+        from: auth.from as `0x${string}`,
+        to: auth.to as `0x${string}`,
+        value: BigInt(auth.value),
+        validAfter: BigInt(auth.validAfter),
+        validBefore: BigInt(auth.validBefore),
+        nonce: auth.nonce as `0x${string}`,
+      },
+      signature: signed.payload.signature as `0x${string}`,
+    });
+    expect(recovered).toBe(account.address);
+    expect(auth).toMatchObject({ from: account.address, to: `0x${"22".repeat(20)}`, value: "10000", validAfter: "0" });
+  });
+
+  it("refuses a Permit2 offer, even with a marked nonce in hand: only EIP-3009 is signed", async () => {
+    const signer = new LocalKeySigner(privateKeyToAccount(generatePrivateKey()));
+    const base = usdcRequirement(0.01, `0x${"22".repeat(20)}`);
+    const requirements = { ...base, extra: { ...base.extra, assetTransferMethod: "permit2" } };
+    const nonce = referralNonce("ref_AAECAwQFBgcICQoLDA0ODw", (size) => Buffer.alloc(size, 0xaa));
+
+    await expect(
+      signer.sign({ kind: "eip3009", x402Version: 2, requirements, nonce } as Parameters<LocalKeySigner["sign"]>[0]),
+    ).rejects.toThrow(/EIP-3009 transfers only/);
   });
 
   it("refuses a network outside this client's table rather than sign over a domain it does not know", async () => {

@@ -472,8 +472,8 @@ export class WalletSigner implements Signer {
 
 /**
  * Whether an authorization the wallet returned is the one asked for: "" when it is, else the name of the field that is
- * not. The recipient, the amount and the payer are the request's own, the lifetime is the ten minutes a payment is signed
- * for, and the signature is the payer's over the token's own signing domain.
+ * not. The recipient, the amount, the payer and the nonce (when the request names one) are the request's own, the lifetime
+ * is the ten minutes a payment is signed for, and the signature is the payer's over the token's own signing domain.
  */
 async function resultProblem(req: Eip3009SignRequest, result: NonNullable<WalletRequestView["result"]>, nowMs: number): Promise<string> {
   if (result.kind !== "eip3009") return "kind";
@@ -487,7 +487,8 @@ async function resultProblem(req: Eip3009SignRequest, result: NonNullable<Wallet
   const from = text(auth?.from);
   if (!from || !isSameAddress(from, result.signer)) return "from";
   if (text(auth?.value) !== String(requirements.amount ?? requirements.maxAmountRequired)) return "value";
-  if (!/^0x[0-9a-fA-F]{64}$/.test(text(auth?.nonce))) return "nonce";
+  // The request's nonce is the one that carries its referral: a wallet that signs with its own would lose that marker.
+  if (!/^0x[0-9a-fA-F]{64}$/.test(text(auth?.nonce)) || (req.nonce && text(auth?.nonce).toLowerCase() !== req.nonce.toLowerCase())) return "nonce";
   if (!/^\d{1,20}$/.test(text(auth?.validBefore)) || !/^\d{1,20}$/.test(text(auth?.validAfter))) return "validBefore";
   const validBefore = BigInt(text(auth?.validBefore)) * 1000n;
   if (validBefore <= BigInt(nowMs) || validBefore > BigInt(nowMs) + BigInt(MAX_SIGNED_LIFETIME_S + 30) * 1000n) return "validBefore";

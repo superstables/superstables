@@ -5,6 +5,7 @@
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { describe, expect, it } from "vitest";
 import { usdcRequirement } from "../../src/core/chain.js";
+import { referralNonce } from "../../src/core/referral-nonce.js";
 import { LocalKeySigner } from "../../src/core/signer/local.js";
 import { SignRefused, type Eip3009SignRequest, type Eip3009SignResult } from "../../src/core/signer/types.js";
 import { WalletSigner } from "../../src/core/signer/wallet.js";
@@ -141,6 +142,21 @@ describe("what the wallet returns", () => {
       expect(err?.code).toBe("invalid");
       expect(err?.message).toMatch(/not the one asked for/);
     }
+  });
+
+  it("9. refuses one signed with another nonce than the request's, which would lose its referral marker", async () => {
+    const asked = { ...REQ, nonce: referralNonce("ref_AAECAwQFBgcICQoLDA0ODw") } as Eip3009SignRequest;
+    const honest = await new LocalKeySigner(payer).sign(asked);
+    expect((await signerFor(fake({ create: () => signedView(honest) })).sign(asked)).signer).toBe(payer.address);
+    // validly signed by the right key over the right terms, but with the wallet's own random nonce
+    const own = await new LocalKeySigner(payer).sign(REQ);
+    expect(own.payload.authorization.nonce).not.toBe(asked.nonce);
+    const err = await refusal(signerFor(fake({ create: () => signedView(own) })).sign(asked));
+    expect(err).toBeInstanceOf(SignRefused);
+    expect(err?.code).toBe("invalid");
+    expect(err?.message).toMatch(/not the one asked for \(nonce\); it was not sent/);
+    // a request that names no nonce leaves the wallet's own
+    expect((await signerFor(fake({ create: () => signedView(own) })).sign(REQ)).signer).toBe(payer.address);
   });
 });
 

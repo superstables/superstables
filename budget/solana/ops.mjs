@@ -14,6 +14,7 @@
 //   refused_chain     the chain refused it (simulation) and it cannot land while that holds
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
+import { budgetMemo } from "../../src/core/referral-memo.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import { readJournalFile, solanaOpProblem, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
@@ -33,10 +34,11 @@ export function newOpId() {
 // Deterministic per-operation transaction identity. Two different operations get different
 // compute-unit prices and different memos, so two purchases of the same price to the same seller
 // can never be byte-identical (Solana would collapse those into one transaction). A retry of the
-// same operation derives the same values again.
-export function opIdentity(op) {
+// same operation derives the same values again. The memo of a referred operation also names its
+// referral (src/core/referral-memo.mjs): `rb:<op>;ss1<id>`.
+export function opIdentity(op, referralId) {
   const h = createHash("sha256").update(`rail-budgets/solana/${op}`).digest();
-  return { microLamports: 1 + (h.readUInt32BE(0) % 9000), memo: `rb:${op}` };
+  return { microLamports: 1 + (h.readUInt32BE(0) % 9000), memo: budgetMemo(op, referralId) };
 }
 
 const opPath = (op) => join(OPS_DIR, `${op}.json`);

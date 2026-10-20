@@ -7,8 +7,10 @@
 // AGENT, the owner's approved delegate), with the compute-unit price and a memo derived from the
 // operation id so two different operations never build the same transaction (identical ones
 // would collapse into one on chain and the agent would get two deliveries for one payment),
-// while a retry of the same operation derives the same values. Fee payer: the facilitator's
-// `extra.feePayer` when offered (it completes the signature at /settle), else the agent.
+// while a retry of the same operation derives the same values. When the index gave a referral for
+// the seller, the memo names it too, and the paid request carries the referral's token. Fee payer:
+// the facilitator's `extra.feePayer` when offered (it completes the signature at /settle), else the
+// agent.
 //
 // Safety, in order:
 //   1. Strict flags (unknown or missing flags exit 2 before any file is read).
@@ -44,6 +46,7 @@ import {
   TokenAccountNotFoundError,
 } from "./token.mjs";
 import bs58 from "bs58";
+import { join } from "node:path";
 import {
   CLUSTER_NEXT,
   clusterProblem,
@@ -68,6 +71,9 @@ import {
 import { readCapped, saveResponse } from "../response.mjs";
 import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessAgreed } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
+import { HOME } from "../paths.mjs";
+import { memoReferral } from "../../src/core/referral-memo.mjs";
+import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
 
@@ -290,7 +296,11 @@ console.log(
 );
 
 const feePayerPk = feePayerStr ? new PublicKey(feePayerStr) : agent.publicKey;
-const identity = opIdentity(opId);
+// The seller's referral, frozen in the journal from the operation's first intent: a later run under the same --op pays
+// under the same one, and the memo names it.
+const referral = operationReferral(readOp(opId), url, join(HOME, "records"));
+const identity = opIdentity(opId, referral?.id);
+if (referral) console.log(`Referral ${referral.id} for listing ${oneLine(referral.listingId, 200)}`);
 const createdAt = readOp(opId)?.createdAt ?? new Date().toISOString();
 updateOp(
   opId,
@@ -298,7 +308,7 @@ updateOp(
     rail: "solana", kind: "buy", state: "intent", createdAt, url, method,
     amount: amountBase.toString(), amountUsdc: amountUi, payTo: payToPk.toBase58(), token: USDC_MINT.toBase58(),
     owner: ownerPk.toBase58(), agent: agent.publicKey.toBase58(), ownerAta: ownerAta.toBase58(), sellerAta: sellerAta.toBase58(),
-    feePayer: feePayerPk.toBase58(), computeUnitPrice: identity.microLamports, memo: identity.memo,
+    feePayer: feePayerPk.toBase58(), computeUnitPrice: identity.microLamports, memo: identity.memo, referral,
     agentSig: null, tx: null, delivered: null, reasons: undefined,
   },
   "prechecks passed"
@@ -306,9 +316,10 @@ updateOp(
 
 // --- 5. build and sign ---------------------------------------------------------------------------
 const instructions = [
-  // The memo includes a caller-supplied operation id (up to 64 ASCII bytes). A 51-byte
-  // memo plus the transfer already uses 20,119 CU on devnet, so the old 20,000 cap
-  // rejected valid UUID ids. Allow the longest memo and token-account creation too.
+  // The memo includes a caller-supplied operation id (up to 64 ASCII bytes) and, for a referred
+  // operation, 26 more for the referral: at most 93 bytes. A 51-byte memo plus the transfer
+  // already uses 20,119 CU on devnet, so the old 20,000 cap rejected valid UUID ids. Allow the
+  // longest memo and token-account creation too.
   ComputeBudgetProgram.setComputeUnitLimit({ units: 50_000 }),
   ComputeBudgetProgram.setComputeUnitPrice({ microLamports: identity.microLamports }),
 ];
@@ -361,7 +372,7 @@ console.log(`\nSending payment via ${paymentHeaderName} header (payload ${paymen
 let paid = null;
 let paidError = null;
 try {
-  paid = await fetchOnce(url, method, bodyText, { [paymentHeaderName]: paymentHeaderValue }, 90_000);
+  paid = await fetchOnce(url, method, bodyText, { [paymentHeaderName]: paymentHeaderValue, ...paidReferralHeaders(referral, opId, memoReferral(identity.memo)) }, 90_000);
   console.log(`Paid request: HTTP ${paid.res.status}`);
 } catch (e) {
   paidError = oneLine(e?.message ?? e);

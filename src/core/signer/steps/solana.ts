@@ -374,6 +374,7 @@ async function build(record: StepRecord, owner: string): Promise<StepAnswer> {
       feePayer,
       blockhash: latest.blockhash,
       memo: memoOf(record),
+      ...(record.referralId ? { referralId: record.referralId } : {}),
     });
     const holder = issued.get(built.message);
     if (holder === undefined || holder === record.id) break;
@@ -425,6 +426,7 @@ async function signed(record: StepRecord, owner: string, value: unknown): Promis
       signature: checked.signature,
       lastValidBlockHeight: prepared.lastValidBlockHeight,
       ...(prepared.slot !== undefined ? { searchFromSlot: prepared.slot } : {}),
+      memo: prepared.memo,
       signer: owner,
     },
   };

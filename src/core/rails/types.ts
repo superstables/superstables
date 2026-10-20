@@ -114,8 +114,8 @@ interface RailCommon {
   readonly signKind: SignKind;
   /** The chains this rail pays on. */
   readonly networks: readonly NetworkInfo[];
-  /** The owner's wallet request for an offer of this rail. */
-  signRequest(offer: Offer, x402Version: 1 | 2, context: PaymentContext): SignRequest;
+  /** The owner's wallet request for an offer of this rail, marked with the referral the paid request carries, if any. */
+  signRequest(offer: Offer, x402Version: 1 | 2, context: PaymentContext, referralId?: string): SignRequest;
   /** What a signed result records on the attempt, before anything leaves this machine. */
   signedFacts(signed: SignResult): SignedFacts;
   /** A transaction id in this rail's shape (a 0x hash, a base58 signature): the only shape one is repeated in. */
@@ -145,8 +145,16 @@ export interface PushRail extends RailCommon {
   judgeChallenge(challenge: MppChallenge, now?: number): Judged;
   /** The headers that carry the credential naming the owner's transaction to the seller. */
   credentialHeaders(offer: Offer, signed: SignResult): Record<string, string>;
-  /** The memo the owner's transfer for this offer carries: what finds it on chain, decided by the seller's challenge. */
-  paymentMemo(offer: Offer): string;
+  /**
+   * The memo the owner's transfer for this offer carries: what finds it on chain, decided by the seller's challenge and
+   * the referral the paid request carries, if any.
+   */
+  paymentMemo(offer: Offer, referralId?: string): string;
+  /**
+   * What a memo says about the seller's challenge alone, without the referral it carries: two memos with the same key
+   * are two transfers for one challenge, whatever referral each carried.
+   */
+  challengeKey(memo: string): string;
   /** How long to wait for the owner's transaction to show on chain before the seller is called. */
   readonly confirmWaitMs: number;
 }
