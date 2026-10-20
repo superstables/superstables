@@ -18,7 +18,9 @@ export function claimChallenge(memo: string, op: string): string {
   if (!/^0x[0-9a-fA-F]{64}$/.test(memo)) throw new Error('the payment memo is not 32 bytes of hex')
   durableDirectory(CLAIMS_DIR)
   const name = tempoChallengeKey(memo).slice(2)
-  // Names under the whole memo are only ever written by older builds, so looking for them before the exclusive create is enough.
+  // Names under the whole memo are only ever written by older builds, so looking for them before the exclusive create is enough
+  // once those builds have stopped. An older build still buying from the same home looks only for its own names: no check here
+  // can hold it back, so don't run one alongside.
   const held = readdirSync(CLAIMS_DIR).filter((n) => /^[0-9a-fA-F]{64}$/.test(n) && tempoChallengeKey(`0x${n}`).slice(2) === name)
   for (const n of held) {
     const verdict = against(claimHolder(join(CLAIMS_DIR, n)), op)
