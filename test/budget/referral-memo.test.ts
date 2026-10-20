@@ -290,7 +290,7 @@ async function moderato(owner: string, agent: string): Promise<{ url: string; ra
 const treeOf = new Map<string, string>();
 
 /** An MPP seller of one tempo.charge in `mode`, keeping every request's headers and every credential's payload. */
-async function mppSeller(mode: "pull" | "push", onPaid: () => void = () => {}): Promise<{ url: string; unpaid: IncomingHttpHeaders[]; paid: { headers: IncomingHttpHeaders; payload: { type: string; signature?: string; hash?: string } }[] }> {
+async function mppSeller(mode: "pull" | "push", onPaid: () => void = () => {}, challengeId = "challenge-1"): Promise<{ url: string; unpaid: IncomingHttpHeaders[]; paid: { headers: IncomingHttpHeaders; payload: { type: string; signature?: string; hash?: string } }[] }> {
   const unpaid: IncomingHttpHeaders[] = [];
   const paid: { headers: IncomingHttpHeaders; payload: { type: string; signature?: string; hash?: string } }[] = [];
   const url = await listen((req, res) => {
@@ -301,7 +301,7 @@ async function mppSeller(mode: "pull" | "push", onPaid: () => void = () => {}): 
       return;
     }
     unpaid.push({ ...req.headers });
-    const challenge = Challenge.from({ id: "challenge-1", realm: "seller.example", method: "tempo", intent: "charge", request: { amount: "10000", currency: PATH_USD, recipient: RECIPIENT, methodDetails: { chainId: 42431, supportedModes: [mode] } }, expires: new Date(Date.now() + 300_000).toISOString() });
+    const challenge = Challenge.from({ id: challengeId, realm: "seller.example", method: "tempo", intent: "charge", request: { amount: "10000", currency: PATH_USD, recipient: RECIPIENT, methodDetails: { chainId: 42431, supportedModes: [mode] } }, expires: new Date(Date.now() + 300_000).toISOString() });
     res.writeHead(402, { "www-authenticate": Challenge.serialize(challenge) }).end("{}");
   });
   return { url: `${url}/paid`, unpaid, paid };
@@ -334,7 +334,7 @@ function tempoBuy(dir: string, rpc: string, url: string, op: string): Promise<{ 
 const tempoJournal = (dir: string, op: string) => JSON.parse(readFileSync(join(dir, "budget", "ops", "tempo-moderato", `${op}.json`), "utf8"));
 
 describe("a referred Tempo budget buy", () => {
-  const memo = (clientId?: string) => mppMemo("challenge-1", "seller.example", clientId);
+  const memo = (clientId?: string, challengeId = "challenge-1") => mppMemo(challengeId, "seller.example", clientId);
 
   for (const mode of ["pull", "push"] as const) {
     it(`journals the memo mppx sends with the referral's client id, and sends the token with the paid request only (${mode} mode)`, async () => {
@@ -377,11 +377,18 @@ describe("a referred Tempo budget buy", () => {
     expect(tempoJournal(dir, "tempo-again")).toMatchObject({ memo: memo(`superstables:${ID}`), referral: { id: ID, token: first } });
     expect(s.paid[1]!.headers["superstables-referral"]).toBe(first);
 
+    // The seller hands the same challenge to another operation, under no referral: the challenge is spent, referral or not
     rmSync(join(dir, "records"), { recursive: true });
-    expect((await tempoBuy(dir, chain.url, s.url, "tempo-plain")).result.delivered).toBe(true);
-    expect(tempoJournal(dir, "tempo-plain")).toMatchObject({ memo: memo(), referral: null });
+    const spent = await tempoBuy(dir, chain.url, s.url, "tempo-plain");
+    expect(spent.result).toMatchObject({ state: "refused_precheck", reason: expect.stringMatching(/^challenge_used: operation tempo-again /) });
+    expect(s.paid).toHaveLength(2);
+
+    // A new challenge is paid as before
+    const fresh = await mppSeller("pull", () => (chain.chain.head.timestamp += 1_000), "challenge-2");
+    expect((await tempoBuy(dir, chain.url, fresh.url, "tempo-plain")).result.delivered).toBe(true);
+    expect(tempoJournal(dir, "tempo-plain")).toMatchObject({ memo: memo(undefined, "challenge-2"), referral: null });
     expect(tempoJournal(dir, "tempo-plain").memo.slice(32, 52)).toBe("0".repeat(20));
-    expect(s.paid[2]!.headers["superstables-referral"]).toBeUndefined();
+    expect(fresh.paid[0]!.headers["superstables-referral"]).toBeUndefined();
   }, 90_000);
 
   it("journals no client id for a malformed referral id", () => {
