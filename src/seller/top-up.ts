@@ -355,15 +355,20 @@ export function earlierTopUpProblem(input: { site: URL; credit: SellerCredit; at
   for (const attempt of input.attempts) {
     const id = topUpIdFromPayUrl(attempt.url, input.site);
     if (!id || !mayHavePaid(attempt)) continue;
-    if (listed.has(id) && !LIVE_STATES.includes(attempt.state)) continue;
+    if (LIVE_STATES.includes(attempt.state)) {
+      doubts.push(`top-up ${id} has a payment still under way (attempt ${attempt.id}, ${attempt.state}): finish it, or run \`superstables status ${attempt.id}\` if its command has stopped`);
+      continue;
+    }
+    if (listed.has(id)) continue;
     doubts.push(`top-up ${id} has a payment (attempt ${attempt.id}, ${attempt.state}) that may have moved money`);
   }
   if (doubts.length === 0) return undefined;
   const shown = doubts.slice(0, 3).join("; ") + (doubts.length > 3 ? `; and ${doubts.length - 3} more` : "");
   return (
-    `an earlier top-up is not settled: ${shown}. A new top-up could pay twice, so this command created and paid nothing. It clears when \`superstables seller credit\` ` +
-    "(it rechecks pending top-ups) lists the top-up as anything but pending, or when `superstables status <attempt>` ends the " +
-    "attempt: paid and confirmed on chain, or failed with the chain saying it was never made"
+    `an earlier top-up is not settled: ${shown}. A new top-up could pay twice, so this command created and paid nothing. A pending ` +
+    "top-up clears when `superstables seller credit` (it rechecks pending top-ups) lists it as anything but pending. A payment " +
+    "clears when it ends, or when `superstables status <attempt>` ends it: paid and confirmed on chain, or failed with the chain " +
+    "saying it was never made"
   );
 }
 
