@@ -573,6 +573,99 @@ describe("a freeze that loses its race to the original's own rail owns nothing",
   }, 300_000);
 });
 
+describe("a freeze is permanent: the order is never paid on both the original and the candidate", () => {
+  /** An order frozen and journaled, then killed the moment the candidate is first contacted. The candidate's later requests can be held. */
+  async function frozenOrder(op: string) {
+    const arcSeller = await startSeller(arc, 5042002);
+    cleanups.push(() => arcSeller.close());
+    const hold: { gate: Promise<void> | null; reached: (() => void) | null; seen: Promise<void> } = { gate: null, reached: null, seen: Promise.resolve() };
+    let killer: (() => void) | undefined;
+    let killOnce = true;
+    const hits: string[] = [];
+    const baseSeller = await startSeller(base, 84532);
+    cleanups.push(() => baseSeller.close());
+    const server = createServer(async (req, res) => {
+      hits.push(req.url ?? "");
+      if (req.url?.startsWith("/arc")) {
+        if (killOnce) { killOnce = false; killer?.(); return; }
+        hold.reached?.();
+        if (hold.gate) await hold.gate;
+        const headers: Record<string, string> = {};
+        for (const k of ["payment-signature", "x-payment"]) if (req.headers[k]) headers[k] = String(req.headers[k]);
+        const r = await fetch(arcSeller.url, { headers });
+        res.writeHead(r.status, relayed(r)).end(Buffer.from(await r.arrayBuffer()));
+        return;
+      }
+      res.writeHead(503).end("down");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const gate = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
+    setUpEvm(site.url);
+    const first = await buy(`${gate}/spot`, { op, onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
+    expect(first.result).toBeNull();
+    const file = join(recordsDir(), `evm-base-sepolia-${op}.json`);
+    expect(JSON.parse(readFileSync(file, "utf8")).attempts[0]).toMatchObject({ op: `${op}-r2`, state: "journaled" });
+    expect(JSON.parse(readFileSync(join(home, "budget", "ops", "evm-base-sepolia", `${op}.json`), "utf8")).supersededBy).toMatchObject({ op: `${op}-r2` });
+    return { gate, arcSeller, baseSeller, site, hold, file, hits };
+  }
+  const settlements = (a: Seller, b: Seller) => a.settled.length + b.settled.length;
+
+  it("the candidate signs before the order is resumed: the original is never paid, one settlement in all", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-a");
+    const candidate = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", "fz-a-r2"]);
+    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-a"]);
+    expect(hand.result).toMatchObject({ state: "refused_precheck" });
+    expect(hand.result.reason).toMatch(/superseded/);
+    const again = await buy(`${gate}/spot`, { op: "fz-a" });
+    expect(again.result).toMatchObject({ op: "fz-a-r2", chain: "arc-testnet", state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("the candidate is in its terms read when the order is resumed with expired advice: unknown, then still one settlement", async () => {
+    const { gate, arcSeller, baseSeller, hold, file } = await frozenOrder("fz-b");
+    let release!: () => void;
+    hold.gate = new Promise<void>((r) => (release = r));
+    const reached = new Promise<void>((r) => (hold.reached = r));
+    const candidate = direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", "fz-b-r2"]);
+    await reached;
+    // the advice has run out; the candidate command holds its op and has not signed
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    rec.advice.expires_at_ms = Date.now() - 1000;
+    writeFileSync(file, JSON.stringify(rec));
+    const during = await buy(`${gate}/spot`, { op: "fz-b" });
+    expect(during.code, all(during)).toBe(5);
+    expect(during.result).toMatchObject({ state: "unknown", paid: null });
+    // the original is still superseded, whatever the order's state
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-b"]);
+    expect(hand.result.reason).toMatch(/superseded/);
+    release();
+    const done = await candidate;
+    expect(done.result, all(done)).toMatchObject({ state: "settled", paid: true });
+    const after = await buy(`${gate}/spot`, { op: "fz-b" });
+    expect(after.result).toMatchObject({ op: "fz-b-r2", state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("expired advice on an uncontacted freeze keeps the original superseded: the same op is refused and nothing is paid", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-c");
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    rec.advice.expires_at_ms = Date.now() - 1000;
+    writeFileSync(file, JSON.stringify(rec));
+    const r = await buy(`${gate}/spot`, { op: "fz-c" });
+    expect(r.code, all(r)).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(r.result.reason, r.result.reason).toMatch(/stays superseded and is never paid: buy again with a new --op/);
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-c"]);
+    expect(hand.result.reason).toMatch(/superseded/);
+    const again = await buy(baseSeller.url, { op: "fz-c" });
+    expect(again.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(settlements(arcSeller, baseSeller)).toBe(0);
+  }, 400_000);
+});
+
 describe("invariant 1: nothing is switched once anything was signed", () => {
   it("an order that already paid is answered from its journal; the site is never asked and nothing is read again", async () => {
     const seller = await startSeller(base, 84532);
