@@ -172,6 +172,8 @@ let lock = { ok: true };
 // cannot be read); a payment is never retried.
 let initial;
 let termsReadError;
+// Only a GET without a body is read again: an application request (POST and the rest) may not be safe to repeat, payment or not.
+const retryable = method === "GET" && bodyText === undefined;
 const read = await readTerms(async () => {
   termsReadError = undefined;
   let got;
@@ -182,9 +184,9 @@ const read = await readTerms(async () => {
     return { failure: termsFailureOf({ error: oneLine(e?.cause?.code ?? e?.message ?? e, 120) }) };
   }
   return { failure: termsFailureOf({ status: got.res.status, retryAfter: got.res.headers.get("retry-after"), paymentRequired: got.res.headers.get("payment-required"), bodyText: got.text }), value: got };
-});
+}, retryable ? undefined : { maxReads: 1 });
 initial = read.value;
-if (!read.ok) termsFailure = failureFact(read.failure, read.attemptsUsed);
+if (!read.ok && retryable) termsFailure = failureFact(read.failure, read.attemptsUsed);
 if (!initial) refuse(`seller unreachable: ${termsReadError}`);
 console.log(`\nInitial request: HTTP ${initial.res.status}`);
 if (initial.res.status !== 402) {

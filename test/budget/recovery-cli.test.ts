@@ -247,6 +247,21 @@ describe("retry of the seller's terms, as a process", () => {
   }, 120_000);
 });
 
+describe("an application request is never replayed by the terms retry", () => {
+  it("a solana POST to a seller that answers 503 is sent once, with no site or recovery involved", async () => {
+    const bodies: string[] = [];
+    const server = createServer(async (req, res) => { bodies.push(`${req.method} ${await text(req)}`); res.writeHead(503).end("busy"); });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    setUpSolana("http://127.0.0.1:9");
+    const r = await buy(`http://127.0.0.1:${(server.address() as AddressInfo).port}/job`, { rail: "solana", op: "rec-post", extra: ["--method", "POST", "--body", '{"job":1}'] });
+    expect(r.code, all(r)).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(r.result.recovery).toBeUndefined();
+    expect(bodies).toEqual(['POST {"job":1}']);
+  }, 60_000);
+});
+
 describe("a site that does not take part: the answer is exactly what it is today", () => {
   const without = async () => {
     const gate = await startGate({ base: "503" });

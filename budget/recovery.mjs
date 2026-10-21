@@ -83,12 +83,12 @@ export function nextWait(attempt, retryAfter, { random = Math.random, now = Date
  * seller_error). Nothing but that read is ever repeated.
  * @returns {Promise<{ ok: boolean, value?: any, failure?: any, attemptsUsed: number, waits: number[] }>}
  */
-export async function readTerms(readOnce, { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), random = Math.random, now = Date.now } = {}) {
+export async function readTerms(readOnce, { sleep = (ms) => new Promise((r) => setTimeout(r, ms)), random = Math.random, now = Date.now, maxReads = RETRY.maxReads } = {}) {
   const waits = [];
   for (let attempt = 1; ; attempt++) {
     const out = await readOnce(attempt);
     if (!out.failure) return { ok: true, value: out.value, attemptsUsed: attempt, waits };
-    if (attempt >= RETRY.maxReads) return { ok: false, failure: out.failure, value: out.value, attemptsUsed: attempt, waits };
+    if (attempt >= Math.min(maxReads, RETRY.maxReads)) return { ok: false, failure: out.failure, value: out.value, attemptsUsed: attempt, waits };
     const wait = nextWait(attempt, out.failure.retryAfter, { random, now });
     if (wait === null) return { ok: false, failure: out.failure, value: out.value, attemptsUsed: attempt, waits };
     waits.push(wait);

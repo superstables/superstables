@@ -110,6 +110,8 @@ export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts:
   return async (input: any, init?: any) => {
     const request = new Request(input, init);
     if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) { outcome.failure = null; return inner(request); }
+    // only a GET without a body is read again: an application request may not be safe to repeat just because no payment exists yet
+    if (request.method !== "GET" || request.body !== null) { outcome.failure = null; return inner(request); }
     let last: Response | undefined;
     let thrown: unknown;
     const read = await readTerms(async () => {

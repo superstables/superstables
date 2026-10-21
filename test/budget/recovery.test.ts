@@ -127,6 +127,16 @@ describe("retry of the seller's terms: at most 3 reads, 250 ms then 1 s with jit
       expect(o2.failure).toBeNull();
     });
 
+    it("reads an application request (POST, or any body) once, whatever it answers", async () => {
+      const down = vi.fn(async () => new Response("", { status: 503 }));
+      const o: any = { failure: { stage: "terms" } };
+      expect((await withTermsRetry(down as any, o, timing().opts)("http://seller.test/x", { method: "POST", body: "{}" })).status).toBe(503);
+      expect(down).toHaveBeenCalledTimes(1);
+      expect(o.failure).toBeNull();
+      await withTermsRetry(down as any, o, timing().opts)("http://seller.test/x", { method: "DELETE" });
+      expect(down).toHaveBeenCalledTimes(2);
+    });
+
     it("recovers when a later read works, and never retries a request that carries a payment", async () => {
       let n = 0;
       const flaky = vi.fn(async () => (++n < 3 ? new Response("", { status: 502 }) : new Response("", { status: 402, headers: { "payment-required": v2 } })));
