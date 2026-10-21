@@ -10,6 +10,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed and fixed
 
 - **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
+- **Mistaken flags and damaged records:** `budget wait` now returns `unknown` (exit 5, not final) when it rejects a flag for an existing approval or cannot read its record. Follow the returned instructions before retrying.
 
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
