@@ -856,6 +856,26 @@ describe("recovery of one order", () => {
       });
     });
 
+    describe("losing the candidate's journal never erases a recorded outcome", () => {
+      for (const [outcome, attempt] of [["paid", (flags: any) => paid(flags)], ["unknown", (flags: any) => unknown(flags)]] as const) {
+        it(`after ${outcome}: unknown, with the transaction when there is one, never paid=false, never a new op`, async () => {
+          const w = world({ attempt });
+          await R.recoverOrder(w.deps);
+          for (const state of [{ exists: false, unsigned: true }, { exists: true, unsigned: true }]) {
+            const again = world({ op: w.op, attemptState: () => state });
+            const out = await R.recoverOrder(again.deps);
+            expect(out.kind).toBe("result");
+            expect(out.code).toBe(5);
+            expect(out.fields).toMatchObject({ state: "unknown", paid: null, delivered: null, amount: null, op: `${w.op}-r2` });
+            if (outcome === "paid") expect(out.fields.tx).toEqual({ settle: "0xabc" });
+            expect(out.fields.next).toMatch(/never pay again/);
+            expect(out.fields.next).not.toMatch(/new --op/);
+            expect(count(again.calls, "attempt")).toBe(0);
+          }
+        });
+      }
+    });
+
     it("a rerun after the switch was decided before the crash and nothing was signed does not start another round of advice", async () => {
       const w = world({ attempt: (flags: any) => unsignedTerms(flags), adviceReply: { status: 200, body: advice({}, [goodCandidate()]) } });
       await R.recoverOrder(w.deps);

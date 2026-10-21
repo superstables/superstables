@@ -638,6 +638,19 @@ async function resume(deps, record) {
     if (last.state !== "done") { last.state = "done"; last.outcome = outcomeOf(probe.fields?.state); try { writeRecord(record); } catch { /* the answer below is the same */ } }
     return { kind: "result", code: probe.code, fields: switchedFields(record, last, probe.fields) };
   }
+  // INVARIANT 1: the record says this attempt was paid, or its outcome was unknown, or names a transaction, but its own journal is
+  // missing or shows nothing signed. Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
+  if ((last.state === "done" && (last.outcome === "paid" || last.outcome === "unknown")) || last.tx) {
+    return {
+      kind: "result", code: 5,
+      fields: switchedFields(record, last, {
+        command: "buy", rail: last.rail, chain: last.chain, op: last.op, state: "unknown", paid: null, delivered: null, amount: null,
+        tx: last.tx ? { settle: last.tx } : {},
+        next: `superstables budget reconcile --rail ${last.rail} --chain ${last.chain} --op ${last.op} (never pay again for this order)`,
+        reason: `the recovery record says operation ${last.op} ${last.outcome === "paid" ? "was paid" : "may have paid"}${last.tx ? ` (transaction ${last.tx})` : ""}, but its journal cannot be read: whether it was paid is unknown, and it is never paid again`,
+      }),
+    };
+  }
   // decided before the crash, and nothing was signed: the order is over, and no new advice is asked for it
   if (last.state === "done" || record.closed) return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
   // Journaled before the crash, nothing signed since. INVARIANT 6 binds this contact and payment too: the persisted advice must not

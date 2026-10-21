@@ -2,7 +2,7 @@
 // (Base Sepolia and Arc Testnet, each with its own USDC) and sellers on 127.0.0.1. Nothing reaches a network, no wallet, no
 // real key. The seller that cannot be read is a server that answers 503; the working one is a fake x402 seller on the other chain.
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -408,6 +408,19 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(lost.code).toBe(5);
     expect(lost.result).toMatchObject({ state: "unknown", paid: null });
   }, 300_000);
+
+  it("losing the candidate's journal after a paid switch leaves the order unknown with its transaction, never unpaid", async () => {
+    const { r, arcSeller } = await recovered((g) => [arcCandidate(g)]);
+    expect(r.code, all(r)).toBe(0);
+    const journal = join(home, "budget", "ops", "evm-arc-testnet", "rec-1-r2.json");
+    renameSync(journal, `${journal}.away`);
+    const again = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
+    expect(again.code, all(again)).toBe(5);
+    expect(again.result).toMatchObject({ state: "unknown", paid: null, op: "rec-1-r2", chain: "arc-testnet" });
+    expect(again.result.tx).toEqual({ settle: r.result.tx.settle });
+    expect(JSON.stringify(again.result)).not.toMatch(/new --op/);
+    expect(arcSeller.settled).toHaveLength(1);
+  }, 240_000);
 
   it("the original op is frozen at the rail: a direct rail script, run by hand, never pays it after the order moved", async () => {
     const { r, site } = await recovered((g) => [arcCandidate(g)]);
