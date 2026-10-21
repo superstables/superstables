@@ -587,7 +587,7 @@ describe("a restarted worker that runs past its backstop", () => {
     // the backstop fires after 7 s; the rail script's stdout stays open for 20 s after the backstop kills it (a process of its own holds
     // it), so the dispatcher cannot end the worker by seeing the rail script leave: the backstop's own code decides what is recorded
     const hooks = ["shorten-worker-backstop", "hold-rail-stdout"].map((name) => `--import ${pathToFileURL(resolve(ROOT, `test/helpers/${name}.mjs`)).href}`);
-    const stopped = await budget(["wait", "--shown", "--id", id, "--timeout", "30"], { NODE_OPTIONS: [process.env.NODE_OPTIONS, ...hooks].filter(Boolean).join(" "), BACKSTOP_TEST_MS: "7000", HOLD_RAIL_STDOUT_MS: "20000" });
+    const stopped = await budget(["wait", "--shown", "--id", id, "--timeout", "30"], { NODE_OPTIONS: [process.env.NODE_OPTIONS, ...hooks].filter(Boolean).join(" "), BACKSTOP_TEST_MS: "7000", HOLD_RAIL_STDOUT_MS: "20000", HOLD_RAIL_STDOUT_PIDFILE: join(home, "hold-pids") });
     expect(stopped.code, stopped.stderr).toBe(5);
     expect(stopped.result).toMatchObject({ state: "unknown", final: false, id });
     const r = record(id);
@@ -608,5 +608,7 @@ describe("a restarted worker that runs past its backstop", () => {
     expect(done.result).toMatchObject({ state: "ok", final: true });
     expect(lines("B4_CAP")).toBe(1);
     expect(site.posts).toHaveLength(1);
+    // the helper process that held the rail script's stdout is not left behind
+    if (existsSync(join(home, "hold-pids"))) for (const pid of readFileSync(join(home, "hold-pids"), "utf8").split("\n").filter(Boolean)) { try { process.kill(-Number(pid), "SIGKILL"); } catch { /* gone */ } }
   }, 400_000);
 });

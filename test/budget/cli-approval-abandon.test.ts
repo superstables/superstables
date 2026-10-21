@@ -460,6 +460,8 @@ describe("wait --abandon on a background owner approval", () => {
     // a chain lock file the fault left behind is stale: its approval has a result, so it holds nothing
     const next = await budget(setupArgs());
     expect(next.result?.reason ?? "").not.toMatch(/still waiting for the owner/);
+  }, 120_000);
+
   it("the record disappears between the first read and the locked give-up: unknown, not failed, and no give-up stored", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();

@@ -737,22 +737,22 @@ export function readRequestFact(id, key) {
 export function recordTakenOver(id, generation) {
   return update(id, (record) => {
     if (record.final) return null;
-    const mine = generation ?? record.resumes ?? 0;
-    // a worker that a newer restart replaced marks nothing: only the restart that read the request has taken it over
-    if (mine !== (record.resumes ?? 0)) return null;
-    return { resume: { ...record.resume, takenOver: mine } };
+    // a worker that does not know its restart (no number), or that a newer restart replaced, marks nothing: only the restart that read the
+    // request has taken it over
+    if (!Number.isInteger(generation) || generation !== (record.resumes ?? 0)) return null;
+    return { resume: { ...record.resume, takenOver: generation } };
   });
 }
+
+/** The restart number a restarted worker was given (RESUME_GENERATION_ENV): a positive whole number as written, else NaN, which matches no restart. */
+export const resumeGeneration = (env = process.env) => (/^[1-9]\d*$/.test(env[RESUME_GENERATION_ENV] ?? "") ? Number(env[RESUME_GENERATION_ENV]) : Number.NaN);
 
 /** Whether the worker that finishes approval `id` has taken the request over (set by recordTakenOver, once per restart). */
 /** Whether `record` says the restart numbered `generation` is the newest and is the one that took the request over. */
 export const takeoverHolds = (record, generation) => Boolean(record && generation === (record.resumes ?? 0) && record.resume?.takenOver === generation);
 
-export const hasTakenOver = (id, generation) => {
-  const record = readApproval(id);
-  // the worker's own restart must still be the newest, and must be the one that took the request over
-  return takeoverHolds(record, generation ?? record?.resumes ?? 0);
-};
+// the worker's own restart must still be the newest, and must be the one that took the request over
+export const hasTakenOver = (id, generation) => takeoverHolds(readApproval(id), generation);
 
 /**
  * End the approval for a restarted worker: stored only if, under the record's lock, no result stands and the worker is still the
