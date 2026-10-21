@@ -699,7 +699,7 @@ if (process.env[WORKER_ENV] && !WORKER_ID) {
   process.exit(0);
 }
 // a worker never runs `wait`: a `wait` that carries a worker's variable (by hand) adopts nothing and writes no process into any record
-if (WORKER_ID && process.argv[2] !== "wait") adoptWorker(WORKER_ID);
+if (WORKER_ID && !process.argv.slice(2).includes("wait")) adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
