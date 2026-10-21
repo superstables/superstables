@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { failureFact, readTerms, termsFailureOf } from "../recovery.mjs";
+import { failureFact, readTerms, supersededWords, termsFailureOf } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -396,6 +396,13 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       : `operation ${o.op} already ended as ${prior.state}: use a new --op for a new purchase`;
     log(`REFUSED: ${why}`);
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: PENDING.includes(prior.state) ? `run reconcile --op ${o.op}` : "use a new --op" }, exitCode: 3 };
+  }
+
+  // INVARIANT 1: an op that auto recovery superseded is never paid, whoever starts it (this check runs under the op's record lock)
+  if ((prior as any)?.supersededBy) {
+    const why = supersededWords(o.op, (prior as any).supersededBy);
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "read the operation the order continues as; this --op is never paid", supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
   }
 
   // Frozen for this operation before anything is signed: a later run under the same --op pays under the same referral.

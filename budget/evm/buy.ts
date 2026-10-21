@@ -61,6 +61,7 @@ if (j.state === "settled" && j.delivered) console.log("PURCHASE OK.");
 else if (j.state === "settled") console.log("PURCHASE SETTLED ON CHAIN BUT THE SELLER DID NOT DELIVER. Not paying again.");
 else if (j.state === "quoted") console.log("QUOTE OK. Nothing was signed or sent.");
 else if (j.state === "refused_chain") console.log(refusedChainWords(j.pullTx).line);
+else if (j.state === "refused_precheck" && (j as any).supersededBy) console.log("PURCHASE REFUSED. This operation was superseded by auto recovery and is never paid; read the operation the order continues as.");
 else if (j.state === "refused_precheck") console.log("PURCHASE REFUSED. Nothing was paid.");
 else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} ${SYM} was returned to the owner. Never re-paid.`);
 else console.log(`PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then run ${cmd("reconcile.ts", `--op ${j.op}`)}.`);

@@ -163,7 +163,7 @@ let lock = { ok: true };
   const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);
-    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "superseded" ? "read the operation the order continues as; this --op is never paid" : gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana --op ${opId}` });
   }
 }
 

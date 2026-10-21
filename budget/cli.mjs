@@ -41,7 +41,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, BUDGET_API, DEFAULT_SITE, agentTokenScrubber, call, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
-import { RECOVERY_CHAINS, atomicOf, provesUnsigned, readRecord, recoverOrder } from "./recovery.mjs";
+import { RECOVERY_CHAINS, atomicOf, freezeOriginal, provesUnsigned, readRecord, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -1615,6 +1615,7 @@ async function recoveryFor(f, ctx, rr) {
       const reply = out?.reply;
       return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
     },
+    freezeOriginal,
     attempt: (f2) => attemptBuy(f2, ctx),
     attemptState: async (a) => {
       const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };

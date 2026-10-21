@@ -22,8 +22,9 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { writeJournalFile } from "./journal.mjs";
-import { STATE_DIR } from "./paths.mjs";
+import { journalProblem, writeJournalFile } from "./journal.mjs";
+import { lockRecord } from "./op-lock.mjs";
+import { STATE_DIR, opsDir } from "./paths.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 
@@ -189,6 +190,43 @@ export function provesUnsigned(rail, read) {
     ? ["signed", "auth", "pullTx", "pulled", "settleTx", "cancelTx", "returnTx"]
     : ["agentSig", "tx", "submittedAt", "sellerTx", "signature", "blockhash"];
   return !marks.some((k) => j[k] !== undefined && j[k] !== null && j[k] !== false);
+}
+
+/**
+ * INVARIANT 1, the rail boundary: durably marks the ORIGINAL op's own journal as superseded by this order, under the op's
+ * record lock (the lock every rail takes while it works on that op). Every rail entrypoint (evm/purchase.ts, solana/ops.mjs
+ * gateExistingOp) refuses to pay an op whose journal carries the mark, so no direct script and no second dispatcher can pay the
+ * original once the order has moved. Fails closed: a busy lock, a journal that is not provably unsigned, or none to mark (evm
+ * always leaves one after a refusal) means the order does not move. Idempotent for the same order.
+ * @returns {{ ok: boolean, why?: string }}
+ */
+export function freezeOriginal({ rail, chain, op }, by) {
+  let dir, lock;
+  try {
+    dir = opsDir(rail, chain);
+    lock = lockRecord(dir, op);
+  } catch { return { ok: false, why: "no_lock" }; }
+  if (!lock.ok) return { ok: false, why: "busy" };
+  try {
+    const file = join(dir, `${op}.json`);
+    let cur = null;
+    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch (err) { if (err?.code !== "ENOENT") return { ok: false, why: "unreadable" }; }
+    if (cur !== null) {
+      if (!cur || typeof cur !== "object" || journalProblem(rail, cur, op)) return { ok: false, why: "unreadable" };
+      if (cur.supersededBy) return cur.supersededBy.order_ref === by.order_ref ? { ok: true } : { ok: false, why: "other_order" };
+      if (!provesUnsigned(rail, { present: true, journal: cur })) return { ok: false, why: "may_have_signed" };
+    } else if (rail !== "solana") return { ok: false, why: "no_journal" };
+    const now = new Date().toISOString();
+    const base = cur ?? { op, rail: "solana", kind: "buy", state: "refused_precheck", createdAt: now, history: [] };
+    const next = { ...base, supersededBy: by, updatedAt: now, ...(Array.isArray(base.history) ? { history: [...base.history, { at: now, state: base.state, note: "superseded by auto recovery" }] } : {}) };
+    writeJournalFile(file, JSON.stringify(next, null, 2) + "\n");
+    return { ok: true };
+  } catch { return { ok: false, why: "write_failed" }; } finally { try { lock.release(); } catch { /* released with the process */ } }
+}
+
+/** The words a rail gives for an op that auto recovery superseded: never paid, and where the order went. */
+export function supersededWords(op, by) {
+  return `operation ${op} was superseded by auto recovery (order ${by?.order_ref ?? "?"}) and is never paid again. The order continues as operation ${by?.op ?? "?"} on ${by?.rail ?? "?"} ${by?.chain ?? "?"}: read it with superstables budget reconcile --rail ${by?.rail ?? "R"} --chain ${by?.chain ?? "C"} --op ${by?.op ?? "ID"}`;
 }
 
 // ---- 3. validating the site's advice -------------------------------------------------------------------------------------
@@ -465,6 +503,7 @@ export async function recoverOrder(deps) {
     }
     const done = await runAttempt(deps, record, attempt);
     if (done.kind === "result") return done;
+    if (done.blocked) break;
     previous = done;
   }
   if (record.attempts.length) closeRecord(record, "no_attempt_paid");
@@ -479,6 +518,14 @@ function closeRecord(record, why) {
 /** Runs one journaled attempt through the ordinary buy, reports it, and decides whether the order goes on. */
 async function runAttempt(deps, record, attempt) {
   const { f } = deps;
+  // INVARIANT 1: the original op is frozen at the rail boundary before anything of this attempt is contacted
+  const frozen = deps.freezeOriginal ? deps.freezeOriginal({ rail: f.rail, chain: f.chain, op: f.op }, { order_ref: record.order_ref, op: attempt.op, rail: attempt.rail, chain: attempt.chain, attempt_no: attempt.attempt_no }) : { ok: false, why: "no_freeze" };
+  if (!frozen.ok) {
+    attempt.state = "done"; attempt.outcome = "failed_before_payment"; attempt.note = `not contacted: the original could not be frozen (${frozen.why})`;
+    record.closed = "freeze_failed";
+    try { writeRecord(record); } catch { /* nothing was contacted either way */ }
+    return { kind: "continue", unsigned: true, blocked: true };
+  }
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined };
   const got = await deps.attempt(flags);
   const state = got.fields?.state;

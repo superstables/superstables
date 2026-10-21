@@ -167,6 +167,23 @@ const adviceFor = (candidates: unknown[], policy: Record<string, unknown> = {}, 
     candidates, ...over,
   },
 });
+/** A rail script run by hand, the way anyone can run it without the dispatcher. */
+function direct(script: string, args: string[]): Promise<Out> {
+  return new Promise((done, fail) => {
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url };
+    const [dir, file] = script.split("/");
+    const tsx = file!.endsWith(".ts");
+    const child = spawn(process.execPath, tsx ? [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), file!, ...args] : [file!, ...args], { cwd: join(ROOT, "budget", dir!), env });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (c) => (stdout += String(c)));
+    child.stderr.on("data", (c) => (stderr += String(c)));
+    child.once("error", fail);
+    child.once("close", (code) => {
+      const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
+      done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null, pid: 0 });
+    });
+  });
+}
 const recordsDir = () => join(home, "budget", "recovery");
 const ops = (rail: string, chain: string) => { const d = join(home, "budget", "ops", `${rail}-${chain}`); return existsSync(d) ? readdirSync(d) : []; };
 const all = (o: Out) => `${o.stdout}\n${o.stderr}`;
@@ -327,6 +344,26 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(again.result.recovery.switched).toBe(true);
     expect(gate.hits).toHaveLength(hitsBefore);
     expect(arcSeller.settled).toHaveLength(1);
+    expect(site.adviceCalls).toHaveLength(1);
+  }, 240_000);
+
+  it("the original op is frozen at the rail: a direct rail script, run by hand, never pays it after the order moved", async () => {
+    const { r, site } = await recovered((g) => [arcCandidate(g)]);
+    expect(r.code, all(r)).toBe(0);
+    const original = await startSeller(base, 84532);
+    cleanups.push(() => original.close());
+    const journal = JSON.parse(readFileSync(join(home, "budget", "ops", "evm-base-sepolia", "rec-1.json"), "utf8"));
+    expect(journal.supersededBy).toMatchObject({ op: "rec-1-r2", rail: "evm", chain: "arc-testnet" });
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", original.url, "--max", "0.05", "--op", "rec-1"]);
+    expect(hand.result, all(hand)).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(hand.result.reason).toMatch(/superseded by auto recovery/);
+    expect(hand.code).toBe(3);
+    expect(original.creds).toEqual([]);
+    expect(base.sentRaw).toEqual([]);
+    // the dispatcher says the same
+    const again = await buy(original.url, { op: "rec-1" });
+    expect(again.result).toMatchObject({ op: "rec-1-r2", state: "settled" });
+    expect(original.creds).toEqual([]);
     expect(site.adviceCalls).toHaveLength(1);
   }, 240_000);
 

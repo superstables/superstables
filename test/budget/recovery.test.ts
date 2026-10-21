@@ -1,7 +1,7 @@
 // Auto recovery for budget buys (budget/recovery.mjs): the bounded retry of the seller's terms, and the rules the client
 // enforces on the site's advice whatever the site says. Pure functions and the order's logic against stand-ins for the site,
 // the rails and the journal folder: no network, no wallet, no chain.
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -404,6 +404,7 @@ function world(over: Record<string, any> = {}) {
       if (over.reportThrows) throw new Error("report site down");
       return { status: 202, body: {} };
     },
+    freezeOriginal: (...a: any[]) => { (globalThis as any).__freezes?.push(a); return over.freeze ?? { ok: true }; },
     attempt: async (flags: any) => {
       // INVARIANT 7: the switch is on disk before the new seller is contacted
       const rec = readRecordFile("evm", "base-sepolia", op);
@@ -704,3 +705,63 @@ describe("recovery of one order", () => {
 
 // keep vitest from complaining about an unused import in older runners
 void beforeAll;
+
+// ---- invariant 1 at the rail boundary --------------------------------------------------------------------------------------
+
+describe("the original op is frozen at the rail boundary before a candidate is contacted", () => {
+  const opsDir = (rail: string, chain: string) => join(home, "budget", "ops", `${rail}-${chain}`);
+  const by = (op: string) => ({ order_ref: "ord-1", op: `${op}-r2`, rail: "evm", chain: "arc-testnet", attempt_no: 2 });
+  const evmJournal = (op: string, extra: Record<string, unknown> = {}) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, createdAt: "2026-10-21T00:00:00Z", notes: [], signed: false, ...extra });
+  const put = (rail: string, chain: string, op: string, body: unknown) => {
+    const dir = opsDir(rail, chain);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, `${op}.json`), JSON.stringify(body), { mode: 0o600 });
+  };
+  const read = (rail: string, chain: string, op: string) => JSON.parse(readFileSync(join(opsDir(rail, chain), `${op}.json`), "utf8"));
+
+  it("marks an unsigned evm journal, keeping everything else, and is idempotent for the same order", () => {
+    put("evm", "base-sepolia", "fz-1", evmJournal("fz-1"));
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-1" }, by("fz-1"))).toEqual({ ok: true });
+    expect(read("evm", "base-sepolia", "fz-1")).toMatchObject({ op: "fz-1", state: "refused_precheck", supersededBy: by("fz-1") });
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-1" }, by("fz-1")).ok).toBe(true);
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-1" }, { ...by("fz-1"), order_ref: "ord-2" })).toEqual({ ok: false, why: "other_order" });
+  });
+  it("creates the mark for a solana refusal that left no journal, and never for evm", () => {
+    expect(R.freezeOriginal({ rail: "solana", chain: "devnet", op: "fz-sol" }, by("fz-sol")).ok).toBe(true);
+    expect(read("solana", "devnet", "fz-sol")).toMatchObject({ state: "refused_precheck", supersededBy: { order_ref: "ord-1" } });
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-none" }, by("fz-none"))).toEqual({ ok: false, why: "no_journal" });
+  });
+  it("refuses a journal that may have signed, or cannot be read: the order does not move", () => {
+    put("evm", "base-sepolia", "fz-signed", evmJournal("fz-signed", { signed: true }));
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-signed" }, by("x"))).toEqual({ ok: false, why: "may_have_signed" });
+    put("evm", "base-sepolia", "fz-state", evmJournal("fz-state", { state: "unknown" }));
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-state" }, by("x")).ok).toBe(false);
+    const dir = opsDir("evm", "base-sepolia");
+    writeFileSync(join(dir, "fz-torn.json"), "{ torn");
+    expect(R.freezeOriginal({ rail: "evm", chain: "base-sepolia", op: "fz-torn" }, by("x"))).toEqual({ ok: false, why: "unreadable" });
+  });
+  it("concurrency: a rail that holds the op's record lock keeps the freeze out, so the candidate is never contacted", async () => {
+    const { lockRecord } = await import(new URL("../../budget/op-lock.mjs", import.meta.url).href);
+    put("evm", "base-sepolia", "fz-busy", evmJournal("fz-busy"));
+    const held = lockRecord(opsDir("evm", "base-sepolia"), "fz-busy");
+    expect(held.ok).toBe(true);
+    try {
+      const w = world({ op: "fz-busy", deps: { freezeOriginal: R.freezeOriginal } });
+      const out = await R.recoverOrder(w.deps);
+      expect(count(w.calls, "attempt")).toBe(0);
+      expect(out.kind).toBe("none");
+      expect(read("evm", "base-sepolia", "fz-busy").supersededBy).toBeUndefined();
+    } finally { held.release(); }
+  });
+  it("a freeze that fails ends the order unpaid and uncontacted; a freeze that works comes first", async () => {
+    const blocked = world({ freeze: { ok: false, why: "busy" } });
+    expect((await R.recoverOrder(blocked.deps)).kind).toBe("none");
+    expect(count(blocked.calls, "attempt")).toBe(0);
+    (globalThis as any).__freezes = [];
+    const ok = world();
+    await R.recoverOrder(ok.deps);
+    expect((globalThis as any).__freezes).toHaveLength(1);
+    expect((globalThis as any).__freezes[0][1]).toMatchObject({ op: `${ok.op}-r2`, rail: "evm", chain: "arc-testnet" });
+    (globalThis as any).__freezes = undefined;
+  });
+});

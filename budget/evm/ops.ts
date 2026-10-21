@@ -188,6 +188,7 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
   };
   if (j.agentFeeWei) line.agentFeeWei = j.agentFeeWei;
   if (j.reason) line.reason = j.reason;
+  if ((j as any).supersededBy) line.supersededBy = (j as any).supersededBy;
   if (extra.termsFailure) line.termsFailure = extra.termsFailure;
   return `RESULT ${JSON.stringify(line)}`;
 }
