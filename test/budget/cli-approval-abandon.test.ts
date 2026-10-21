@@ -4,7 +4,7 @@
 // scripts against a fake superstables.com and a fake Base Sepolia RPC. No network, no real key.
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -427,6 +427,39 @@ describe("wait --abandon on a background owner approval", () => {
       expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
       expect(existsSync(lockPath())).toBe(true);
     } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } rmSync(join(approvals(), `${id}.json.lock`), { force: true }); }
+  }, 120_000);
+
+  it.skipIf(process.getuid?.() === 0)("a record that cannot be locked for a file system reason: nothing is stored, final false, and it is not called busy", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const before = readFileSync(join(approvals(), `${id}.json`), "utf8");
+    chmodSync(approvals(), 0o500);
+    try {
+      const run = await budget(abandonArgs(id), {}, typed(id));
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ state: "unknown", final: false, id });
+      expect(run.result.reason).toMatch(/could not be locked/);
+      expect(run.result.reason).not.toMatch(/busy/);
+    } finally { chmodSync(approvals(), 0o700); }
+    expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
+  }, 120_000);
+
+  it("an error after the give-up was recorded (a disk fault on the directory sync): the stored give-up is what it answers", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/fail-sync-after-rename.mjs")).href}`;
+    const gone = await budget(abandonArgs(id), { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), FAIL_SYNC_AFTER_RENAME: "1" }, typed(id));
+    expect(gone.code, gone.stderr).toBe(5);
+    expect(gone.stderr).toMatch(/EIO/);
+    // the record holds the give-up, and that is what was answered: not "nothing was ended"
+    expect(record(id)).toMatchObject({ abandoned: expect.any(Object), final: { code: 5 } });
+    expect(gone.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: record(id).final.result.abandonedAt });
+    expect(gone.result.reason ?? "").not.toMatch(/could not be locked|nothing was ended/);
+    // a chain lock file the fault left behind is stale: its approval has a result, so it holds nothing
+    const next = await budget(setupArgs());
+    expect(next.result?.reason ?? "").not.toMatch(/still waiting for the owner/);
   }, 120_000);
 
   it("the record disappears between the first read and the locked give-up: unknown, not failed, and no give-up stored", async () => {

@@ -49,7 +49,11 @@ async function hold(b, sandbox = false, core = false, approval = false) {
     if (p.exitCode !== null || Date.now() > until) throw new Error('holder startup failed: ' + stderr);
     await sleep(10);
   }
-  const info = JSON.parse(fs.readFileSync(join(b.home, 'ready.json'), 'utf8'));
+  // the holder writes ready.json in place: a read in the middle of that write sees part of it, so read it again
+  let info;
+  for (let tries = 0; !info; tries++) {
+    try { info = JSON.parse(fs.readFileSync(join(b.home, 'ready.json'), 'utf8')); } catch (err) { if (tries > 200) throw err; await sleep(25); }
+  }
   // The sandbox's local PID is not the signal target. Resolve it from the host, using its namespace and NSpid.
   let hostPid = p.pid;
   if (sandbox) {
@@ -122,6 +126,30 @@ try {
       assert.equal(result.acquired, false); assert.match(result.guidance, /outside the agent's sandbox/);
       assert.equal(fs.readFileSync(b.core, 'utf8'), originalLock); cases++;
     } finally { await stop(holder); }
+  }
+  if (!coreOnly) {
+    // The owner's give-up (budget wait --abandon) on an approval whose worker runs in a Codex sandbox: a worker that is gone is
+    // given up, and one that still runs is stopped or left alone, never given up while it runs.
+    const abandonCode = (id) => `const { abandonApproval, readApproval } = await import(${JSON.stringify(join(root, 'budget/approvals.mjs'))}); const out = await abandonApproval(${JSON.stringify(id)}, (before) => ({ code: 5, record: { abandoned: { at: 'test' } }, result: { ok: false, state: 'unknown', final: true, id: before.id } }), { attempts: 1 }); console.log(JSON.stringify({ kind: out.kind, final: readApproval(${JSON.stringify(id)})?.final ?? null }));`;
+    const running = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    for (const reader of ['host', 'another sandbox']) {
+      const b = box(), holder = await hold(b, true, true, true);
+      try {
+        const id = fs.readFileSync(join(b.home, 'approval-id'), 'utf8');
+        const out = run(b, abandonCode(id), reader !== 'host');
+        await sleep(300);
+        if (reader === 'host' && out.kind === 'abandoned') assert.equal(running(holder.hostPid), false, 'the live sandboxed worker was given up while it runs');
+        else { assert.equal(out.kind, 'running', `give-up from ${reader}: ${JSON.stringify(out)}`); assert.equal(out.final, null); assert.equal(running(holder.hostPid), true); }
+        cases++;
+      } finally { await stop(holder); }
+    }
+    {
+      const b = box(), holder = await hold(b, true, true, true);
+      const id = fs.readFileSync(join(b.home, 'approval-id'), 'utf8');
+      await stop(holder);
+      const out = run(b, abandonCode(id), false);
+      assert.equal(out.kind, 'abandoned', 'a dead sandboxed worker is provably dead from the host'); assert.equal(out.final?.code, 5); cases++;
+    }
   }
   if (!coreOnly && !approvalOnly) {
     const b = box();
