@@ -1645,6 +1645,10 @@ async function buyRecovered({ f, ctx, record }) {
   }
   const again = await recoveryFor(f, ctx, null);
   if (again?.kind === "result") return emit(again.code, again.fields);
+  if (again?.freezeFailed) {
+    const reason = `auto recovery could not take over operation ${f.op} (${again.freezeFailed}): another command may be paying it, so its outcome is unknown`;
+    return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `wait for any buy of this op to end, then superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason });
+  }
   const reason = "auto recovery already handled this order and nothing was paid on it. Buy again with a new --op";
   log(`superstables budget: ${reason}.`);
   return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
@@ -1656,7 +1660,12 @@ async function buy({ f, ctx }) {
   if (f.op && recoverable(f)) {
     const record = readRecord(f.rail, f.chain, f.op);
     const marked = readJournal(f)?.supersededBy;
-    if (record || marked) return buyRecovered({ f, ctx, record });
+    // The op belongs to the order only once its own journal carries the mark (the rail boundary's truth), or while a journaled
+    // switch is waiting to be carried on. A record that never completed the freeze owns nothing: the op is answered, and bought,
+    // as any other, from its own journal.
+    const last = record && !record.unreadable ? record.attempts[record.attempts.length - 1] : null;
+    const waiting = Boolean(last) && last.state === "journaled" && !record.closed;
+    if (marked || waiting) return buyRecovered({ f, ctx, record });
   }
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
@@ -1719,6 +1728,12 @@ async function buy({ f, ctx }) {
   if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
     const moved = await recoveryFor(f, ctx, rr);
     if (moved?.kind === "result") return emit(moved.code, moved.fields);
+    if (moved?.freezeFailed) {
+      // the original could not be taken over: it may be in use or may have signed. Its own journal decides, later; now it is unknown.
+      const reason = `auto recovery could not take over operation ${f.op} (${moved.freezeFailed}): another command may be paying it, so its outcome is unknown`;
+      log(`superstables budget: ${reason}. Not paying again.`);
+      return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `wait for any buy of this op to end, then superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op while its outcome is unknown)`, reason });
+    }
     if (moved?.recovery) n.fields.recovery = moved.recovery;
   }
   emit(n.code, n.fields);

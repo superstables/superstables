@@ -949,7 +949,10 @@ describe("the original op is frozen at the rail boundary before a candidate is c
   });
   it("a freeze that fails ends the order unpaid and uncontacted; a freeze that works comes first", async () => {
     const blocked = world({ freeze: { ok: false, why: "busy" } });
-    expect((await R.recoverOrder(blocked.deps)).kind).toBe("none");
+    const lost = await R.recoverOrder(blocked.deps);
+    expect(lost.kind).toBe("none");
+    expect(lost.freezeFailed).toBe("busy");
+    expect(readRecordFile("evm", "base-sepolia", blocked.op).attempts[0]).toMatchObject({ freeze: "failed:busy", state: "done" });
     expect(count(blocked.calls, "attempt")).toBe(0);
     (globalThis as any).__freezes = [];
     const ok = world();

@@ -552,6 +552,7 @@ export async function recoverOrder(deps) {
     }
     const done = await runAttempt(deps, record, attempt);
     if (done.kind === "result") return done;
+    if (done.freezeFailed) return { kind: "none", freezeFailed: done.freezeFailed, recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped }) };
     if (done.blocked) break;
     previous = done;
   }
@@ -583,11 +584,12 @@ async function runAttempt(deps, record, attempt) {
   // INVARIANT 1: the original op is frozen at the rail boundary before anything of this attempt is contacted
   const frozen = deps.freezeOriginal ? deps.freezeOriginal({ rail: f.rail, chain: f.chain, op: f.op }, { order_ref: record.order_ref, op: attempt.op, rail: attempt.rail, chain: attempt.chain, attempt_no: attempt.attempt_no }) : { ok: false, why: "no_freeze" };
   if (!frozen.ok) {
-    attempt.state = "done"; attempt.outcome = "failed_before_payment"; attempt.note = `not contacted: the original could not be frozen (${frozen.why})`;
-    record.closed = "freeze_failed";
-    try { writeRecord(record); } catch { /* nothing was contacted either way */ }
-    return { kind: "continue", unsigned: true, blocked: true };
+    // The freeze did not complete, so this record does NOT own the op: the original's own journal (under its lock) is the truth.
+    attempt.freeze = `failed:${frozen.why}`;
+    const out = closeUncontacted(record, attempt, "freeze_failed");
+    return { ...out, freezeFailed: frozen.why };
   }
+  attempt.freeze = "done";
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined };
   const got = await deps.attempt(flags);
@@ -663,6 +665,7 @@ async function resume(deps, record) {
   }
   const done = await runAttempt(deps, record, last);
   if (done.kind === "result") return done;
+  if (done.freezeFailed) return { kind: "none", freezeFailed: done.freezeFailed, recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
   if (!record.closed) closeRecord(record, "no_attempt_paid");
   return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
 }

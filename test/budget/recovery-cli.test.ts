@@ -43,7 +43,7 @@ afterEach(async () => {
 // ---- the stand-ins -------------------------------------------------------------------------------------------------
 
 type SiteCall = { path: string; body: any; headers: Record<string, string | string[] | undefined>; raw: string; signed: boolean };
-interface Site { url: string; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown }; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
+interface Site { url: string; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
 
 /** A fake superstables.com: the feature list, and the two recovery routes, which check the agent's signature like the real one. */
 async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}): Promise<Site & { close(): Promise<void> }> {
@@ -62,7 +62,7 @@ async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}):
       try { body = JSON.parse(raw); } catch { /* */ }
       const call: SiteCall = { path: req.url, body, headers: req.headers, raw, signed: await signatureHolds(site.url, req, raw) };
       site.calls.push(call);
-      if (req.url.endsWith("/advice")) { site.adviceCalls.push(call); const a = site.advice(body); return json(res, a.status, a.body); }
+      if (req.url.endsWith("/advice")) { site.adviceCalls.push(call); const a = await site.advice(body); return json(res, a.status, a.body); }
       site.reportCalls.push(call);
       return json(res, 202, { ok: true });
     }
@@ -190,6 +190,13 @@ function direct(script: string, args: string[]): Promise<Out> {
       done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null, pid: 0 });
     });
   });
+}
+/** A process that holds the original op's record lock, the way a rail command working on it does, until released. */
+async function holdRecordLock(rail: string, chain: string, op: string) {
+  const code = `import(${JSON.stringify(new URL("../../budget/op-lock.mjs", import.meta.url).href)}).then(async (m) => { const p = await import(${JSON.stringify(new URL("../../budget/paths.mjs", import.meta.url).href)}); const l = m.lockRecord(p.opsDir(${JSON.stringify(rail)}, ${JSON.stringify(chain)}), ${JSON.stringify(op)}); console.log(l.ok ? "locked" : "busy"); process.stdin.resume(); process.stdin.on("end", () => { l.release(); process.exit(0); }); });`;
+  const child = spawn(process.execPath, ["-e", code], { env: { ...process.env, SUPERSTABLES_HOME: home }, stdio: ["pipe", "pipe", "inherit"] });
+  await new Promise<void>((ok, bad) => { child.stdout.once("data", (d) => (String(d).startsWith("locked") ? ok() : bad(new Error("lock busy")))); child.once("error", bad); });
+  return { release: () => new Promise<void>((done) => { child.once("close", () => done()); child.stdin.end(); }) };
 }
 const recordsDir = () => join(home, "budget", "recovery");
 const ops = (rail: string, chain: string) => { const d = join(home, "budget", "ops", `${rail}-${chain}`); return existsSync(d) ? readdirSync(d) : []; };
@@ -516,6 +523,54 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(r.result.recovery).toBeUndefined();
     expect(arcSeller.creds).toEqual([]);
   }, 120_000);
+});
+
+describe("a freeze that loses its race to the original's own rail owns nothing", () => {
+  async function raceSetup() {
+    const arcSeller = await startSeller(arc, 5042002);
+    cleanups.push(() => arcSeller.close());
+    const gate = await startGate({ base: "503", arcSeller });
+    let lock: Awaited<ReturnType<typeof holdRecordLock>> | undefined;
+    // the lock is taken while the advice is on its way: after the three failed reads, before the freeze
+    const site = await startSite({ advice: async () => { lock = await holdRecordLock("evm", "base-sepolia", "rec-race"); return adviceFor([arcCandidate(gate.url)])(null); } });
+    setUpEvm(site.url);
+    const first = await buy(`${gate.url}/spot`, { op: "rec-race" });
+    return { arcSeller, gate, site, first, lock: lock! };
+  }
+
+  it("the original is unknown while another command holds it, the candidate is never contacted, and a payment of the original is kept", async () => {
+    const { arcSeller, gate, first, lock } = await raceSetup();
+    expect(first.code, all(first)).toBe(5);
+    expect(first.result).toMatchObject({ state: "unknown", paid: null, op: "rec-race", rail: "evm", chain: "base-sepolia" });
+    expect(first.result.recovery).toBeUndefined();
+    expect(gate.hits.filter((h) => h.path.startsWith("/arc"))).toEqual([]);
+    expect(arcSeller.creds).toEqual([]);
+    // the other command finishes: the original settles on Base, once
+    await lock.release();
+    const working = await startSeller(base, 84532);
+    cleanups.push(() => working.close());
+    const direct1 = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", working.url, "--max", "0.05", "--op", "rec-race"]);
+    expect(direct1.result, all(direct1)).toMatchObject({ state: "settled", paid: true });
+    // the dispatcher now keeps that evidence: never "nothing paid, buy again with a new --op"
+    const again = await buy(working.url, { op: "rec-race" });
+    expect(again.result).toMatchObject({ state: "refused_precheck", paid: true, reason: "op_already_settled" });
+    expect(again.result.tx.settle).toBe(direct1.result.tx.settle);
+    expect(working.settled).toHaveLength(1);
+    expect(arcSeller.settled).toEqual([]);
+  }, 300_000);
+
+  it("an unsigned original whose candidate was never contacted stays payable on the same op", async () => {
+    const { arcSeller, first, lock } = await raceSetup();
+    expect(first.code, all(first)).toBe(5);
+    await lock.release();
+    const working = await startSeller(base, 84532);
+    cleanups.push(() => working.close());
+    const again = await buy(working.url, { op: "rec-race" });
+    expect(again.code, all(again)).toBe(0);
+    expect(again.result).toMatchObject({ state: "settled", paid: true, op: "rec-race", chain: "base-sepolia" });
+    expect(working.settled).toHaveLength(1);
+    expect(arcSeller.creds).toEqual([]);
+  }, 300_000);
 });
 
 describe("invariant 1: nothing is switched once anything was signed", () => {
