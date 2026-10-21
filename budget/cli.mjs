@@ -45,7 +45,7 @@ import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.m
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
-import { ONCE_CHAINS, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, RECORD_GONE, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -742,17 +742,27 @@ function emit(code, fields) {
   process.exit(code);
 }
 
-/** The approval record `wait` was asked about, from --id alone (parse may not have read the command's flags yet): null when --id names none here. */
+/** What `wait` first saw of the record it was asked about: undefined until it has looked, then a record, a stand-in for a file it cannot read, or null (none). */
+let waitSeen;
+
+/**
+ * The approval record `wait` was asked about, from --id alone (parse may not have read the command's flags yet): null when --id names none here.
+ * It looks once: every later answer rests on that first observation, so a file that goes (or changes) after it was seen cannot turn an
+ * approval that exists into none.
+ */
 function waitRecord() {
+  if (waitSeen !== undefined) return waitSeen;
   const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i++) {
+  let seen = null;
+  for (let i = 0; i < argv.length && seen === null; i++) {
     const id = argv[i] === "--id" ? argv[i + 1] : argv[i].startsWith("--id=") ? argv[i].slice(5) : undefined;
     // a record file that is there but cannot be decoded still names an approval: its existence is what the answer rests on
     const file = id === undefined ? { kind: "none" } : readApprovalFile(id);
-    if (file.kind === "record") return file.record;
-    if (file.kind === "undecodable" || file.kind === "damaged") return { id };
+    if (file.kind === "record") seen = file.record;
+    else if (file.kind === "undecodable" || file.kind === "damaged") seen = { id };
   }
-  return null;
+  waitSeen = seen;
+  return seen;
 }
 
 function badInput(ctx, reason) {
@@ -2396,6 +2406,11 @@ function waitUnknown(id, record, reason, next) {
 async function wait({ f }) {
   // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
   const file = readApprovalFile(f.id);
+  // this read is what the refusals below (badInput) answer from: a later read cannot turn it into "none"
+  waitSeen ??= file.kind === "none" ? null : file.record ?? { id: f.id };
+  if (file.kind === "none" && waitSeen) {
+    return waitUnknown(f.id, waitSeen, `the approval's record disappeared from ${approvalsDir()} after this command saw it; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
+  }
   if (file.kind === "undecodable" || file.kind === "damaged") {
     return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
   }
@@ -2425,7 +2440,8 @@ async function wait({ f }) {
     if (once?.command !== "buy-once") return badInput({ command: "wait" }, `--abandon is for a buy-once purchase or a background owner approval; ${f.id} is ${once ? `a ${once.command}${once.foreground ? " running in a terminal: stop it there" : ""}` : "not one on this machine"}`);
     // a purchase that already ended is answered as every wait answers it: its stored answer, checked against the evidence
     // (abandonOnce reads it through settleOnce, which never repeats a stored answer the evidence no longer supports)
-    const s = await abandonOnce(once);
+    let s;
+    try { s = await abandonOnce(once, { strict: true }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(once); throw err; }
     if (!s.result.abandonedAt) return emit(s.code, s.result);
     log(`superstables budget: ${f.id} (buy-once) given up without a final answer from the site. Whether a payment left is unknown: check the wallet's activity and the account on the site. buy-once can start a new purchase.`);
     return emit(5, s.result);
@@ -2517,8 +2533,14 @@ async function buyOnce({ f, ctx }) {
   emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: stillWaiting(rec.id), reason: s.words ?? s.unreachable });
 }
 
+/** wait's answer when a buy-once record goes (or stops being a usable record) after wait read it: the payment outcome is unknown. */
+function purchaseGone(rec) {
+  return waitUnknown(rec.id, rec, `the purchase's record disappeared from ${approvalsDir()} (or turned into a file that is not a record) while wait was reading it; this command changed nothing, and whether a payment left is unknown`, `${CHECK_APPROVAL(`purchase ${rec.id}`)}; do not start another purchase for this request`);
+}
+
 async function waitBuyOnce(rec, f) {
-  const s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000);
+  let s;
+  try { s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000, { strict: true }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(rec); throw err; }
   // final, or an outcome that is not established yet (unknown): the answer as it is, never "waiting for the owner"
   if (s.final || s.result) return emit(s.code, s.result);
   if (rec.cancelUnconfirmed) {
