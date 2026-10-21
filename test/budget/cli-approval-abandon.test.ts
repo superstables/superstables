@@ -496,7 +496,7 @@ describe("wait --abandon on a background owner approval", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   }, 120_000);
 
-  it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
+  it("a command that only claims to be the approval's worker (its environment variables set by hand) is answered unknown and ends nothing", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
     await endEveryProcess(id);
@@ -512,8 +512,9 @@ describe("wait --abandon on a background owner approval", () => {
     for (const env of claims) {
       for (const terminal of [undefined, typed(id)]) {
         const run = await budget(abandonArgs(id), env, terminal);
-        expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe(3);
-        expect(run.result).toMatchObject({ state: "refused_precheck", reason: "owner_terminal_required" });
+        expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.result.reason).toMatch(/whether the approval sent anything is unknown/);
         expect(readFileSync(path, "utf8")).toBe(before);
         expect(existsSync(lockPath())).toBe(true);
       }
@@ -531,7 +532,7 @@ describe("wait --abandon on a background owner approval", () => {
     const before = readFileSync(path, "utf8");
     for (const [env, terminal] of [[{}, undefined], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, undefined], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, typed(id)], [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, "wrong\n"]] as const) {
       const run = await budget(abandonArgs(id), { ...env }, terminal);
-      expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe(3);
+      expect(run.code, `${JSON.stringify(env)} ${terminal}: ${run.stderr}`).toBe("SUPERSTABLES_BUDGET_APPROVAL_ID" in env ? 5 : 3);
       expect(readFileSync(path, "utf8")).toBe(before);
     }
   }, 120_000);

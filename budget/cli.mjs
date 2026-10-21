@@ -2328,7 +2328,13 @@ async function abandonOwnerApproval(record, f) {
     writeResult({ ok: false, ...base, state: "refused_precheck", final: false, reason, next });
     process.exit(3);
   };
-  if (!process.stdin.isTTY || process.env[WORKER_ENV]) {
+  // A command that carries a worker's variable (set by hand) is refused as a command, not as an approval: the refusal says nothing about what the
+  // approval did, so it is unknown (exit 5, not final) and written without emit, which would store a result for the approval the variable names.
+  if (process.env[WORKER_ENV]) {
+    writeResult({ ok: false, ...base, command: "wait", state: "unknown", final: false, reason: `a worker's variable is set: only the owner gives up an approval, in their own terminal, so nothing was changed; whether the approval sent anything is unknown`, next: `run superstables budget wait --id ${id} --abandon in your own terminal without ${WORKER_ENV} set, or superstables budget wait --id ${id} --shown; the approval stays open` });
+    process.exit(5);
+  }
+  if (!process.stdin.isTTY) {
     return refuse("owner_terminal_required", `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
   }
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
