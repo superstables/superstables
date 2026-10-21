@@ -210,11 +210,11 @@ const policy = (over: Record<string, unknown> = {}) => ({
   version: 7, enabled: true, rail: true, service: true, preventive: false, max_offers: 3, allowed_chains: ["base-sepolia", "arc-testnet", "devnet"], margin_bps: 2000, sharing: [], ...over,
 });
 const advice = (over: Record<string, unknown> = {}, candidates = [goodCandidate()]) => ({
-  version: 1, advice_id: "adv-1", expires_at: new Date(NOW + 100_000).toISOString(), policy: policy(), candidates, refusals: [], ...over,
+  version: 1, advice_id: "adv-1", original: { offer_id: "orig", capability: "spot-price", listed_price_atomic: "10000", origin: ORIGIN }, expires_at: new Date(NOW + 100_000).toISOString(), policy: policy(), candidates, refusals: [], ...over,
 });
 const ctx = (over: Record<string, unknown> = {}) => ({
   now: NOW, receivedAt: NOW,
-  original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, amountAtomic: 10_000n, maxAtomic: 50_000n },
+  original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 50_000n },
   funded: new Map<string, bigint>([["base-sepolia", 500_000n], ["arc-testnet", 500_000n], ["devnet", 500_000n]]),
   tried: [{ url: `${ORIGIN}/base`, chain: "base-sepolia" }], alreadyOffered: 1, hasBody: false, ...over,
 });
@@ -248,16 +248,26 @@ describe("the site's advice, checked by the client", () => {
       expect(why(advice({ policy: policy({ margin_bps: 0 }) }, [goodCandidate({ listed_price_atomic: "10001" })]))).toEqual(["over_margin"]);
     });
     it("skips a price over the --max the caller gave, whatever the margin", () => {
-      const c = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, amountAtomic: 40_000n, maxAtomic: 45_000n } });
-      expect(why(advice({}, [goodCandidate({ listed_price_atomic: "46000" })]), c)).toEqual(["over_max"]);
+      const c = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 45_000n } });
+      const a = (price: string) => advice({ original: { ...advice().original, listed_price_atomic: "40000" }, policy: policy({ margin_bps: 5000 }) }, [goodCandidate({ listed_price_atomic: price })]);
+      expect(why(a("46000"), c)).toEqual(["over_max"]);
+      expect(check(a("45000"), c).valid).toHaveLength(1);
     });
     it("skips a price over the remaining allowance of that chain", () => {
       expect(why(advice(), ctx({ funded: new Map([["arc-testnet", 9_999n]]) }))).toEqual(["over_allowance"]);
     });
-    it("when the original price is unknown the caller's --max stands for it, and still caps every price", () => {
-      const c = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, amountAtomic: null, maxAtomic: 50_000n } });
-      expect(check(advice({}, [goodCandidate({ listed_price_atomic: "50000" })]), c).valid).toHaveLength(1);
-      expect(why(advice({ policy: policy({ margin_bps: 5000 }) }, [goodCandidate({ listed_price_atomic: "50001" })]), c)).toEqual(["over_max"]);
+    it("the margin base is the original's listed price, never the --max: without one there is no priced recovery", () => {
+      for (const listed of [null, undefined]) {
+        const a = advice({ original: { offer_id: "orig", capability: "spot-price", origin: ORIGIN, listed_price_atomic: listed } }, [goodCandidate({ listed_price_atomic: "1" })]);
+        expect(check(a)).toEqual({ ok: false, problem: "no_original_price" });
+      }
+      // --max 1 USDC and a 0.9 candidate over a 0.01 original: the margin, not the --max, decides
+      const big = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 1_000_000n } });
+      expect(why(advice({ policy: policy({ margin_bps: 0 }) }, [goodCandidate({ listed_price_atomic: "900000" })]), big)).toEqual(["over_margin"]);
+      expect(check(advice({}, [goodCandidate({ listed_price_atomic: "12001" })]), big).skipped).toEqual([{ offer_id: "o1", reason: "over_margin" }]);
+      for (const bad of ["0", "ten", 5]) expect(check(advice({ original: { ...advice().original, listed_price_atomic: bad } })).problem).toBe("unparsable");
+      expect(check(advice({ original: { ...advice().original, origin: "http://evil.example" } })).problem).toBe("unparsable");
+      expect(check(advice({ original: undefined })).problem).toBe("unparsable");
     });
     it("skips a different pricing family: the site's word, the client's table, an unknown chain, a tempo chain", () => {
       expect(why(advice({}, [goodCandidate({ pricing_family: "test:USDG:6" })]))).toEqual(["pricing_family"]);
@@ -541,14 +551,14 @@ describe("recovery of one order", () => {
   });
 
   describe("invariant 7: every switch is journaled before the new seller is contacted, and reported after", () => {
-    it("has order_ref, attempt_no, offer and why on disk when the attempt starts, and the ceiling it is run with (no higher than the caller's --max)", async () => {
+    it("has order_ref, attempt_no, offer and why on disk when the attempt starts, and the ceiling it is run with: the margin on the original's listed price", async () => {
       const w = world();
       const out = await R.recoverOrder(w.deps);
       const attempt = w.calls.find((c) => c.kind === "attempt")!;
       expect(attempt.journaled).toEqual([{ attempt_no: 2, offer_id: "o1", why: "same seller on Arc", op: `${w.op}-r2`, state: "journaled" }]);
       expect(attempt.order_ref).toMatch(/^[0-9a-f-]{36}$/);
       // the ordinary buy runs with the candidate's own chain, url and a --max no higher than the margin allows
-      expect(attempt.flags).toMatchObject({ rail: "evm", chain: "arc-testnet", url: `${ORIGIN}/arc`, max: "0.05", op: `${w.op}-r2` });
+      expect(attempt.flags).toMatchObject({ rail: "evm", chain: "arc-testnet", url: `${ORIGIN}/arc`, max: "0.012", op: `${w.op}-r2` });
       expect(attempt.flags.method).toBeUndefined();
       expect(attempt.flags.body).toBeUndefined();
       expect(out.fields.state).toBe("settled");

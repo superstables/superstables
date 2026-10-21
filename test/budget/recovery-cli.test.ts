@@ -163,6 +163,7 @@ const adviceFor = (candidates: unknown[], policy: Record<string, unknown> = {}, 
   status: 200,
   body: {
     version: 1, advice_id: "adv-e2e", expires_at: new Date(Date.now() + 100_000).toISOString(), refusals: [],
+    original: { offer_id: "orig", capability: "spot-price", listed_price_atomic: "10000" },
     policy: { version: 3, enabled: true, rail: true, service: true, preventive: false, max_offers: 3, allowed_chains: ["base-sepolia", "arc-testnet", "devnet"], margin_bps: 2000, sharing: [], ...policy },
     candidates, ...over,
   },

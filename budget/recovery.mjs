@@ -259,9 +259,8 @@ function policyOf(p) {
 /**
  * Checks the site's answer against every rule the client enforces on its own (invariants 2 to 6). `ctx`:
  *   now                ms; receivedAt  ms when the answer arrived
- *   original           { rail, chain, url, amountAtomic, maxAtomic }  amountAtomic: the original price when the client knows it,
- *                      else null (then the caller's --max stands for it: the margin cannot shrink the ceiling below what the
- *                      caller already allowed, and the --max still caps every price)
+ *   original           { rail, chain, url, maxAtomic }  maxAtomic: the --max the caller gave, a ceiling and never the original price (the
+ *                      margin base is advice.original.listed_price_atomic; without it there is no priced recovery)
  *   funded             Map "<chain key>" -> remaining allowance in atomic units, from this client's own chain reads (live only)
  *   tried              [{ url, chain }] already tried in this order, the original first
  *   alreadyOffered     offers already made in this order, the original included (invariant 5)
@@ -293,7 +292,14 @@ function validate(advice, ctx) {
   const original = ctx.original;
   const originFamily = recoveryChain(original.rail, original.chain)?.family ?? null;
   const originalUrl = new URL(original.url);
-  const known = original.amountAtomic ?? original.maxAtomic;
+  // INVARIANT 3: the margin applies to the original's listed (curated) price, which the site names in `original`. The caller's
+  // --max is a ceiling, never the original price: with no listed price there is no priced recovery at all (fail closed).
+  const orig = advice.original;
+  if (!isObj(orig)) return { ok: false, problem: "unparsable" };
+  if (orig.origin !== undefined && orig.origin !== originalUrl.origin) return { ok: false, problem: "unparsable" };
+  if (orig.listed_price_atomic === null || orig.listed_price_atomic === undefined) return { ok: false, problem: "no_original_price" };
+  if (typeof orig.listed_price_atomic !== "string" || !/^\d{1,18}$/.test(orig.listed_price_atomic) || BigInt(orig.listed_price_atomic) === 0n) return { ok: false, problem: "unparsable" };
+  const known = BigInt(orig.listed_price_atomic);
   const marginCap = (known * BigInt(10_000 + policy.marginBps)) / 10_000n;
   const valid = [];
   const skipped = [];
@@ -456,15 +462,16 @@ export async function recoverOrder(deps) {
     tried: [{ url: f.url, chain: f.chain }],
     funded_chains: [...funded.keys()],
   };
-  // The original's terms could not be read, so its price and recipient are unknown: amount_atomic is the caller's --max (the
-  // most this order may cost) and pay_to is null, rather than a guess.
+  // The original's terms could not be read, so its price and recipient are unknown to this client: amount_atomic is the caller's
+  // --max, an UPPER BOUND on what this order may cost and never the margin base (the site's curated original.listed_price_atomic
+  // is), and pay_to is null, rather than a guess.
   const answer = await deps.siteCall(ADVICE_PATH, request);
   const receivedAt = now();
   // 403 (agent not linked, policy off) and 404 (feature off) and any other non-answer: exactly as today
   if (!answer || answer.status !== 200) return none;
   const checked = validateAdvice(answer.body, {
     now: receivedAt, receivedAt,
-    original: { rail: f.rail, chain: f.chain, url: f.url, amountAtomic: null, maxAtomic },
+    original: { rail: f.rail, chain: f.chain, url: f.url, maxAtomic },
     funded, tried: [{ url: f.url, chain: f.chain }], alreadyOffered: 1, hasBody,
   });
   if (!checked.ok) {
