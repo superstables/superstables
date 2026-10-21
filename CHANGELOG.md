@@ -11,6 +11,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
 - **Mistaken flags and damaged records:** `budget wait` now returns `unknown` (exit 5, not final) when it rejects a flag for an existing approval or cannot read its record. Follow the returned instructions before retrying.
+- **Records lost while waiting:** if an approval or single purchase record disappears or becomes unreadable during `budget wait`, it now returns `unknown` instead of failing or crashing. Check superstables.com and your wallet's activity before retrying. Do not start another purchase for that request.
 
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
