@@ -1,7 +1,9 @@
 // Test-only: an approval record's file disappears at a chosen moment, as if something removed it right after a command had read it.
 //   REMOVE_RECORD_AFTER_LOCK: the moment the record's lock is released (a command read it under the lock)
-//   REMOVE_RECORD_AFTER_READ: the moment the record file has been read for the first time (a command's first read)
-//   REWRITE_RECORD_AFTER_READ: the same moment, but the file is rewritten with the text of the file this variable names
+//   REMOVE_RECORD_AFTER_READ: the moment the record file has been read for the Nth time, N being the number this variable holds ("1": a
+//     command's first read)
+//   REWRITE_RECORD_AFTER_READ: the same moment, but the file is rewritten with the text of the file this variable names; the number of the
+//     read is in REWRITE_RECORD_AFTER_READ_N (1 when it is not set)
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 
@@ -17,11 +19,11 @@ if (process.env.REMOVE_RECORD_AFTER_LOCK) {
   };
 }
 if (process.env.REMOVE_RECORD_AFTER_READ || process.env.REWRITE_RECORD_AFTER_READ) {
-  let done = false;
+  const nth = Number(process.env.REWRITE_RECORD_AFTER_READ ? process.env.REWRITE_RECORD_AFTER_READ_N : process.env.REMOVE_RECORD_AFTER_READ) || 1;
+  let reads = 0;
   fs.readFileSync = function (path) {
     const out = read.apply(this, arguments);
-    if (!done && RECORD.test(String(path))) {
-      done = true;
+    if (RECORD.test(String(path)) && ++reads === nth) {
       try {
         if (process.env.REWRITE_RECORD_AFTER_READ) fs.writeFileSync(String(path), read.call(fs, process.env.REWRITE_RECORD_AFTER_READ, "utf8"));
         else unlink.call(fs, String(path));

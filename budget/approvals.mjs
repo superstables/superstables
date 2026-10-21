@@ -155,6 +155,9 @@ export function readApproval(id) {
   return file.record ?? file.value ?? null;
 }
 
+/** The code of the error a strict change throws when the record's file is gone, or is not a record `wait` can answer from, once the command has read it. */
+export const RECORD_GONE = "RECORD_GONE";
+
 /** The record of `id` for an answer: null for a file that is missing, undecodable or damaged (wait and waitFor read through this). */
 const readUsable = (id) => { const file = readApprovalFile(id); return file.kind === "record" ? file.record : null; };
 
@@ -170,8 +173,8 @@ export function saveApproval(record) {
  * Change a record under its lock, read, decided and written in one step: `fn` gets the record as stored now and returns
  * the patch (null: no change). A final record changes only by another final result, as with every other write.
  */
-export function updateApproval(id, fn) {
-  return update(id, fn);
+export function updateApproval(id, fn, { strict = false } = {}) {
+  return update(id, fn, { strict });
 }
 
 /**
@@ -180,14 +183,14 @@ export function updateApproval(id, fn) {
  * recordFinal otherwise. Returns the record, and
  * whether this call made it final.
  */
-export function recordFinalWith(id, decide) {
+export function recordFinalWith(id, decide, { strict = false } = {}) {
   let decided = null;
   const record = update(id, (before) => {
     if (before.final) return null;
     decided = decide(before);
     if (!decided) return null;
     return { ...(decided.record ?? {}), state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
-  });
+  }, { strict });
   if (record && decided) release(record.rail, record.chain, id);
   return { record, stored: Boolean(record && decided) };
 }
@@ -369,9 +372,13 @@ function writeApproval(id, record) {
  * never stored altered behind its back. The result must be the locked record (`id` unchanged), and it is written to that
  * record's file only.
  */
-function writeRecord(id, compute) {
+function writeRecord(id, compute, { strict = false } = {}) {
   return withRecordLock(id, () => {
-    const stored = readApproval(id);
+    // strict (wait's changes, after its first read): the record as stored under the lock must still be one wait can answer from; a file
+    // that went or turned bad since the command read it ends the change, with nothing written and no answer made of what is left
+    const file = strict ? readApprovalFile(id) : null;
+    if (file && file.kind !== "record") throw Object.assign(new Error(`the record of ${id} is gone or is not a record any more`), { code: RECORD_GONE });
+    const stored = file ? file.record : readApproval(id);
     const baseline = stored && stored.seen !== undefined ? structuredClone(stored.seen) : undefined;
     const next = compute(stored ? structuredClone(stored) : null);
     if (!next) return stored;
@@ -385,7 +392,7 @@ function writeRecord(id, compute) {
 }
 
 /** Change a record under its lock: `patch`, or a function of the record that returns the patch (null: no change). */
-function update(id, patch) {
+function update(id, patch, { strict = false } = {}) {
   if (!isApprovalId(id)) return null;
   return writeRecord(id, (record) => {
     if (!record) return null;
@@ -395,7 +402,7 @@ function update(id, patch) {
     // only grows): no write makes it not final again
     if (record.final && !p.final && Object.keys(p).some((k) => k !== "seen")) return null;
     return { ...record, ...p };
-  });
+  }, { strict });
 }
 
 /**
@@ -833,7 +840,7 @@ export function recordFinalAsRestart(id, generation, code, result) {
  * store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. Every final result is
  * recorded here, and only here.
  */
-export function recordFinal(id, code, result) {
+export function recordFinal(id, code, result, { strict = false } = {}) {
   // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
   // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
   let stored = false;
@@ -841,7 +848,7 @@ export function recordFinal(id, code, result) {
     if (before.final) return null;
     stored = true;
     return { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
-  });
+  }, { strict });
   if (record && stored) release(record.rail, record.chain, id);
   return record;
 }
