@@ -146,6 +146,8 @@ describe("wait --site that is not the site the approval was made on", () => {
     ["a --site with no scheme", (id) => ["wait", "--id", id, "--shown", "--site", "staging.superstables.com"]],
     ["a --timeout out of range", (id) => ["wait", "--id", id, "--shown", "--timeout", "999"]],
     ["a --timeout that is not a number", (id) => ["wait", "--id", id, "--shown", "--timeout", "soon"]],
+    ["--mainnet (the mainnet refusal is not a second way out)", (id) => ["wait", "--id", id, "--shown", "--mainnet"]],
+    ["--mainnet with --abandon", (id) => ["wait", "--id", id, "--abandon", "--mainnet"]],
     ["a --site with --abandon (path)", (id) => ["wait", "--id", id, "--abandon", "--site", `${MADE_ON}/approve`]],
     ["a --timeout out of range with --abandon", (id) => ["wait", "--id", id, "--abandon", "--timeout", "999"]],
   ];
@@ -197,7 +199,7 @@ describe("wait --site that is not the site the approval was made on", () => {
     const before = readFileSync(path, "utf8");
     const claims: Record<string, string>[] = [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, { SUPERSTABLES_BUDGET_APPROVAL_ID: id, SUPERSTABLES_BUDGET_RESUME: id, SUPERSTABLES_BUDGET_RESUME_GENERATION: "1" }];
     for (const env of claims) {
-      for (const args of [waitArgs(id, OTHER), ["wait", "--id", id, "--shown", "--timeout", "999"]]) {
+      for (const args of [waitArgs(id, OTHER), ["wait", "--id", id, "--shown", "--timeout", "999"], ["wait", "--id", id, "--shown", "--mainnet"]]) {
         const run = await budget(args, "x\n", env);
         expect(run.code, `${JSON.stringify(env)} ${args.join(" ")}: ${run.stderr}`).toBe(5);
         expect(run.result).toMatchObject({ state: "unknown", final: false, id });
@@ -213,6 +215,10 @@ describe("wait --site that is not the site the approval was made on", () => {
       expect(run.code, `${args.join(" ")}: ${run.stderr}`).toBe(2);
       expect(run.result).toMatchObject({ state: "failed" });
     }
+    // --mainnet with no record: the mainnet refusal, as before
+    const mainnet = await budget(["wait", "--id", gone, "--shown", "--mainnet"]);
+    expect(mainnet.code, mainnet.stderr).toBe(3);
+    expect(mainnet.result).toMatchObject({ state: "refused_precheck" });
     const plain = await budget(["wait", "--id", gone, "--shown"]);
     expect(plain.code).toBe(2);
     expect(plain.result.reason).toMatch(/no owner approval with id/);

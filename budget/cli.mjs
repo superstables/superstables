@@ -787,7 +787,9 @@ function parse(argv) {
     log(`superstables budget: this checkout has no dev packages (no node_modules/.bin/tsx) and no dist/budget build: run npm ci at ${REPO}`);
     emit(2, { command: cmd, state: "failed", next: `run npm ci at ${REPO} (it installs the dev packages and builds), then rerun`, reason: "a checkout without dev packages needs its dist/budget build" });
   }
-  if (rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  // (wait takes no --mainnet: for an approval that exists it is an unknown flag, which badInput answers unknown; with no such approval the
+  // mainnet refusal stands)
+  if (!(cmd === "wait" && waitRecord()) && rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
   // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
   if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
   // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
