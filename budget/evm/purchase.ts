@@ -25,6 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
+import { failureFact, readTerms, termsFailureOf } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -92,6 +93,38 @@ export function capChallengeBody(inner: typeof fetch): typeof fetch {
     // the body was decoded by fetch and may have been cut: these no longer describe it
     for (const h of ["content-length", "content-encoding", "transfer-encoding"]) headers.delete(h);
     return new Response(bytes, { status: 402, statusText: r.statusText, headers });
+  };
+}
+
+/** What the unpaid read of the seller's terms came to once the retries ended: set only when the last read failed. */
+export type TermsOutcome = { failure: { stage: string; detail: string; attempts_used: number } | null };
+
+/**
+ * Wraps `fetch` so that the UNPAID read of the seller's terms is tried at most 3 times (250 ms, then 1 s, with jitter, never
+ * before the seller's Retry-After up to 30 s; recovery.mjs readTerms) when it fails before any payment exists: no answer, a
+ * 5xx, a 429, or a 402 whose payment requirements cannot be read. A request that carries a payment is passed on as it is,
+ * once, whatever it answers: a payment is never retried here. The last answer is returned as it came (or its error thrown), so
+ * everything after behaves as it did before; `outcome.failure` says the read failed for good.
+ */
+export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number } = {}): typeof fetch {
+  return async (input: any, init?: any) => {
+    const request = new Request(input, init);
+    if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) { outcome.failure = null; return inner(request); }
+    let last: Response | undefined;
+    let thrown: unknown;
+    const read = await readTerms(async () => {
+      if (last) await last.body?.cancel().catch(() => {});
+      last = undefined; thrown = undefined;
+      let r: Response;
+      try { r = await inner(request.clone()); } catch (e: any) { thrown = e; return { failure: termsFailureOf({ error: String(e?.cause?.code ?? e?.message ?? e) }) }; }
+      last = r;
+      // the 402 answer was already cut to 64 KB by capChallengeBody; reading a copy leaves the answer itself whole
+      const bodyText = r.status === 402 ? await r.clone().text().catch(() => "") : "";
+      return { failure: termsFailureOf({ status: r.status, retryAfter: r.headers.get("retry-after"), paymentRequired: r.headers.get("payment-required"), bodyText }) };
+    }, opts);
+    outcome.failure = read.ok ? null : failureFact(read.failure, read.attemptsUsed);
+    if (last) return last;
+    throw thrown;
   };
 }
 
@@ -221,6 +254,8 @@ export type PurchaseOpts = {
   /** give up on the paid request after this many ms (the chain is read after that; the payment is never retried) */
   httpTimeoutMs?: number;
   tag?: string;
+  /** tests: the retry's clock and randomness (recovery.mjs readTerms) */
+  retry?: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number };
 };
 
 export type PurchaseResult = {
@@ -242,6 +277,8 @@ export type PurchaseResult = {
   response?: { bytes: Buffer; truncated: boolean; contentType?: string }; // what the seller answered (up to MAX_RESPONSE_BYTES): buy saves it
   error?: string;
   exitCode: number; // ops.ts exitCodeFor: 0 settled and delivered (or quoted); 1 failed / refused by the chain; 3 refused before signing; 4 paid, not delivered; 5 unknown
+  /** The seller's terms could not be read after the bounded retries, before any payment existed (recovery.mjs). */
+  termsFailure?: { stage: string; detail: string; attempts_used: number };
 };
 
 /** Thrown by the signer during the dry run before the pull: carries what it found wrong with the payment, or null. */
@@ -580,7 +617,8 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
-  const timedFetch: typeof fetch = capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
+  const terms: TermsOutcome = { failure: null };
+  const timedFetch: typeof fetch = withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) })), terms, o.retry);
   const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {
@@ -597,6 +635,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       return settleFromChain(`error after the pull was sent (${st?.reason ?? res.error}); reading the chain, never re-paying`);
     }
     log(res.error);
+    if (terms.failure && !j.pullTx && !j.signed) res.termsFailure = terms.failure;
     return finish("refused_precheck", `seller unreachable or no usable challenge: ${res.error}`, "nothing was signed or sent");
   }
 
@@ -618,6 +657,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   if (!j.pullTx) {
     // the seller never asked for payment: nothing was pulled or signed
+    if (terms.failure && !j.signed) res.termsFailure = terms.failure;
     return finish("refused_precheck", `seller did not ask for payment (HTTP ${r.status})`, "nothing was signed or sent");
   }
 

@@ -84,5 +84,5 @@ if (j.pullTx && r.response && r.status !== undefined && r.status !== 402) {
     console.log(`could not save the response: ${oneLine(e?.message ?? e, 300)}`);
   }
 }
-console.log(await resultLine(j, "buy", saved ?? {}));
+console.log(await resultLine(j, "buy", { ...(saved ?? {}), ...(r.termsFailure ? { termsFailure: r.termsFailure } : {}) }));
 process.exit(r.exitCode);

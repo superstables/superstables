@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Budget auto recovery (EVM and Solana):** a budget `buy` now reads the seller's payment terms up to three times before it gives up, waiting 250 ms and then 1 s (a little more with jitter, and never less than the seller's `Retry-After`, up to 30 s). Only that unpaid read is repeated; a payment never is. If the terms still cannot be read, the account's recovery settings are on, and superstables.com lists `recovery_advice_v1`, the agent asks the site where else this order could go. The site only advises. The client checks every candidate itself, skips any that breaks a rule, and pays the first valid one with the agent key, inside that chain's own on-chain allowance, through the ordinary `buy`. The rules it enforces: nothing was signed for the order yet (once anything was, the order never moves); the other chain has a live allowance for this agent key, read from the chain; the price is within the owner's margin, the `--max` you gave and the allowance left, in the same test USDC family (Base Sepolia, Arc Testnet, Solana devnet); a different seller gets the request only with a consent the owner gave and the site's policy copy covers; at most `max_offers` offers per order; and advice expires within 120 seconds. Every switch is journaled under `budget/recovery/` before the new seller is contacted, and reported to the site afterwards on a best-effort basis. The `RESULT` of a switched buy names the seller and chain that were actually paid (`rail`, `chain` and `op` are the new purchase's, so `reconcile` works on them) and carries a `recovery` object with the reason. It says the agent chose the switch itself and the owner was not asked. A site that does not offer the feature, answers 403 or 404, or sends advice that cannot be used leaves a buy exactly as it was. Tempo is unchanged, and recovery is off when `--pay-to` is given. Testnet only.
+
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
 Testnet only.

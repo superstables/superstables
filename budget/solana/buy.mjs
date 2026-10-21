@@ -76,6 +76,7 @@ import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
+import { failureFact, readTerms, termsFailureOf } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -130,9 +131,12 @@ function finish(state, code, extra = {}) {
   process.exit(code);
 }
 // Everything the seller sent (its body, its offer, its headers, its errors) is printed through oneLine: one line each.
+// termsFailure: set when the unpaid read of the seller's terms failed for good (after the bounded retries, recovery.mjs readTerms).
+// It rides on every refusal that follows, and says to the dispatcher that the refusal came before any payment existed.
+let termsFailure;
 const refuse = (reasons, extra = {}) => {
   for (const r of [].concat(reasons)) console.error(`Refused (nothing signed): ${oneLine(r, 1000)}`);
-  finish("refused_precheck", EXIT.REFUSED, { reason: [].concat(reasons).join("; "), next: "fix the request or pass a new --max/--pay-to; nothing was signed or paid", ...extra });
+  finish("refused_precheck", EXIT.REFUSED, { reason: [].concat(reasons).join("; "), next: "fix the request or pass a new --max/--pay-to; nothing was signed or paid", ...(termsFailure ? { termsFailure } : {}), ...extra });
 };
 
 async function fetchOnce(u, m, body, extraHeaders, timeoutMs = 60_000) {
@@ -164,12 +168,24 @@ let lock = { ok: true };
 }
 
 // --- 2. the unpaid request and the challenge -------------------------------------------------------
+// The unpaid read is tried at most 3 times when it fails before any payment exists (no answer, 5xx, 429, a 402 whose terms
+// cannot be read); a payment is never retried.
 let initial;
-try {
-  initial = await fetchOnce(url, method, bodyText);
-} catch (e) {
-  refuse(`seller unreachable: ${oneLine(e?.message ?? e, 300)}`);
-}
+let termsReadError;
+const read = await readTerms(async () => {
+  termsReadError = undefined;
+  let got;
+  try {
+    got = await fetchOnce(url, method, bodyText);
+  } catch (e) {
+    termsReadError = oneLine(e?.message ?? e, 300);
+    return { failure: termsFailureOf({ error: oneLine(e?.cause?.code ?? e?.message ?? e, 120) }) };
+  }
+  return { failure: termsFailureOf({ status: got.res.status, retryAfter: got.res.headers.get("retry-after"), paymentRequired: got.res.headers.get("payment-required"), bodyText: got.text }), value: got };
+});
+initial = read.value;
+if (!read.ok) termsFailure = failureFact(read.failure, read.attemptsUsed);
+if (!initial) refuse(`seller unreachable: ${termsReadError}`);
 console.log(`\nInitial request: HTTP ${initial.res.status}`);
 if (initial.res.status !== 402) {
   console.log(oneLine(initial.text, 300));

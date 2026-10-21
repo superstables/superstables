@@ -40,7 +40,8 @@ import { rotate as rotateKey, stoppedFinal, sweepSignatures } from "./rotate.mjs
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { ALLOW_SITE_ENV, BUDGET_API, DEFAULT_SITE, agentTokenScrubber, call, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { RECOVERY_CHAINS, atomicOf, provesUnsigned, readRecord, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -724,7 +725,7 @@ function emit(code, fields) {
     log(`superstables budget: approval ${WORKER_ID}: ${interrupted ? "this worker was stopped" : "this worker ended before it had the request in hand"} and recorded no result; run budget wait again to check the approval`);
     process.exit(code);
   }
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "recovery", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -1035,6 +1036,8 @@ function railCommand(verb, f, extra = {}) {
       case "rotate-sweep": return S("rotate", ["--sweep"]);
       case "rotate-confirm-sweep": return S("rotate", ["--confirm", extra.signatures]);
       case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
+      // recovery: one request to the site, signed with the agent key (never a payment)
+      case "site-call": return O("siteCall", ["--site", extra.site, "--path", extra.path, "--body", extra.body]);
     }
   }
   return evmCommand(verb, f, extra);
@@ -1055,6 +1058,7 @@ function evmCommand(verb, f, extra = {}) {
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
     case "rotate-address": return E("rotate", ["--address"]);
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
+    case "site-call": return E("siteCall", ["--site", extra.site, "--path", extra.path, "--body", extra.body]);
   }
 }
 const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, agent: r.agent ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
@@ -1509,6 +1513,119 @@ function journalAnswer(f, ctx) {
   return () => emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
 }
 
+
+// ---- auto recovery (recovery.mjs): evm and solana only -------------------------------------------------------------------
+// When the seller's terms could not be read (after the rail's bounded retries) and nothing was signed, the site's advice may
+// move the order to another chain or seller. The site advises; this process decides, enforces every limit, and pays through
+// the ordinary buy with the agent key inside that chain's own allowance. See budget/recovery.mjs for the rules.
+const recoverable = (f) => (f.rail === "evm" || f.rail === "solana") && Object.hasOwn(RECOVERY_CHAINS, f.chain) && RECOVERY_CHAINS[f.chain].rail === f.rail;
+/** A journal as the order's rail left it: whether it may exist, and its content when it is this op's journal. */
+const journalState = (f) => ({ present: journalPresent(f), journal: readJournal(f) });
+const TERMS_STAGES = new Set(["terms", "seller_unreachable", "seller_error"]);
+/** The rail's termsFailure as this process will use it: exactly the three fields, or nothing. */
+function railTermsFailure(rr) {
+  const t = rr?.termsFailure;
+  return t && typeof t === "object" && TERMS_STAGES.has(t.stage) && Number.isInteger(t.attempts_used) && t.attempts_used >= 1 && t.attempts_used <= 3
+    ? { stage: t.stage, detail: siteText(String(t.detail ?? ""), 120), attempts_used: t.attempts_used } : null;
+}
+
+/** One buy on another rail, chain or seller, as the ordinary buy runs it, answered instead of emitted. */
+async function attemptBuy(f2, ctx) {
+  const c2 = { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op };
+  const refused = (reason, next) => ({ code: 3, unsigned: true, fields: { ...c2, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, reason, next } });
+  const gaps = setupGaps(f2);
+  if (gaps.problem) return refused(gaps.problem, "nothing was signed or paid");
+  if (gaps.missing.length) return refused(`${noBudgetWords(f2, gaps)}. Nothing was signed or paid`, "nothing was signed or paid");
+  const retired = retiredAgentProblem(f2);
+  if (retired) return refused(retired, "ask the owner: this agent key was replaced");
+  const lock = lockOp(opsDir(f2.rail, f2.chain), f2.op);
+  if (!lock.ok) return { code: 5, unsigned: false, fields: { ...c2, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const before = journalState(f2);
+  // an op that did something before is never run again: what its journal says stands
+  if (before.present && !provesUnsigned(f2.rail, before)) return { ...(await reconciledFields(f2, c2)), unsigned: false };
+  const running = run(railCommand("buy", f2));
+  try { lock.holdAlso(currentChild); } catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
+  const r = await running;
+  if (r.signal || interrupted) {
+    const n = normalize("buy", f2, null, 1);
+    return { code: n.code, unsigned: false, fields: { ...n.fields, reason: `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before its result was final; it may have paid` } };
+  }
+  const rr = railResult(r.stdout, { last: true });
+  const after = journalState(f2);
+  if (!rr && r.code !== 2 && !before.present && !after.present) return refused(`the ${f2.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`, "nothing was signed or paid");
+  const n = normalize("buy", f2, rr, r.code);
+  const unsigned = n.fields.state === "refused_precheck" && !railSending && provesUnsigned(f2.rail, after);
+  return { code: n.code, fields: n.fields, unsigned, termsFailure: unsigned ? railTermsFailure(rr) ?? undefined : undefined };
+}
+
+/** What reconcile reads for an op that did something: the answer, without emitting it. */
+async function reconciledFields(f2, c2) {
+  const lock = lockOp(opsDir(f2.rail, f2.chain), f2.op);
+  if (!lock.ok) return { code: 5, fields: { ...c2, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const running = run(railCommand("reconcile", f2));
+  try { lock.holdAlso(currentChild); } catch {}
+  const r = await running;
+  const n = normalize("reconcile", f2, r.signal || interrupted ? null : railResult(r.stdout, { last: true }), r.code);
+  return { code: n.code, fields: { ...n.fields, command: "buy" } };
+}
+
+/**
+ * Recovery for this buy, or null. `rr` is the first attempt's RESULT when it refused with a termsFailure; null when this is a
+ * rerun of an op that has a recovery record. { kind: "none" } or { kind: "result", code, fields } from recoverOrder.
+ */
+async function recoveryFor(f, ctx, rr) {
+  if (!recoverable(f)) return null;
+  const failure = rr ? railTermsFailure(rr) : null;
+  if (rr && !failure) return null;
+  const site = () => {
+    const recorded = hostedSite(f);
+    if (!recorded) return null;
+    const checked = siteOrigin(recorded, "owner");
+    return checked.error ? null : checked.origin;
+  };
+  return recoverOrder({
+    f, failure, log,
+    unsignedOriginal: () => provesUnsigned(f.rail, journalState(f)) && !railSending && !interrupted,
+    site,
+    features: async () => {
+      const origin = site();
+      if (!origin) return null;
+      const r = await call(`${origin}${BUDGET_API}/services`, { headers: { accept: "application/json" } }, 10_000);
+      return r.ok && Array.isArray(r.body?.features) ? new Set(r.body.features.filter((x) => typeof x === "string").slice(0, 50)) : null;
+    },
+    // INVARIANT 2: a live allowance on each chain, read from the chain by this client (the rails' own read scripts)
+    funded: async () => {
+      const funded = new Map();
+      for (const [chain, info] of Object.entries(RECOVERY_CHAINS)) {
+        const there = { rail: info.rail, chain };
+        const gaps = setupGaps(there);
+        if (gaps.problem || gaps.missing.length) continue;
+        const s = await readBudget(there);
+        if (!s.ok || s.revoked || s.expired || (s.expiry && !(Date.parse(s.expiry) > Date.now()))) continue;
+        const left = atomicOf(s.atRisk ?? s.remaining);
+        if (left !== null && left > 0n) funded.set(chain, left);
+      }
+      return funded;
+    },
+    siteCall: async (path, body) => {
+      const origin = site();
+      if (!origin) return { network: "no site" };
+      const r = await run(railCommand("site-call", f, { site: origin, path, body: JSON.stringify(body) }));
+      const out = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
+      const reply = out?.reply;
+      return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
+    },
+    attempt: (f2) => attemptBuy(f2, ctx),
+    attemptState: async (a) => {
+      const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
+      const st = journalState(f2);
+      if (!st.present) return { exists: false, unsigned: true };
+      if (provesUnsigned(f2.rail, st)) return { exists: true, unsigned: true };
+      return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
+    },
+  });
+}
+
 async function buy({ f, ctx }) {
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
@@ -1539,6 +1656,15 @@ async function buy({ f, ctx }) {
   const now = journalAnswer(f, ctx);
   if (now) return now();
   const journalBefore = journalPresent(f);
+  // An order that auto recovery already took over (a record exists) is never bought on its original seller again: what the
+  // recovery journaled decides, and only a switch that signed nothing is carried on.
+  if (recoverable(f) && readRecord(f.rail, f.chain, f.op)) {
+    const again = await recoveryFor(f, ctx, null);
+    if (again?.kind === "result") return emit(again.code, again.fields);
+    const reason = "auto recovery already handled this order and nothing was paid. Buy again with a new --op";
+    log(`superstables budget: ${reason}.`);
+    return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
+  }
   const running = run(railCommand("buy", f));
   try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
@@ -1566,6 +1692,13 @@ async function buy({ f, ctx }) {
     return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `fix what reason names (superstables budget doctor --rail ${f.rail}${chainFlag(f)} checks keys, RPC and balances), then buy again; this --op is still unused`, reason });
   }
   const n = normalize("buy", f, rr, r.code);
+  // The terms could not be read and nothing was signed: auto recovery may move this order (recovery.mjs). Anything else, or a
+  // site that does not offer it, is answered exactly as before.
+  if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
+    const moved = await recoveryFor(f, ctx, rr);
+    if (moved?.kind === "result") return emit(moved.code, moved.fields);
+    if (moved?.recovery) n.fields.recovery = moved.recovery;
+  }
   emit(n.code, n.fields);
 }
 
