@@ -828,6 +828,24 @@ describe("recovery of one order", () => {
         expect((await R.recoverOrder(policyOff.deps)).recovery.skipped).toContainEqual({ offer_id: "o1", reason: "policy_off" });
         expect(count(policyOff.calls, "attempt")).toBe(0);
       });
+      it("advice that runs out while the signed feature read is under way: no contact, no payment", async () => {
+        const op = await crashed();
+        let t = NOW + 60_000; // inside the advice (it runs to NOW + 100 s)
+        const slow = world({ op, deps: { now: () => t, features: async () => { t = NOW + 101_000; return new Set(["recovery_advice_v1"]); } } });
+        const out = await R.recoverOrder(slow.deps);
+        expect(out.kind).toBe("none");
+        expect(out.recovery.skipped).toContainEqual({ offer_id: "o1", reason: "advice_expired" });
+        expect(count(slow.calls, "attempt")).toBe(0);
+        expect(readRecordFile("evm", "base-sepolia", op).closed).toBe("advice_expired");
+      });
+      it("advice that runs out between the freeze and the handoff: the candidate is not contacted", async () => {
+        let t = NOW;
+        const w = world({ deps: { now: () => t, freezeOriginal: () => { t = NOW + 101_000; return { ok: true }; } } });
+        const out = await R.recoverOrder(w.deps);
+        expect(out.kind).toBe("none");
+        expect(count(w.calls, "attempt")).toBe(0);
+        expect(readRecordFile("evm", "base-sepolia", w.op).closed).toBe("advice_expired");
+      });
       it("a signed attempt is only reconciled, even when the advice has long expired", async () => {
         const op = await crashed();
         const later = world({ op, deps: { now: () => NOW + 600_000, features: async () => new Set() }, attemptState: () => ({ exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: `${op}-r2`, state: "unknown", paid: null, delivered: null, tx: {}, next: "reconcile" } }) });

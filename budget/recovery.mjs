@@ -555,7 +555,7 @@ export async function recoverOrder(deps) {
     if (done.blocked) break;
     previous = done;
   }
-  if (record.attempts.length) closeRecord(record, "no_attempt_paid");
+  if (record.attempts.length && !record.closed) closeRecord(record, "no_attempt_paid");
   return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped }) };
 }
 
@@ -565,8 +565,21 @@ function closeRecord(record, why) {
 }
 
 /** Runs one journaled attempt through the ordinary buy, reports it, and decides whether the order goes on. */
+/** INVARIANT 6 at the last moment: the persisted advice has run out. */
+const adviceRanOut = (deps, record) => Boolean(record.advice) && (deps.now ?? Date.now)() >= record.advice.expires_at_ms;
+
+/** Closes an unsigned attempt that was not contacted, and says the order goes no further. */
+function closeUncontacted(record, attempt, why) {
+  attempt.state = "done"; attempt.outcome = "failed_before_payment"; attempt.note = `not contacted: ${why}`;
+  record.closed = why;
+  try { writeRecord(record); } catch { /* nothing was contacted either way */ }
+  return { kind: "continue", unsigned: true, blocked: true };
+}
+
 async function runAttempt(deps, record, attempt) {
   const { f } = deps;
+  // INVARIANT 6: immediately before the handoff (and again after the freeze), the advice must still hold
+  if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   // INVARIANT 1: the original op is frozen at the rail boundary before anything of this attempt is contacted
   const frozen = deps.freezeOriginal ? deps.freezeOriginal({ rail: f.rail, chain: f.chain, op: f.op }, { order_ref: record.order_ref, op: attempt.op, rail: attempt.rail, chain: attempt.chain, attempt_no: attempt.attempt_no }) : { ok: false, why: "no_freeze" };
   if (!frozen.ok) {
@@ -575,6 +588,7 @@ async function runAttempt(deps, record, attempt) {
     try { writeRecord(record); } catch { /* nothing was contacted either way */ }
     return { kind: "continue", unsigned: true, blocked: true };
   }
+  if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined };
   const got = await deps.attempt(flags);
   const state = got.fields?.state;
@@ -636,7 +650,7 @@ async function resume(deps, record) {
   }
   const done = await runAttempt(deps, record, last);
   if (done.kind === "result") return done;
-  closeRecord(record, "no_attempt_paid");
+  if (!record.closed) closeRecord(record, "no_attempt_paid");
   return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
 }
 
@@ -646,6 +660,8 @@ async function resumeProblem(deps, record, attempt) {
   const a = record.advice;
   if (!a || !Number.isFinite(a.expires_at_ms) || now() >= a.expires_at_ms) return "advice_expired";
   const features = await deps.features();
+  // the feature read can take long: the expiry is checked again after it, not only before
+  if (now() >= a.expires_at_ms) return "advice_expired";
   if (!features || !features.has(RECOVERY_FEATURE)) return "feature_off";
   const kindOk = attempt.disclosed ? a.service_ok === true : a.rail_ok === true;
   if (!kindOk || !Array.isArray(a.allowed_chains) || !a.allowed_chains.includes(attempt.chain)) return "policy_off";
