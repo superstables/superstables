@@ -222,6 +222,14 @@ describe("wait --site that is not the site the approval was made on", () => {
       [waitArgs(id, OTHER), 5, "unknown"],
       [["wait", "--id", id, "--shown", "--mainnet"], 5, "unknown"],
     ];
+    // controls: the same forms with no worker variable answer the same, and leave the same record behind
+    for (const [args, code, state] of forms) {
+      const control = await budget(args);
+      expect(control.code, `control ${args.join(" ")}: ${control.stderr}`).toBe(code);
+      expect(control.result).toMatchObject({ state });
+      expect(readFileSync(path, "utf8")).toBe(before.record);
+      expect(readFileSync(chainLock, "utf8")).toBe(before.chain);
+    }
     for (const env of claims) {
       for (const [args, code, state] of forms) {
         const run = await budget(args, "x\n", env);

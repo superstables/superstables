@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createIdentitySource } from "../../budget/lock-identity.mjs";
 
 let home: string;
@@ -21,11 +21,15 @@ const HOSTED = { site: "http://127.0.0.1:9", requestId: "ba_test0001", kind: "gr
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 /** A process standing in for a worker: its group's leader, with the start identity a record names it by. */
+const sleepers: number[] = [];
 function liveWorker() {
   const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
   child.unref();
+  sleepers.push(child.pid!);
   return { pid: child.pid!, ...createIdentitySource().fields(child.pid!) };
 }
+// every stand-in worker a test started is stopped when the test ends: a process left running fails the test run
+afterEach(() => { for (const pid of sleepers.splice(0)) { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } } });
 async function goneWorker() {
   const w = liveWorker();
   process.kill(-w.pid, "SIGKILL");
