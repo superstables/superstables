@@ -1570,6 +1570,25 @@ async function reconciledFields(f2, c2) {
 }
 
 /**
+ * What the candidate op's own journal says, read while holding its record lock (the lock every rail takes before it signs). A held
+ * lock means a command may be signing: unknown. An unsigned or absent journal keeps the lock when `keep` is set, so nothing can start
+ * signing under it before this process answers; anything else is reconciled from the chain, with the lock let go for the rail.
+ */
+async function candidateView(a, ctx, keep) {
+  const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
+  const held = lockRecord(opsDir(f2.rail, f2.chain), f2.op);
+  if (!held.ok) return { exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: f2.rail, chain: f2.chain, op: f2.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(held, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const st = journalState(f2); // under the lock
+  const unsigned = !st.present || provesUnsigned(f2.rail, st);
+  if (unsigned) {
+    if (!keep) held.release();
+    return { exists: st.present, unsigned: true };
+  }
+  held.release();
+  return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
+}
+
+/**
  * Recovery for this buy, or null. `rr` is the first attempt's RESULT when it refused with a termsFailure; null when this is a
  * rerun of an op that has a recovery record. { kind: "none" } or { kind: "result", code, fields } from recoverOrder.
  */
@@ -1618,17 +1637,11 @@ async function recoveryFor(f, ctx, rr) {
     siteCall: (path, body) => signedCall("POST", path, body),
     freezeOriginal,
     attempt: (f2) => attemptBuy(f2, ctx),
-    attemptState: async (a) => {
-      const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
-      const st = journalState(f2);
-      // an unsigned or absent journal is believed only while no command holds that op's record lock: one that does may be signing
-      const held = lockRecord(opsDir(f2.rail, f2.chain), f2.op);
-      if (!held.ok) return { exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: f2.rail, chain: f2.chain, op: f2.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(held, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
-      held.release();
-      if (!st.present) return { exists: false, unsigned: true };
-      if (provesUnsigned(f2.rail, st)) return { exists: true, unsigned: true };
-      return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
-    },
+    // A snapshot for deciding what to do next. It is read under the op's record lock, and the lock is let go: nothing may be claimed
+    // from it that is not confirmed again (confirmUnsigned).
+    attemptState: (a) => candidateView(a, ctx, false),
+    // The last step before any "nothing was signed" answer: read under the lock, which is then KEPT until this process ends.
+    confirmUnsigned: (a) => candidateView(a, ctx, true),
   });
 }
 

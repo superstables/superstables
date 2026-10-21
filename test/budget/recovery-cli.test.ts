@@ -43,17 +43,19 @@ afterEach(async () => {
 // ---- the stand-ins -------------------------------------------------------------------------------------------------
 
 type SiteCall = { path: string; body: any; headers: Record<string, string | string[] | undefined>; raw: string; signed: boolean };
-interface Site { url: string; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
+interface Site { url: string; servicesGate: Promise<void> | null; servicesReached: (() => void) | null; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
 
 /** A fake superstables.com: the feature list, and the two recovery routes, which check the agent's signature like the real one. */
 async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}): Promise<Site & { close(): Promise<void> }> {
-  const site: Site = { url: "", serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
+  const site: Site = { url: "", servicesGate: null, servicesReached: null, serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
   const server = createServer(async (req, res) => {
     const raw = await text(req);
     if (req.method === "GET" && req.url === "/api/v1/budget/services") {
       // account-scoped: only a request signed by the agent (proof v2, GET, empty body) sees the features
       const signed = await signatureHolds(site.url, req, raw);
       site.serviceReads.push({ signed, nonce: String(req.headers["superstables-agent-nonce"] ?? ""), method: req.method });
+      site.servicesReached?.();
+      if (site.servicesGate) await site.servicesGate;
       if (site.servicesStatus !== 200) return json(res, site.servicesStatus, { error: "down" });
       return json(res, 200, { services: [], features: signed ? site.features : [] });
     }
@@ -646,6 +648,48 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(done.result, all(done)).toMatchObject({ state: "settled", paid: true });
     const after = await buy(`${gate}/spot`, { op: "fz-b" });
     expect(after.result).toMatchObject({ op: "fz-b-r2", state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("schedule: the candidate settles while the order waits for the candidate's lock; the rerun reports the settlement, never unpaid", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-d");
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    const signal = join(home, "paused"), done = join(home, "go");
+    const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
+    const rerun = new Promise<Out>((resolveRun, fail) => {
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, "fz-d-r2.json.lock"), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-d"], { cwd: ROOT, env });
+      let stdout = "";
+      child.stdout.on("data", (c) => (stdout += String(c)));
+      child.once("error", fail);
+      child.once("close", (code) => { const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT ")); resolveRun({ code: code ?? 0, stdout, stderr: "", result: line ? JSON.parse(line.slice(7)) : null, pid: 0 }); });
+    });
+    for (let i = 0; i < 600 && !existsSync(signal); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(signal), "the rerun reached the candidate's lock").toBe(true);
+    // the candidate runs to its settlement while the rerun is paused just before it takes the lock
+    const candidate = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", "fz-d-r2"]);
+    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    writeFileSync(done, "go");
+    const out = await rerun;
+    expect(out.result).toMatchObject({ op: "fz-d-r2", state: "settled", paid: true });
+    expect(out.code).toBe(0);
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("schedule: the candidate settles during the signed feature read, which then says the feature is off; the rerun reports the settlement", async () => {
+    const { gate, arcSeller, baseSeller, site } = await frozenOrder("fz-e");
+    site.features = [];
+    let release!: () => void;
+    site.servicesGate = new Promise<void>((r) => (release = r));
+    const reached = new Promise<void>((r) => (site.servicesReached = r));
+    const rerun = buy(`${gate}/spot`, { op: "fz-e" });
+    await reached;
+    const candidate = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", "fz-e-r2"]);
+    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    release();
+    const out = await rerun;
+    expect(out.result).toMatchObject({ op: "fz-e-r2", state: "settled", paid: true });
+    expect(out.result.reason ?? "").not.toMatch(/new --op/);
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 

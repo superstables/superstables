@@ -524,6 +524,7 @@ function world(over: Record<string, any> = {}) {
       calls.push({ kind: "attempt", flags, journaled: rec.attempts.map((a: any) => ({ attempt_no: a.attempt_no, offer_id: a.offer_id, why: a.why, op: a.op, state: a.state })), order_ref: rec.order_ref });
       return over.attempt ? over.attempt(flags, calls) : paid(flags);
     },
+    confirmUnsigned: async (a: any) => { calls.push({ kind: "confirm", op: a.op }); return over.confirm ? over.confirm(a) : over.attemptState ? over.attemptState(a) : { exists: false, unsigned: true }; },
     attemptState: async (a: any) => { calls.push({ kind: "attemptState", op: a.op }); return over.attemptState ? over.attemptState(a) : { exists: false, unsigned: true }; },
     ...(over.deps ?? {}),
   };
@@ -883,6 +884,34 @@ describe("recovery of one order", () => {
       });
     });
 
+    describe("an answer that says nothing was signed is confirmed last, and the candidate may have settled meanwhile", () => {
+      const settledNow = (op: string) => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: `${op}-r2`, state: "settled", paid: true, delivered: true, amount: "0.01", tx: { settle: "0xabc" }, next: "none" } });
+      it("a stale switch whose candidate settled during the feature read is that settlement, never unpaid", async () => {
+        const w0 = world({ attempt: () => { throw new Error("process killed"); } });
+        await expect(R.recoverOrder(w0.deps)).rejects.toThrow("killed");
+        let settled = false;
+        const w = world({
+          op: w0.op, deps: { features: async () => { settled = true; return new Set(); } },
+          attemptState: () => ({ exists: false, unsigned: true }),
+          confirm: () => (settled ? settledNow(w0.op) : { exists: false, unsigned: true }),
+        });
+        const out = await R.recoverOrder(w.deps);
+        expect(out.kind).toBe("result");
+        expect(out.fields).toMatchObject({ state: "settled", paid: true });
+        expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid" });
+      });
+      it("a closed order is confirmed too, and a busy candidate is unknown", async () => {
+        const w0 = world({ attempt: (flags: any) => unsignedTerms(flags) });
+        await R.recoverOrder(w0.deps);
+        const settled = world({ op: w0.op, confirm: () => settledNow(w0.op) });
+        expect((await R.recoverOrder(settled.deps)).fields.state).toBe("settled");
+        const busy = world({ op: w0.op, confirm: () => ({ exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: `${w0.op}-r2`, state: "unknown", paid: null, tx: {}, reason: "op_in_progress" } }) });
+        const out = await R.recoverOrder(busy.deps);
+        expect(out.code).toBe(5);
+        expect(out.fields.paid).toBeNull();
+      });
+    });
+
     describe("losing the candidate's journal never erases a recorded outcome", () => {
       for (const [outcome, attempt] of [["paid", (flags: any) => paid(flags)], ["unknown", (flags: any) => unknown(flags)]] as const) {
         it(`after ${outcome}: unknown, with the transaction when there is one, never paid=false, never a new op`, async () => {
@@ -910,7 +939,7 @@ describe("recovery of one order", () => {
       const again = world({ op: w.op });
       const out = await R.recoverOrder(again.deps);
       expect(out.kind).toBe("none");
-      expect(again.calls.filter((c) => c.kind !== "attemptState")).toEqual([]);
+      expect(again.calls.filter((c) => c.kind !== "attemptState" && c.kind !== "confirm")).toEqual([]);
     });
 
     it("a record that cannot be read is never read as no record: the order's own answer stands and nothing is asked", async () => {

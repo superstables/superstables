@@ -654,12 +654,27 @@ async function resume(deps, record) {
       }),
     };
   }
+  // Every answer that says "nothing was signed" is confirmed first, as the last step: the candidate's journal is read again under its
+  // record lock, which stays held until this process ends. A busy lock, or a journal that now shows anything, is that outcome instead.
+  const ended = async (extra = {}) => {
+    const sure = await deps.confirmUnsigned(last);
+    if (sure.exists && !sure.unsigned) {
+      if (last.state !== "done") { last.state = "done"; last.outcome = outcomeOf(sure.fields?.state); try { writeRecord(record); } catch { /* the answer below is the same */ } }
+      return { kind: "result", code: sure.code, fields: switchedFields(record, last, sure.fields) };
+    }
+    return null;
+  };
   // decided before the crash, and nothing was signed: the order is over, and no new advice is asked for it
-  if (last.state === "done" || record.closed) return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
+  if (last.state === "done" || record.closed) {
+    return (await ended()) ?? { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
+  }
   // Journaled before the crash, nothing signed since. INVARIANT 6 binds this contact and payment too: the persisted advice must not
   // have expired, the site must still list the feature, and the persisted policy must still allow this kind of switch on this chain.
   const stale = await resumeProblem(deps, record, last);
   if (stale) {
+    // after the asynchronous feature read, before anything is written: the candidate may have settled meanwhile
+    const moved = await ended();
+    if (moved) return moved;
     last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
     closeRecord(record, stale);
     return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }] }) };
@@ -668,7 +683,7 @@ async function resume(deps, record) {
   if (done.kind === "result") return done;
   if (done.freezeFailed) return { kind: "none", freezeFailed: done.freezeFailed, recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
   if (!record.closed) closeRecord(record, "no_attempt_paid");
-  return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
+  return (await ended()) ?? { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
 }
 
 /** Why an unsigned, journaled attempt may not be carried on after a crash, or "". Nothing is contacted or paid when it is not "". */
