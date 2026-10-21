@@ -5,12 +5,12 @@
 import { loadAgent, parseStrict, usageError } from "./lib.mjs";
 import { signedSitePost, siteCallArgs } from "../site-request.ts";
 
-const USAGE = "Usage: solana/siteCall.ts --site <origin> --path <recovery route> --body <json>";
-const flags = parseStrict(process.argv.slice(2), { site: "value", path: "value", body: "value" }, { usage: USAGE, required: ["site", "path", "body"] });
+const USAGE = "Usage: solana/siteCall.ts --site <origin> --path <recovery route> --body <json> [--method GET|POST]";
+const flags = parseStrict(process.argv.slice(2), { site: "value", path: "value", body: "value", method: "value" }, { usage: USAGE, required: ["site", "path"] });
 const call = siteCallArgs((n) => flags[n]);
-if (!call) usageError("--body must be JSON", USAGE);
+if (!call) usageError("a POST needs --body as JSON, and --method is GET or POST", USAGE);
 const { keypair } = loadAgent();
 const key = { ed25519: keypair.secretKey, address: keypair.publicKey.toBase58() };
-const reply = await signedSitePost(key, call!.site, call!.path, call!.body);
+const reply = await signedSitePost(key, call!.site, call!.path, call!.body, call!.method);
 console.log(`RESULT ${JSON.stringify({ ok: true, command: "siteCall", rail: "solana", chain: "devnet", state: "ok", reply })}`);
 process.exit(0);

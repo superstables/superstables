@@ -906,3 +906,35 @@ describe("the original op is frozen at the rail boundary before a candidate is c
     (globalThis as any).__freezes = undefined;
   });
 });
+
+// ---- the signed services read -----------------------------------------------------------------------------------------------
+
+describe("the agent-signed requests to the site", () => {
+  it("a GET of the services list carries proof v2 over an empty body, with a fresh nonce each time, and nothing else is signed", async () => {
+    const { signedSitePost } = await import(new URL("../../budget/site-request.ts", import.meta.url).href);
+    const { agentProofText } = await import(new URL("../../budget/hosted.ts", import.meta.url).href);
+    const { generatePrivateKey, privateKeyToAccount } = await import("viem/accounts");
+    const { recoverMessageAddress } = await import("viem");
+    const key = generatePrivateKey();
+    const seen: { url: string; init: any }[] = [];
+    const fetchImpl = (async (url: string, init: any) => { seen.push({ url, init }); return new Response(JSON.stringify({ features: ["recovery_advice_v1"] }), { status: 200 }); }) as any;
+    const site = "http://127.0.0.1:4999";
+    for (let i = 0; i < 2; i++) expect(await signedSitePost(key, site, "/api/v1/budget/services", undefined, "GET", { fetchImpl })).toMatchObject({ status: 200 });
+    for (const { url, init } of seen) {
+      expect(url).toBe(`${site}/api/v1/budget/services`);
+      expect(init.method).toBe("GET");
+      expect(init.body).toBeUndefined();
+      const h = init.headers;
+      expect(h["Superstables-Agent"]).toBe(privateKeyToAccount(key).address);
+      expect(h["Superstables-Agent-Nonce"]).toMatch(/^[0-9a-f]{32}$/);
+      const text = agentProofText(site, "GET", "/api/v1/budget/services", "", Number(h["Superstables-Agent-Timestamp"]), h["Superstables-Agent-Nonce"]);
+      expect(text).toContain("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+      expect(await recoverMessageAddress({ message: text, signature: h["Superstables-Agent-Signature"] })).toBe(privateKeyToAccount(key).address);
+    }
+    expect(seen[0]!.init.headers["Superstables-Agent-Nonce"]).not.toBe(seen[1]!.init.headers["Superstables-Agent-Nonce"]);
+    // the key signs no other route and no other method
+    expect(await signedSitePost(key, site, "/api/v1/budget/links", {}, "POST", { fetchImpl })).toEqual({ network: "not a recovery route" });
+    expect(await signedSitePost(key, site, "/api/v1/recovery/advice", undefined, "GET", { fetchImpl })).toEqual({ network: "not a recovery route" });
+    expect(seen).toHaveLength(2);
+  });
+});

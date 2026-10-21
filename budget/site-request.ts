@@ -7,21 +7,23 @@ import { siteOrigin } from "./site.mjs";
 
 /** The most of the site's answer that is read. Advice is a few kilobytes. */
 export const SITE_REPLY_MAX_BYTES = 262_144;
-const PATHS = new Set(["/api/v1/recovery/advice", "/api/v1/recovery/report"]);
+/** The only requests the agent key signs here: the two recovery routes, and the account-scoped services read that lists the features. */
+const ROUTES = new Set(["POST /api/v1/recovery/advice", "POST /api/v1/recovery/report", "GET /api/v1/budget/services"]);
 
 export type SiteReply = { status: number; body: unknown } | { network: string };
 
 /** POSTs `body` as JSON to `path` on `site`, signed by `key`. Never throws: a failed request is { network }. */
-export async function signedSitePost(key: AgentKey, site: string, path: string, body: unknown, { fetchImpl = fetch, timeoutMs = 15_000 }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<SiteReply> {
+export async function signedSitePost(key: AgentKey, site: string, path: string, body: unknown, method: "GET" | "POST" = "POST", { fetchImpl = fetch, timeoutMs = 15_000 }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<SiteReply> {
   // only the site the owner allows, and only the two recovery routes: the agent key signs nothing else here
   const checked = siteOrigin(site, "owner");
   if (checked.error || !checked.origin) return { network: "the site is not one the owner allows" };
-  if (!PATHS.has(path)) return { network: "not a recovery route" };
+  if (!ROUTES.has(`${method} ${path}`)) return { network: "not a recovery route" };
   try {
-    const raw = JSON.stringify(body);
-    const { headers } = await agentProof(key, checked.origin, "POST", path, raw);
+    // a GET has an empty body, whose SHA-256 the proof binds; every request gets a fresh nonce from agentProof
+    const raw = method === "GET" ? "" : JSON.stringify(body);
+    const { headers } = await agentProof(key, checked.origin, method, path, raw);
     const res = await fetchImpl(`${checked.origin}${path}`, {
-      method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(timeoutMs),
+      method, redirect: "error", headers: { ...headers, accept: "application/json", ...(method === "POST" ? { "content-type": "application/json" } : {}) }, ...(method === "POST" ? { body: raw } : {}), signal: AbortSignal.timeout(timeoutMs),
     });
     const { bytes, truncated } = await readCapped(res, SITE_REPLY_MAX_BYTES);
     if (truncated) return { status: res.status, body: null };
@@ -33,9 +35,11 @@ export async function signedSitePost(key: AgentKey, site: string, path: string, 
   }
 }
 
-/** The arguments of a siteCall script: --site ORIGIN --path P --body JSON. null when any is missing or the body is not JSON. */
-export function siteCallArgs(get: (name: string) => string | undefined): { site: string; path: string; body: unknown } | null {
-  const site = get("site"), path = get("path"), raw = get("body");
-  if (!site || !path || raw === undefined) return null;
-  try { return { site, path, body: JSON.parse(raw) }; } catch { return null; }
+/** The arguments of a siteCall script: --site ORIGIN --path P [--method GET|POST] [--body JSON]. null when any is missing, or a POST body is not JSON. */
+export function siteCallArgs(get: (name: string) => string | undefined): { site: string; path: string; method: "GET" | "POST"; body: unknown } | null {
+  const site = get("site"), path = get("path"), raw = get("body"), method = get("method") ?? "POST";
+  if (!site || !path || (method !== "GET" && method !== "POST")) return null;
+  if (method === "GET") return { site, path, method, body: undefined };
+  if (raw === undefined) return null;
+  try { return { site, path, method, body: JSON.parse(raw) }; } catch { return null; }
 }

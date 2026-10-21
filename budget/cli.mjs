@@ -40,7 +40,7 @@ import { rotate as rotateKey, stoppedFinal, sweepSignatures } from "./rotate.mjs
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
-import { ALLOW_SITE_ENV, BUDGET_API, DEFAULT_SITE, agentTokenScrubber, call, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
 import { RECOVERY_CHAINS, atomicOf, freezeOriginal, provesUnsigned, readRecord, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
@@ -1037,7 +1037,7 @@ function railCommand(verb, f, extra = {}) {
       case "rotate-confirm-sweep": return S("rotate", ["--confirm", extra.signatures]);
       case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
       // recovery: one request to the site, signed with the agent key (never a payment)
-      case "site-call": return O("siteCall", ["--site", extra.site, "--path", extra.path, "--body", extra.body]);
+      case "site-call": return O("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
     }
   }
   return evmCommand(verb, f, extra);
@@ -1058,7 +1058,7 @@ function evmCommand(verb, f, extra = {}) {
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
     case "rotate-address": return E("rotate", ["--address"]);
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
-    case "site-call": return E("siteCall", ["--site", extra.site, "--path", extra.path, "--body", extra.body]);
+    case "site-call": return E("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
   }
 }
 const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, agent: r.agent ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
@@ -1583,15 +1583,23 @@ async function recoveryFor(f, ctx, rr) {
     const checked = siteOrigin(recorded, "owner");
     return checked.error ? null : checked.origin;
   };
+  const signedCall = async (method, path, body) => {
+    const origin = site();
+    if (!origin) return { network: "no site" };
+    const r = await run(railCommand("site-call", f, { site: origin, path, method, ...(method === "POST" ? { body: JSON.stringify(body) } : {}) }));
+    const out = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
+    const reply = out?.reply;
+    return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
+  };
   return recoverOrder({
     f, failure, log,
     unsignedOriginal: () => provesUnsigned(f.rail, journalState(f)) && !railSending && !interrupted,
     site,
+    // The services read is account-scoped on the site, so it is signed with the agent key (proof v2, GET, empty body). A read that
+    // fails, or lacks the feature, is today's behaviour.
     features: async () => {
-      const origin = site();
-      if (!origin) return null;
-      const r = await call(`${origin}${BUDGET_API}/services`, { headers: { accept: "application/json" } }, 10_000);
-      return r.ok && Array.isArray(r.body?.features) ? new Set(r.body.features.filter((x) => typeof x === "string").slice(0, 50)) : null;
+      const reply = await signedCall("GET", "/api/v1/budget/services");
+      return reply && reply.status === 200 && Array.isArray(reply.body?.features) ? new Set(reply.body.features.filter((x) => typeof x === "string").slice(0, 50)) : null;
     },
     // INVARIANT 2: a live allowance on each chain, read from the chain by this client (the rails' own read scripts)
     funded: async () => {
@@ -1607,14 +1615,7 @@ async function recoveryFor(f, ctx, rr) {
       }
       return funded;
     },
-    siteCall: async (path, body) => {
-      const origin = site();
-      if (!origin) return { network: "no site" };
-      const r = await run(railCommand("site-call", f, { site: origin, path, body: JSON.stringify(body) }));
-      const out = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
-      const reply = out?.reply;
-      return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
-    },
+    siteCall: (path, body) => signedCall("POST", path, body),
     freezeOriginal,
     attempt: (f2) => attemptBuy(f2, ctx),
     attemptState: async (a) => {

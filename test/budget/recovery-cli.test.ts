@@ -43,14 +43,20 @@ afterEach(async () => {
 // ---- the stand-ins -------------------------------------------------------------------------------------------------
 
 type SiteCall = { path: string; body: any; headers: Record<string, string | string[] | undefined>; raw: string; signed: boolean };
-interface Site { url: string; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown }; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
+interface Site { url: string; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown }; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
 
 /** A fake superstables.com: the feature list, and the two recovery routes, which check the agent's signature like the real one. */
 async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}): Promise<Site & { close(): Promise<void> }> {
-  const site: Site = { url: "", calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
+  const site: Site = { url: "", serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
   const server = createServer(async (req, res) => {
     const raw = await text(req);
-    if (req.method === "GET" && req.url === "/api/v1/budget/services") return json(res, 200, { services: [], features: site.features });
+    if (req.method === "GET" && req.url === "/api/v1/budget/services") {
+      // account-scoped: only a request signed by the agent (proof v2, GET, empty body) sees the features
+      const signed = await signatureHolds(site.url, req, raw);
+      site.serviceReads.push({ signed, nonce: String(req.headers["superstables-agent-nonce"] ?? ""), method: req.method });
+      if (site.servicesStatus !== 200) return json(res, site.servicesStatus, { error: "down" });
+      return json(res, 200, { services: [], features: signed ? site.features : [] });
+    }
     if (req.method === "POST" && req.url?.startsWith("/api/v1/recovery/")) {
       let body: any = null;
       try { body = JSON.parse(raw); } catch { /* */ }
@@ -73,7 +79,7 @@ async function signatureHolds(origin: string, req: IncomingMessage, raw: string)
   const h = req.headers;
   const address = String(h["superstables-agent"] ?? ""), ts = Number(h["superstables-agent-timestamp"]), nonce = String(h["superstables-agent-nonce"] ?? ""), sig = String(h["superstables-agent-signature"] ?? "");
   if (!address || !/^[0-9a-f]{32}$/.test(nonce) || !Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 60) return false;
-  const message = agentProofText(origin, "POST", String(req.url).split("?")[0], raw, ts, nonce);
+  const message = agentProofText(origin, String(req.method), String(req.url).split("?")[0], raw, ts, nonce);
   if (address.startsWith("0x")) return (await recoverMessageAddress({ message, signature: sig as `0x${string}` })).toLowerCase() === address.toLowerCase() && address.toLowerCase() === agent.address.toLowerCase();
   return address === solAgent.publicKey.toBase58() && ed25519Verifies(address, message, sig);
 }
@@ -291,6 +297,25 @@ describe("a site that does not take part: the answer is exactly what it is today
     // the site is asked only when it lists the feature
     expect(site.adviceCalls).toHaveLength(over.features.length ? 1 : 0);
     expect(existsSync(recordsDir())).toBe(false);
+  }, 120_000);
+
+  it("the feature list is read with a signed GET (proof v2, empty body, a fresh nonce each time); a failed read is today's behaviour", async () => {
+    const site = await startSite({ advice: adviceFor([]) });
+    const gate = await startGate({ base: "503" });
+    setUpEvm(site.url);
+    const a = await buy(`${gate.url}/spot`, { op: "rec-f1" });
+    const b = await buy(`${gate.url}/spot`, { op: "rec-f2" });
+    expect(site.serviceReads.map((x) => x.signed)).toEqual([true, true]);
+    expect(site.serviceReads[0]!.nonce).not.toBe(site.serviceReads[1]!.nonce);
+    expect(site.serviceReads[0]!.nonce).toMatch(/^[0-9a-f]{32}$/);
+    expect(a.code).toBe(3);
+    expect(b.code).toBe(3);
+    // the signed read fails: no advice is asked and the answer is the plain refusal
+    site.servicesStatus = 500;
+    const c = await buy(`${gate.url}/spot`, { op: "rec-f3" });
+    expect(c.code, all(c)).toBe(3);
+    expect(c.result.recovery).toBeUndefined();
+    expect(site.adviceCalls).toHaveLength(2);
   }, 120_000);
 
   it("a budget that was not set up with the site is not recovered either", async () => {
