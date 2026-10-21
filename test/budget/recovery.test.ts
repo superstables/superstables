@@ -382,6 +382,21 @@ describe("the site's advice, checked by the client", () => {
         // a rail candidate has no fixed parameters
         expect(ok(`${ORIGIN}/arc?asset=BTC`, { fixed_params: { quote: "USD" } })).toBe(false);
       });
+      it("rail needs unique decoded names on the original and on the candidate, and never trusts a sorted order", () => {
+        const dupOriginal = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/spot?symbol=BTC&symbol=BTC`, maxAtomic: 50_000n }, tried: [] });
+        const rail = (url: string, c = ctx()) => check(advice({}, [goodCandidate({ url, params: {} })]), c);
+        // copied duplicates
+        expect(rail(`${ORIGIN}/arc?symbol=BTC&symbol=BTC`, dupOriginal).skipped).toEqual([{ offer_id: "o1", reason: "rail_binding" }]);
+        // encoded duplicates, on both sides
+        const encoded = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/spot?symbol=BTC&%73ymbol=BTC`, maxAtomic: 50_000n }, tried: [] });
+        expect(rail(`${ORIGIN}/arc?symbol=BTC&%73ymbol=BTC`, encoded).skipped).toEqual([{ offer_id: "o1", reason: "rail_binding" }]);
+        // the same values in another order
+        const order = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/spot?symbol=BTC&symbol=ETH`, maxAtomic: 50_000n }, tried: [] });
+        expect(rail(`${ORIGIN}/arc?symbol=ETH&symbol=BTC`, order).skipped).toEqual([{ offer_id: "o1", reason: "rail_binding" }]);
+        // a unique original and a duplicate-bearing candidate
+        expect(rail(`${ORIGIN}/arc?asset=BTC&asset=BTC`).skipped).toEqual([{ offer_id: "o1", reason: "rail_binding" }]);
+        expect(rail(`${ORIGIN}/arc?asset=BTC`).valid).toHaveLength(1);
+      });
       it("a service candidate serves exactly the parameters it lists, once each, with values of the original request only", () => {
         const sp = { policy: policy(shared()) };
         const t = (over: Record<string, unknown>) => why(advice(sp, [svc(1, over)]));

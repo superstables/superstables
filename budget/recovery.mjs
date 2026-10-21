@@ -269,7 +269,10 @@ function bindCandidate(target, original, params, fixed) {
   const query = sorted(entries(target));
   const clean = target.hash === "" && target.username === "" && target.password === "";
   const theirs = sorted(entries(original));
-  const railBound = clean && target.origin === original.origin && Object.keys(fixed).length === 0
+  // Rail needs unique decoded query names on BOTH sides (a percent-encoded duplicate is a duplicate): a parser that takes the first
+  // or the last value of a repeated name would otherwise read a different request than the one the user made.
+  const unique = (list) => new Set(list.map(([k]) => k)).size === list.length;
+  const railBound = clean && target.origin === original.origin && Object.keys(fixed).length === 0 && unique(query) && unique(theirs)
     && query.length === theirs.length && query.every((e, i) => e[0] === theirs[i][0] && e[1] === theirs[i][1]);
   const names = [...Object.keys(params), ...Object.keys(fixed)];
   const collide = Object.keys(fixed).some((k) => Object.hasOwn(params, k));
