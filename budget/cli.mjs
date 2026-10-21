@@ -739,8 +739,28 @@ function emit(code, fields) {
   process.exit(code);
 }
 
+/** The approval record `wait` was asked about, from --id alone (parse may not have read the command's flags yet): null when --id names none here. */
+function waitRecord() {
+  const argv = process.argv.slice(2);
+  for (let i = 0; i < argv.length; i++) {
+    const id = argv[i] === "--id" ? argv[i + 1] : argv[i].startsWith("--id=") ? argv[i].slice(5) : undefined;
+    const record = id === undefined ? null : readApproval(id);
+    if (record) return record;
+  }
+  return null;
+}
+
 function badInput(ctx, reason) {
   log(`superstables budget: ${reason}`);
+  // wait or wait --abandon refusing its input (any flag, any combination) for an approval that exists in this home. The refusal is about
+  // the command: it says nothing about what the approval did, and `failed` after a possible send reads as "nothing was sent". So it is
+  // unknown, not final, exit 5, naming the problem and the fix the reason carries. Nothing is read from a site or written to the record.
+  const record = ctx.command === "wait" ? waitRecord() : null;
+  if (record) {
+    // not through emit: a command that carries a worker's variables (set by hand) would have emit store a result for that approval
+    writeResult({ ok: false, command: "wait", rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, next: `${clean(reason)}. Then run superstables budget wait --id ${record.id} --shown again; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `${clean(reason)}; nothing was read or changed, and whether the approval sent anything is unknown` });
+    process.exit(5);
+  }
   emit(2, { ...ctx, state: "failed", next: `fix the command; see superstables budget ${ctx.command ?? ""} --help`.replace("  ", " "), reason });
 }
 function refuse(ctx, reason, next = "respect the refusal; nothing was signed") {
@@ -2354,16 +2374,12 @@ async function abandonOwnerApproval(record, f) {
 async function wait({ f }) {
   let once = readApproval(f.id);
   let endedRecord = null;
-  // --site names the site the approval was made on: another one is a mistake, not a different request
-  const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
-  if (f.site !== undefined && madeOn && madeOn !== f.site) {
-    // An approval with a request recorded on a site may have sent: the owner's wallet sends through that site, and no field of the record,
-    // a stored result included, proves that nothing left (a refusal can be followed by evidence of a send, or name the transactions only
-    // in its reason). So a mistaken flag is never answered failed, which reads as "nothing was sent". Unknown, with the fix to the flag.
-    const fix = `use --site ${madeOn}, or leave --site out`;
-    log(`superstables budget: --site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed`);
-    return emit(5, { command: "wait", rail: once.rail, chain: once.chain, state: "unknown", final: false, id: f.id, next: `${fix}. Run superstables budget wait --id ${f.id} --shown again with it; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `--site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed, and whether the approval sent anything is unknown` });
-  }
+  // --site names the site the approval was made on: another one is a mistake, not a different request. A refusal here goes through badInput,
+  // which answers unknown for an approval that exists.
+  const recordedSite = once?.hosted?.site;
+  const madeOn = recordedSite ? siteOrigin(recordedSite, "read").origin : null;
+  if (f.site !== undefined && recordedSite && !madeOn) return badInput({ command: "wait" }, `--site ${f.site} cannot be compared with the site this approval was made on (${siteText(String(recordedSite), 120)}), which this home does not allow now: leave --site out`);
+  if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
   // an owner approval that ran in the background and has no result: the owner gives it up (one that ended is answered as wait does)
   if (f.abandon && once && OWNER_COMMANDS.has(once.command) && !once.foreground && !once.final) {
     const done = await abandonOwnerApproval(once, f);
@@ -2393,7 +2409,7 @@ async function wait({ f }) {
   const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : recordMayHaveSent(once));
   if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted) {
     log(`superstables budget: wait refused without reading the approval: reply to the owner with message_for_owner first (word for word), then run: superstables budget wait --id ${f.id} --shown`);
-    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
+    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", final: false, ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
   }
   // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow is not read
   const madeOnAllowed = once?.command === "buy-once" && once.hosted?.site && !once.final ? siteOrigin(once.hosted.site, "verdict") : null;

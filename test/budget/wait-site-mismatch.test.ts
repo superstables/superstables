@@ -1,6 +1,8 @@
-// `wait --site` names the site an approval was made on. Another site is a mistake in the command, and says nothing about what the
-// approval did: for every approval with a request recorded on a site the answer is unknown (exit 5) with the fix to the flag, never
-// failed, because no field of the record proves nothing was sent. No network: the refusal happens before anything is read from a site.
+// `wait` and `wait --abandon` refuse a mistaken input (a --site that is not the approval's, one that is not a site at all, a
+// --timeout out of range, --abandon on a command running in a terminal). The refusal is about the command and says nothing about
+// what the approval did: when --id names an approval record in this home the answer is unknown (exit 5, final false) with the fix,
+// never failed, because no field of the record proves nothing was sent. It writes nothing and touches no lock. An --id that names no
+// record, or is malformed, keeps the bad-input answer. No network: the refusal happens before anything is read from a site.
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,10 +18,11 @@ beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ss-wait-site-")); });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
-function budget(args: string[], terminal = "x\n"): Promise<Run> {
+function budget(args: string[], terminal = "x\n", extra: Record<string, string> = {}): Promise<Run> {
   return new Promise((done, fail) => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home };
     for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME"]) delete env[k];
+    Object.assign(env, extra);
     const child = spawn(process.execPath, ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs"), resolve(ROOT, "budget/cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
@@ -134,6 +137,94 @@ describe("wait --site that is not the site the approval was made on", () => {
     // no lock was left or taken
     expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
   }, 120_000);
+
+  // every way wait refuses its input, for a record that exists (here: a hosted request recorded with no result)
+  const refusals: [string, (id: string) => string[]][] = [
+    ["a --site with a path (the approval's own site)", (id) => ["wait", "--id", id, "--shown", "--site", `${MADE_ON}/approve`]],
+    ["a --site that adds a path to another site", (id) => ["wait", "--id", id, "--shown", "--site", `${OTHER}/x`]],
+    ["a --site that is another site on the open internet", (id) => ["wait", "--id", id, "--shown", "--site", "https://example.com"]],
+    ["a --site with no scheme", (id) => ["wait", "--id", id, "--shown", "--site", "staging.superstables.com"]],
+    ["a --timeout out of range", (id) => ["wait", "--id", id, "--shown", "--timeout", "999"]],
+    ["a --timeout that is not a number", (id) => ["wait", "--id", id, "--shown", "--timeout", "soon"]],
+    ["a --site with --abandon (path)", (id) => ["wait", "--id", id, "--abandon", "--site", `${MADE_ON}/approve`]],
+    ["a --timeout out of range with --abandon", (id) => ["wait", "--id", id, "--abandon", "--timeout", "999"]],
+  ];
+  for (const [what, args] of refusals) {
+    it(`${what}: unknown (exit 5, final false), the record untouched`, async () => {
+      const { id, path } = record();
+      const before = readFileSync(path, "utf8");
+      const run = await budget(args(id));
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ command: "wait", rail: "evm", chain: "base-sepolia", state: "unknown", final: false, id });
+      expect(run.result.reason).toMatch(/whether the approval sent anything is unknown/);
+      expect(run.result.state).not.toBe("failed");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }, 60_000);
+  }
+
+  it("a recorded site this home cannot compare (not a site, or one the owner no longer allows): a --site is unknown, not ignored", async () => {
+    for (const recorded of ["this is not a url", "https://removed.example.com"]) {
+      const { id, path } = record({ hosted: { site: recorded, requestId: "ba_test0001", kind: "link", token: "ssbt_test_ba_test0001secret", resumable: true } });
+      const before = readFileSync(path, "utf8");
+      for (const args of [waitArgs(id, MADE_ON), abandonArgs(id, MADE_ON)]) {
+        const run = await budget(args);
+        expect(run.code, `${recorded} ${args.join(" ")}: ${run.stderr}`).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.result.reason).toMatch(/cannot be compared/);
+        expect(run.result.next).toMatch(/leave --site out/);
+        expect(readFileSync(path, "utf8")).toBe(before);
+      }
+    }
+  }, 120_000);
+
+  it("the answer writes nothing and touches no lock: a chain lock and a record lock that stand before it are byte for byte as they were", async () => {
+    const { id, path } = record();
+    const dir = join(home, "budget", "approvals");
+    const chainLock = join(dir, "active-evm-base-sepolia");
+    writeFileSync(chainLock, JSON.stringify({ id, pid: 2_000_000_000, createdAt: Date.now() - 600_000 }), { mode: 0o600 });
+    const before = { record: readFileSync(path, "utf8"), chain: readFileSync(chainLock, "utf8") };
+    for (const args of [waitArgs(id, OTHER), abandonArgs(id, OTHER), ["wait", "--id", id, "--shown", "--timeout", "999"]]) {
+      const run = await budget(args);
+      expect(run.code, run.stderr).toBe(5);
+      expect(readFileSync(path, "utf8")).toBe(before.record);
+      expect(readFileSync(chainLock, "utf8")).toBe(before.chain);
+      expect(readdirSync(dir).filter((f) => f.endsWith(".lock"))).toEqual([]);
+    }
+  }, 120_000);
+
+  it("a command that carries a worker's variables (set by hand) gets the same answer and no result stored for any approval", async () => {
+    const { id, path } = record();
+    const before = readFileSync(path, "utf8");
+    const claims: Record<string, string>[] = [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, { SUPERSTABLES_BUDGET_APPROVAL_ID: id, SUPERSTABLES_BUDGET_RESUME: id, SUPERSTABLES_BUDGET_RESUME_GENERATION: "1" }];
+    for (const env of claims) {
+      for (const args of [waitArgs(id, OTHER), ["wait", "--id", id, "--shown", "--timeout", "999"]]) {
+        const run = await budget(args, "x\n", env);
+        expect(run.code, `${JSON.stringify(env)} ${args.join(" ")}: ${run.stderr}`).toBe(5);
+        expect(run.result).toMatchObject({ state: "unknown", final: false, id });
+        expect(readFileSync(path, "utf8")).toBe(before);
+      }
+    }
+  }, 120_000);
+
+  it("an --id that names no record, or is malformed, keeps the existing answers", async () => {
+    const gone = "oa-20261021010000-00000000";
+    for (const args of [["wait", "--id", gone, "--shown", "--timeout", "999"], ["wait", "--id", gone, "--shown", "--site", "https://example.com"], ["wait", "--id", "not-an-id", "--shown"]]) {
+      const run = await budget(args);
+      expect(run.code, `${args.join(" ")}: ${run.stderr}`).toBe(2);
+      expect(run.result).toMatchObject({ state: "failed" });
+    }
+    const plain = await budget(["wait", "--id", gone, "--shown"]);
+    expect(plain.code).toBe(2);
+    expect(plain.result.reason).toMatch(/no owner approval with id/);
+  }, 120_000);
+
+  it("a wait without --shown on an open approval refuses without polling, and is not final", async () => {
+    const { id, path } = record();
+    const before = readFileSync(path, "utf8");
+    const run = await budget(["wait", "--id", id]);
+    expect(run.result).toMatchObject({ state: "show_owner_first", final: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  }, 60_000);
 
   it("the site the approval was made on is accepted: no site refusal", async () => {
     const { id } = record({ state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });

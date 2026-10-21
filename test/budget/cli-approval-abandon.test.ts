@@ -547,7 +547,9 @@ describe("wait --abandon on a background owner approval", () => {
       writeFileSync(path, JSON.stringify({ id, command: "setup", rail: "evm", chain: "base-sepolia", state: "running", foreground: true, createdAt: new Date().toISOString(), pid: holder.pid, deadline: null }, null, 2) + "\n");
       const before = readFileSync(path, "utf8");
       const run = await budget(abandonArgs(id), {}, typed(id));
-      expect(run.code, run.stderr).toBe(2);
+      // the record exists: a refusal of the command is unknown (exit 5), never failed
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ state: "unknown", final: false, id });
       expect(run.stderr).toMatch(/running in a terminal: stop it there/);
       expect(readFileSync(path, "utf8")).toBe(before);
       expect(alive(holder.pid!)).toBe(true);
