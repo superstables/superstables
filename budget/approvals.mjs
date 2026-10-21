@@ -99,16 +99,22 @@ export function readApprovalFile(id) {
   try {
     const value = JSON.parse(text);
     // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
-    return value && typeof value === "object" && !Array.isArray(value) && value.id === id ? { kind: "record", record: value } : { kind: "undecodable" };
+    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) return { kind: "undecodable" };
+    // a record wait can answer from: its command is known, and a stored final (if any) is the { code, result } recordFinalWith writes.
+    // Anything else is { kind: "damaged", record }: still an approval that holds its chain (readApproval, the lock scans), but no answer is made of it
+    const usable = typeof value.command === "string" && (value.final == null || (typeof value.final === "object" && Number.isInteger(value.final.code) && value.final.result && typeof value.final.result === "object"));
+    return { kind: usable ? "record" : "damaged", record: value };
   } catch {
     return { kind: "undecodable" };
   }
 }
 
 export function readApproval(id) {
-  const file = readApprovalFile(id);
-  return file.kind === "record" ? file.record : null;
+  return readApprovalFile(id).record ?? null;
 }
+
+/** The record of `id` for an answer: null for a file that is missing, undecodable or damaged (wait and waitFor read through this). */
+const readUsable = (id) => { const file = readApprovalFile(id); return file.kind === "record" ? file.record : null; };
 
 /**
  * Store a record (mode 600). A buy-once purchase has no worker: its record is made here (once.mjs). A final record stays
@@ -1107,12 +1113,12 @@ function sentUnknown(record, reason) {
  * approval whose worker is gone always has: the site is asked to cancel it, else unknown.
  */
 export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
-  const first = readApproval(id);
+  const first = readUsable(id);
   if (!first) return null;
   const until = Date.now() + timeoutMs;
   let last = first;
   for (;;) {
-    let record = readApproval(id);
+    let record = readUsable(id);
     // the file went (or is not a record any more) after this command read it: no answer is made of what is left
     if (!record) return { final: false, gone: true, record: last };
     last = record;
@@ -1130,7 +1136,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
     }
     if (!processesAlive(record)) {
       await sleep(100); // a worker that just wrote its RESULT may still be exiting
-      record = readApproval(id);
+      record = readUsable(id);
       if (!record) return { final: false, gone: true, record: last };
       if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
       if (processesAlive(record)) continue;
@@ -1140,7 +1146,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
       // decided from the record as stored under its lock: a final another process stored meanwhile stands, and a worker another command started meanwhile keeps the approval open
       const { record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)));
-      const stored = ended ?? readApproval(id);
+      const stored = ended ?? readUsable(id);
       if (!stored?.final) continue;
       return { final: true, code: stored.final.code, result: stored.final.result, record: stored };
     }

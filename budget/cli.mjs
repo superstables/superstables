@@ -750,7 +750,7 @@ function waitRecord() {
     // a record file that is there but cannot be decoded still names an approval: its existence is what the answer rests on
     const file = id === undefined ? { kind: "none" } : readApprovalFile(id);
     if (file.kind === "record") return file.record;
-    if (file.kind === "undecodable") return { id };
+    if (file.kind === "undecodable" || file.kind === "damaged") return { id };
   }
   return null;
 }
@@ -2387,7 +2387,7 @@ function waitUnknown(id, record, reason, next) {
 async function wait({ f }) {
   // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
   const file = readApprovalFile(f.id);
-  if (file.kind === "undecodable") {
+  if (file.kind === "undecodable" || file.kind === "damaged") {
     return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}) and the wallet's activity; do not run another owner command on this chain until the owner has checked what the approval did and looked at the file`);
   }
   let once = file.record ?? null;
@@ -2440,6 +2440,8 @@ async function wait({ f }) {
   let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs);
   if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
   if (r?.gone) return waitUnknown(f.id, r.record, `the approval's record disappeared from ${approvalsDir()} while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: r.record?.rail, chain: r.record?.chain })}`);
+  // this command read a record for the id (once): a read that now finds none says nothing about what that approval did
+  if (!r && once) return waitUnknown(f.id, once, `the approval's record disappeared from ${approvalsDir()} while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: once.rail, chain: once.chain })}`);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
     log(`superstables budget: ${reason}`);

@@ -4,7 +4,7 @@
 // never failed, because no field of the record proves nothing was sent. It writes nothing and touches no lock. An --id that names no
 // record, or is malformed, keeps the bad-input answer. No network: the refusal happens before anything is read from a site.
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -268,9 +268,17 @@ describe("wait --site that is not the site the approval was made on", () => {
   }, 60_000);
 
   // a record file that is there but is not a record: every way of reading it in wait counts it as an approval (unknown, exit 5), never as none
-  for (const [label, content] of [["false", "false"], ["0", "0"], ["an empty string", '""'], ["null", "null"], ["broken JSON", "{ not json"], ["an empty file", ""], ["an array", "[]"], ["a number", "42"], ["a string", '"x"'], ["an empty object", "{}"], ["an object with another id", JSON.stringify({ id: "oa-20261021999999-ffffffff", command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner" })]] as const) {
+  for (const [label, made] of [["false", "false"], ["0", "0"], ["an empty string", '""'], ["null", "null"], ["broken JSON", "{ not json"], ["an empty file", ""], ["an array", "[]"], ["a number", "42"], ["a string", '"x"'], ["an empty object", "{}"], ["an object with another id", JSON.stringify({ id: "oa-20261021999999-ffffffff", command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner" })],
+    // a record file that has its id and not what wait needs to answer from it: damaged, which wait answers like a file it cannot read
+    ["an object holding only the id", (id: string) => JSON.stringify({ id })],
+    ["a stored final that is true", (_id: string, base: any) => JSON.stringify({ ...base, final: true })],
+    ["a stored final that is a string", (_id: string, base: any) => JSON.stringify({ ...base, final: "yes" })],
+    ["a stored final with neither code nor result", (_id: string, base: any) => JSON.stringify({ ...base, final: {} })],
+    ["a stored final with a result and no code", (_id: string, base: any) => JSON.stringify({ ...base, final: { result: { ok: false, state: "failed" } } })],
+    ["a record with no command", (_id: string, base: any) => JSON.stringify({ ...base, command: undefined })]] as [string, string | ((id: string, base: any) => string)][]) {
     it(`a record file holding ${label}: plain wait, --shown, --abandon and a bad flag all answer unknown, the file untouched`, async () => {
       const { id, path } = record();
+      const content = typeof made === "function" ? made(id, JSON.parse(readFileSync(path, "utf8"))) : made;
       writeFileSync(path, content, { mode: 0o600 });
       const forms: string[][] = [["wait", "--id", id], ["wait", "--id", id, "--shown"], ["wait", "--id", id, "--shown", "--timeout", "0"], abandonArgs(id, MADE_ON), ["wait", "--id", id, "--abandon"], ["wait", "--id", id, "--shown", "--timeout", "999"], ["wait", "--id", id, "--shown", "--mainnet"]];
       for (const args of forms) {
@@ -282,6 +290,18 @@ describe("wait --site that is not the site the approval was made on", () => {
       }
     }, 120_000);
   }
+
+  it("a record that disappears between wait's first read and waitFor's first read is an approval it cannot read (unknown), not 'no approval'", async () => {
+    const { id, path } = record();
+    const hook = `--import ${resolve(ROOT, "test/helpers/remove-record-after-lock.mjs")}`;
+    const run = await budget(["wait", "--id", id, "--shown", "--timeout", "0"], "x\n", { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), REMOVE_RECORD_AFTER_READ: "1" });
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+    expect(run.result.reason).toMatch(/disappeared/);
+    expect(run.result.state).not.toBe("failed");
+    expect(existsSync(path)).toBe(false);
+    expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
+  }, 60_000);
 
   it("a worker's variable naming a finished approval (set by hand) does not silence wait: refusals answer, and a correct rerun returns the stored result", async () => {
     const stored = { ok: true, command: "setup", rail: "evm", chain: "base-sepolia", state: "ok", final: true, tx: { grant: `0x${"b2".repeat(32)}` }, next: "the budget is set" };

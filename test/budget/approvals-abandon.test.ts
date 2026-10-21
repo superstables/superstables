@@ -253,6 +253,42 @@ describe("waitFor when the record file goes", () => {
     }
   });
 
+  it("answers gone when a live record is rewritten mid-poll to a shape wait cannot answer from, and stores nothing", async () => {
+    const shapes: [string, (id: string, base: any) => unknown][] = [
+      ["an object holding only the id", (id) => ({ id })],
+      ["a final that is true", (_id, base) => ({ ...base, final: true })],
+      ["a final with no code", (_id, base) => ({ ...base, final: { result: { ok: false } } })],
+    ];
+    for (const [label, make] of shapes) {
+      const id = await open({}, liveWorker());
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      const base = JSON.parse(readFileSync(path, "utf8"));
+      const damaged = JSON.stringify(make(id, base));
+      setTimeout(() => writeFileSync(path, damaged), 400);
+      const answer = await approvals.waitFor(id, 5000, { poll: 100 });
+      expect(answer, label).toMatchObject({ final: false, gone: true });
+      expect(readFileSync(path, "utf8"), `${label}: nothing stored`).toBe(damaged);
+      killGroup(base.pid);
+    }
+  });
+
+  it("a record wait cannot answer from is damaged, not undecodable: readApproval still returns it (lock recovery reads partial records)", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    for (const content of [{ id }, { ...base, command: undefined }, { ...base, final: true }, { ...base, final: "yes" }, { ...base, final: {} }, { ...base, final: { code: 0 } }, { ...base, final: { code: 0.5, result: {} } }, { ...base, final: { result: { ok: false } } }]) {
+      writeFileSync(path, JSON.stringify(content));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("damaged");
+      expect(approvals.readApproval(id)?.id, "lock scans still see the approval").toBe(id);
+    }
+    // a whole record, with or without a stored { code, result }, stays a record
+    for (const content of [base, { ...base, final: { code: 3, result: { ok: false, state: "refused_precheck" } } }]) {
+      writeFileSync(path, JSON.stringify(content));
+      expect(approvals.readApprovalFile(id).kind).toBe("record");
+    }
+    killGroup(base.pid);
+  });
+
   it("readApprovalFile tells a missing file, a file that is not a record, and a record apart", async () => {
     const id = await open({}, liveWorker());
     const path = join(home, "budget", "approvals", `${id}.json`);
