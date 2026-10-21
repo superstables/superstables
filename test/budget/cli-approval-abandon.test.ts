@@ -57,10 +57,13 @@ function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?
     else {
       let seen = "";
       let typed = false;
+      const answer = () => { if (!typed) { typed = true; beforeInput(); child.stdin.end(terminal ?? ""); } };
       child.stderr.on("data", (c) => {
         seen += String(c);
-        if (!typed && /abandon exactly:/.test(seen)) { typed = true; beforeInput(); child.stdin.end(terminal ?? ""); }
+        if (/abandon exactly:/.test(seen)) answer();
       });
+      // a prompt that never comes must fail the test quickly, not hold stdin open until the test's own timeout
+      setTimeout(() => { if (!typed) child.stdin.end(""); }, 30_000).unref();
     }
     let stdout = "";
     let stderr = "";
@@ -426,7 +429,7 @@ describe("wait --abandon on a background owner approval", () => {
     } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } rmSync(join(approvals(), `${id}.json.lock`), { force: true }); }
   }, 120_000);
 
-  it("the record disappears between the first read and the locked give-up: unknown, not failed, nothing changed", async () => {
+  it("the record disappears between the first read and the locked give-up: unknown, not failed, and no give-up stored", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
     await endEveryProcess(id);
@@ -435,12 +438,32 @@ describe("wait --abandon on a background owner approval", () => {
     expect(run.code, run.stderr).toBe(5);
     expect(run.result).toMatchObject({ command: "setup", rail: "evm", chain: "base-sepolia", id, state: "unknown", final: false });
     expect(run.result.reason).toMatch(/record disappeared/);
-    expect(run.result.reason).toMatch(/changed nothing/);
+    expect(run.result.reason).toMatch(/stored no give-up/);
+    expect(run.result.reason).toMatch(/processes may have been stopped/);
     expect(run.result.reason).toMatch(/whether the approval sent anything is unknown/);
     expect(run.result.next).toMatch(/which home/);
     expect(run.result.next).toMatch(/wallet's activity/);
     expect(run.result.next).toMatch(/superstables budget status --rail evm/);
     expect(existsSync(path)).toBe(false);
+  }, 120_000);
+
+  it("the approval ends first, and its record disappears right after the give-up read it: the result that was read is answered, not 'no such approval'", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const path = join(approvals(), `${id}.json`);
+    const stored = { ok: false, command: "setup", rail: "evm", chain: "base-sepolia", id, state: "unknown", final: true, reason: "the worker could not tell whether the owner's wallet sent it", next: "read the chain: superstables budget status --rail evm" };
+    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/remove-record-after-lock.mjs")).href}`;
+    const run = await budget(abandonArgs(id), { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), REMOVE_RECORD_AFTER_LOCK: "1" }, typed(id), () => {
+      // the worker's own result lands before the give-up reads the record under its lock
+      const r = JSON.parse(readFileSync(path, "utf8"));
+      writeFileSync(path, JSON.stringify({ ...r, state: "final", final: { code: 5, result: stored }, hosted: { ...r.hosted, token: undefined } }, null, 2) + "\n");
+    });
+    expect(existsSync(path), "the hook removed the record after the locked read").toBe(false);
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ state: "unknown", final: true, id, reason: stored.reason });
+    expect(run.result.state).not.toBe("failed");
+    expect(run.stderr).not.toMatch(/no owner approval with id/);
   }, 120_000);
 
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
