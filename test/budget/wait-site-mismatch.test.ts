@@ -1,6 +1,6 @@
 // `wait --site` names the site an approval was made on. Another site is a mistake in the command, and says nothing about what the
-// approval did: for an approval that may have sent, the answer is unknown (exit 5) with the fix to the flag, never failed. One that
-// cannot have sent keeps the bad-input answer. No network: the refusal happens before anything is read from a site.
+// approval did: for every approval with a request recorded on a site the answer is unknown (exit 5) with the fix to the flag, never
+// failed, because no field of the record proves nothing was sent. No network: the refusal happens before anything is read from a site.
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -83,18 +83,24 @@ describe("wait --site that is not the site the approval was made on", () => {
     }, 60_000);
   }
 
-  it("an approval that cannot have sent (it has a result, and its wallet step never started) keeps the bad-input answer", async () => {
-    const { id, path } = record({ state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });
-    const before = readFileSync(path, "utf8");
-    for (const args of [waitArgs(id, OTHER), abandonArgs(id, OTHER)]) {
-      const run = await budget(args);
-      expect(run.code, `${args.join(" ")}: ${run.stderr}`).toBe(2);
-      expect(run.result).toMatchObject({ command: "wait", state: "failed" });
-      expect(run.result.reason).toMatch(/not the site this approval was made on/);
-      expect(run.result.next).toMatch(/fix the command/);
-    }
-    expect(readFileSync(path, "utf8")).toBe(before);
-  }, 60_000);
+  for (const [what, over] of [
+    ["a stored pre-send refusal", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    // the shapes a reviewer found where a stored refusal is not proof that nothing was sent
+    ["an owner-mismatch refusal that names the site's transaction hashes only in its reason", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "that account's wallet reported grant 0xabc and fund 0xdef" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    ["a buy-once refusal followed by payment evidence in its record", { command: "buy-once", state: "final", seen: { hashes: ["0xabc"], paid: false }, final: { code: 3, result: { ok: false, command: "buy-once", state: "refused_precheck", paid: false, tx: {}, final: true } }, hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: undefined } }],
+  ] as const) {
+    it(`${what}: also unknown, not failed (a stored result is never proof that nothing was sent)`, async () => {
+      const { id, path } = record(over);
+      const before = readFileSync(path, "utf8");
+      for (const args of [waitArgs(id, OTHER), abandonArgs(id, OTHER)]) {
+        const run = await budget(args);
+        expect(run.code, `${args.join(" ")}: ${run.stderr}`).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.result.next).toContain(`--site ${MADE_ON}`);
+      }
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }, 60_000);
+  }
 
   it("the site the approval was made on is accepted: no site refusal", async () => {
     const { id } = record({ state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });

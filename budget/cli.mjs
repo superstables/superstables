@@ -2351,33 +2351,18 @@ async function abandonOwnerApproval(record, f) {
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
-/**
- * Whether an approval may have sent, from its record alone: its wallet step started or the page log says the wallet was asked, a hosted
- * request is recorded and has no result, or it has a result that is not a refusal made before anything could be sent. The owner's
- * wallet sends through the site on a hosted approval, so `sending` alone is not the test. Only a refusal before a send (state
- * refused_precheck, no transaction) is known not to have sent.
- */
-function approvalMayHaveSent(rec) {
-  if (recordMayHaveSent(rec)) return true;
-  if (!rec.final) return Boolean(rec.hosted);
-  const r = rec.final.result;
-  return !(r?.state === "refused_precheck" && !carriesTx(r.tx));
-}
-
 async function wait({ f }) {
   let once = readApproval(f.id);
   let endedRecord = null;
   // --site names the site the approval was made on: another one is a mistake, not a different request
   const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) {
+    // An approval with a request recorded on a site may have sent: the owner's wallet sends through that site, and no field of the record,
+    // a stored result included, proves that nothing left (a refusal can be followed by evidence of a send, or name the transactions only
+    // in its reason). So a mistaken flag is never answered failed, which reads as "nothing was sent". Unknown, with the fix to the flag.
     const fix = `use --site ${madeOn}, or leave --site out`;
-    // An approval that may have sent (its wallet step started, or a request on the site is recorded and has no result) is never answered failed
-    // for a mistaken flag: the refusal says nothing about what the approval did. Unknown, with the fix to the flag.
-    if (approvalMayHaveSent(once)) {
-      log(`superstables budget: --site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed`);
-      return emit(5, { command: "wait", rail: once.rail, chain: once.chain, state: "unknown", final: false, id: f.id, next: `${fix}. Run superstables budget wait --id ${f.id} --shown again with it; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `--site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed, and whether the approval sent anything is unknown` });
-    }
-    return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): ${fix}`);
+    log(`superstables budget: --site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed`);
+    return emit(5, { command: "wait", rail: once.rail, chain: once.chain, state: "unknown", final: false, id: f.id, next: `${fix}. Run superstables budget wait --id ${f.id} --shown again with it; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `--site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed, and whether the approval sent anything is unknown` });
   }
   // an owner approval that ran in the background and has no result: the owner gives it up (one that ended is answered as wait does)
   if (f.abandon && once && OWNER_COMMANDS.has(once.command) && !once.foreground && !once.final) {
