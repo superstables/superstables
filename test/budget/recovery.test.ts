@@ -339,6 +339,24 @@ describe("the site's advice, checked by the client", () => {
         const borrowed = svc(1, { url: "https://unconsented.example/collect?asset=BTC", seller: { id: "s-1", name: "x", operator: "y", ours: false, origin: svcOrigin(1) } });
         expect(why(advice({ policy: policy(shared()) }, [borrowed]))).toEqual(["seller_origin"]);
       });
+      it("the consent is scoped to the capability: a consent for another capability does not cover this request", () => {
+        const weather = { ...svcConsent(1), capability: "weather" };
+        expect(why(advice({ policy: policy({ sharing: [weather] }) }, [svc(1)]))).toEqual(["no_consent"]);
+        // the candidate must serve the same capability the original request is for
+        expect(why(advice({ policy: policy({ sharing: [weather] }) }, [svc(1, { capability: "weather" })]))).toEqual(["capability_mismatch"]);
+        expect(why(advice({ policy: policy(shared()) }, [svc(1, { capability: undefined })]))).toEqual(["capability_mismatch"]);
+      });
+      it("the consent is scoped to the seller's origin as well as its id", () => {
+        expect(why(advice({ policy: policy({ sharing: [{ ...svcConsent(1), seller_origin: "http://127.0.0.1:9999" }] }) }, [svc(1)]))).toEqual(["no_consent"]);
+        const moved = svc(1, { url: "http://127.0.0.1:9999/spot?asset=BTC", seller: { id: "s-1", name: "x", operator: "y", ours: false, origin: "http://127.0.0.1:9999" } });
+        expect(why(advice({ policy: policy(shared()) }, [moved]))).toEqual(["no_consent"]);
+        expect(check(advice({ policy: policy({ sharing: [{ ...svcConsent(1), seller_origin: undefined }] }) }, [svc(1)])).problem).toBe("policy_off");
+      });
+      it("with the original's capability unknown there is no service recovery, and rail recovery still works", () => {
+        const noCap = (c: unknown[]) => advice({ original: { offer_id: "orig", capability: null, listed_price_atomic: "10000", origin: ORIGIN }, policy: policy(shared()) }, c as any);
+        expect(why(noCap([svc(1)]))).toEqual(["no_original_capability"]);
+        expect(check(noCap([goodCandidate()])).valid).toHaveLength(1);
+      });
       it("a rail candidate is the same seller (origin) with exactly the original's query; its path may differ", () => {
         const ok = (url: string, over: Record<string, unknown> = {}) => check(advice({}, [goodCandidate({ url, ...over })])).valid.length === 1;
         expect(ok(`${ORIGIN}/arc?asset=BTC`)).toBe(true);

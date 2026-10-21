@@ -249,9 +249,9 @@ function policyOf(p) {
   const sharing = [];
   for (const s of p.sharing) {
     if (!isObj(s)) return null;
-    const consent = str(s.consent_id), seller = str(s.seller_id), capability = str(s.capability);
-    if (!consent || !seller || !capability) return null;
-    sharing.push({ capability, seller_id: seller, consent_id: consent });
+    const consent = str(s.consent_id), seller = str(s.seller_id), capability = str(s.capability), origin = str(s.seller_origin, 300);
+    if (!consent || !seller || !capability || !origin) return null;
+    sharing.push({ capability, seller_id: seller, seller_origin: origin, consent_id: consent });
   }
   return { version: Number.isInteger(p.version) ? p.version : null, rail: p.rail === true, service: p.service === true, maxOffers, marginBps: margin, allowedChains: p.allowed_chains, sharing };
 }
@@ -321,6 +321,7 @@ function validate(advice, ctx) {
   if (orig.origin !== undefined && orig.origin !== originalUrl.origin) return { ok: false, problem: "unparsable" };
   if (orig.listed_price_atomic === null || orig.listed_price_atomic === undefined) return { ok: false, problem: "no_original_price" };
   if (typeof orig.listed_price_atomic !== "string" || !/^\d{1,18}$/.test(orig.listed_price_atomic) || BigInt(orig.listed_price_atomic) === 0n) return { ok: false, problem: "unparsable" };
+  const originalCapability = str(orig.capability, 100);
   const known = BigInt(orig.listed_price_atomic);
   const marginCap = (known * BigInt(10_000 + policy.marginBps)) / 10_000n;
   const valid = [];
@@ -377,14 +378,18 @@ function validate(advice, ctx) {
     let consent = null;
     if (bound.class === "service") {
       // the destination must be the seller the site names, serve exactly the parameters it lists, and carry only values of the original request
+      // INVARIANT 4: no service recovery for a request whose capability is not known
+      if (originalCapability === null) return skip("no_original_capability");
       if (sellerOrigin === null || target.origin !== sellerOrigin) return skip("seller_origin");
+      if (str(raw.capability, 100) !== originalCapability) return skip("capability_mismatch");
       if (!bound.paramsExact) return skip("params_not_exact");
       const fromOriginal = new Set([...originalUrl.searchParams.values()]);
       if (!Object.values(params).every((v) => fromOriginal.has(v))) return skip("param_not_from_original");
       const d = raw.disclosure;
       consent = isObj(d) && d.allowed === true ? str(d.consent_id, 200) : null;
       if (!consent) return skip("disclosure_not_allowed");
-      if (!policy.sharing.some((s) => s.consent_id === consent && s.seller_id === sellerId)) return skip("no_consent");
+      // the consent must match on all four: the capability asked for, the seller, the origin it serves from, the consent itself
+      if (!policy.sharing.some((s) => s.capability === originalCapability && s.seller_id === sellerId && s.seller_origin === sellerOrigin && s.consent_id === consent)) return skip("no_consent");
     }
     valid.push({
       offer_id: offer, kind: bound.class, rail: there.rail, chain, url, sellerId,
