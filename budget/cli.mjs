@@ -1627,7 +1627,36 @@ async function recoveryFor(f, ctx, rr) {
   });
 }
 
+
+/**
+ * A rerun of an op whose order auto recovery took over. The original is never bought again; the answer is the candidate's
+ * (its own journal, read with reconcile), or, for a switch that signed nothing, carried on while its advice still holds. A record
+ * that is missing or unreadable leaves the order unknown, never unpaid: the order may have been paid on another op.
+ */
+async function buyRecovered({ f, ctx, record }) {
+  ctx.op = f.op;
+  const lock = lockOp(opsDir(f.rail, f.chain), f.op);
+  if (!lock.ok) return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f.op, f.rail, f.chain), reason: "op_in_progress" });
+  if (!record || record.unreadable) {
+    const reason = "auto recovery moved this order, and its record cannot be read: the order may have been paid on another operation, so its outcome is unknown";
+    log(`superstables budget: ${reason}. Not paying again.`);
+    return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `the owner checks ${join(STATE_DIR, "recovery")} and the agent's payments on chain; never pay again for this op`, reason });
+  }
+  const again = await recoveryFor(f, ctx, null);
+  if (again?.kind === "result") return emit(again.code, again.fields);
+  const reason = "auto recovery already handled this order and nothing was paid on it. Buy again with a new --op";
+  log(`superstables budget: ${reason}.`);
+  return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
+}
+
 async function buy({ f, ctx }) {
+  // An order that auto recovery took over belongs to its recovery record, and the answer comes from the candidate's journal. This
+  // runs BEFORE the original's own setup, key and retirement refusals: those must never make a recovered order look unpaid.
+  if (f.op && recoverable(f)) {
+    const record = readRecord(f.rail, f.chain, f.op);
+    const marked = readJournal(f)?.supersededBy;
+    if (record || marked) return buyRecovered({ f, ctx, record });
+  }
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
   const retired = retiredAgentProblem(f) || await retiredKeyFileProblem(f);
@@ -1657,15 +1686,6 @@ async function buy({ f, ctx }) {
   const now = journalAnswer(f, ctx);
   if (now) return now();
   const journalBefore = journalPresent(f);
-  // An order that auto recovery already took over (a record exists) is never bought on its original seller again: what the
-  // recovery journaled decides, and only a switch that signed nothing is carried on.
-  if (recoverable(f) && readRecord(f.rail, f.chain, f.op)) {
-    const again = await recoveryFor(f, ctx, null);
-    if (again?.kind === "result") return emit(again.code, again.fields);
-    const reason = "auto recovery already handled this order and nothing was paid. Buy again with a new --op";
-    log(`superstables budget: ${reason}.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
-  }
   const running = run(railCommand("buy", f));
   try { lock.holdAlso(currentChild); }
   catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }

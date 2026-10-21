@@ -363,6 +363,27 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(site.adviceCalls).toHaveLength(1);
   }, 240_000);
 
+  it("a problem with the original's own setup never makes a recovered order look unpaid", async () => {
+    const { r, arcSeller } = await recovered((g) => [arcCandidate(g)]);
+    expect(r.code, all(r)).toBe(0);
+    // the original chain's setup and the original agent key are gone; the candidate's journal still says settled
+    rmSync(join(home, "budget", "public", "evm-base-sepolia.env"));
+    const again = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
+    expect(again.result, all(again)).toMatchObject({ op: "rec-1-r2", chain: "arc-testnet", state: "settled", paid: true });
+    expect(again.result.recovery.switched).toBe(true);
+    rmSync(join(home, "keys", "budget", "evm-agent.env"));
+    const noKey = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
+    expect(noKey.result.paid).not.toBe(false);
+    expect(noKey.result.state).not.toBe("refused_precheck");
+    expect(noKey.result.reason ?? "").not.toMatch(/Nothing was signed or paid/);
+    expect(arcSeller.settled).toHaveLength(1);
+    // the record gone but the original still marked: unknown, never unpaid
+    rmSync(join(recordsDir(), "evm-base-sepolia-rec-1.json"));
+    const lost = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
+    expect(lost.code).toBe(5);
+    expect(lost.result).toMatchObject({ state: "unknown", paid: null });
+  }, 300_000);
+
   it("the original op is frozen at the rail: a direct rail script, run by hand, never pays it after the order moved", async () => {
     const { r, site } = await recovered((g) => [arcCandidate(g)]);
     expect(r.code, all(r)).toBe(0);
