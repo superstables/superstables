@@ -155,7 +155,7 @@ const buy = (url: string, o: { op?: string; max?: string; rail?: string; chain?:
   budget(["buy", "--rail", o.rail ?? "evm", ...(o.rail === "solana" ? [] : ["--chain", o.chain ?? "base-sepolia"]), "--url", url, "--max", o.max ?? "0.05", "--op", o.op ?? "rec-1", ...(o.extra ?? [])], { onSpawn: o.onSpawn });
 
 const arcCandidate = (gate: string, over: Record<string, unknown> = {}) => ({
-  kind: "rail", offer_id: "arc-1", seller: { id: "seller-1", name: "Spot prices", operator: "demo", ours: true }, url: `${gate}/arc`, chain: "arc-testnet", asset: ARC_USDC,
+  kind: "rail", offer_id: "arc-1", seller: { id: "seller-1", name: "Spot prices", operator: "demo", ours: true, origin: gate }, url: `${gate}/arc`, params: {}, capability: "spot-price", chain: "arc-testnet", asset: ARC_USDC,
   listed_price_atomic: "10000", pricing_family: "test:USDC:6", disclosure: { required: false, allowed: false, consent_id: null, fields: [] },
   rank: { tier: "exact", health: "5/5", why: "the same seller on Arc" }, ...over,
 });
@@ -197,7 +197,7 @@ describe("retry of the seller's terms, as a process", () => {
   it("reads an unreadable seller three times, 250 ms then 1 s apart, and then refuses as before: nothing signed, no site involved", async () => {
     const gate = await startGate({ base: "503" });
     setUpEvm(null);
-    const r = await buy(`${gate.url}/base`);
+    const r = await buy(`${gate.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, rail: "evm", chain: "base-sepolia" });
     expect(r.result.recovery).toBeUndefined();
@@ -212,14 +212,14 @@ describe("retry of the seller's terms, as a process", () => {
   it("waits for the seller's Retry-After, and reads a garbled 402 three times too", async () => {
     const slow = await startGate({ base: "retry-after" });
     setUpEvm(null);
-    const r = await buy(`${slow.url}/base`);
+    const r = await buy(`${slow.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(slow.hits).toHaveLength(3);
     expect(slow.hits[1]!.at - slow.hits[0]!.at).toBeGreaterThanOrEqual(1990);
     expect(slow.hits[2]!.at - slow.hits[1]!.at).toBeGreaterThanOrEqual(1990);
 
     const garbled = await startGate({ base: "garbage" });
-    const g = await buy(`${garbled.url}/base`, { op: "rec-garbled" });
+    const g = await buy(`${garbled.url}/spot`, { op: "rec-garbled" });
     expect(g.code, all(g)).toBe(3);
     expect(garbled.hits).toHaveLength(3);
     expect(base.sentRaw).toEqual([]);
@@ -251,7 +251,7 @@ describe("a site that does not take part: the answer is exactly what it is today
   const without = async () => {
     const gate = await startGate({ base: "503" });
     setUpEvm(null);
-    return plain((await buy(`${gate.url}/base`)).result);
+    return plain((await buy(`${gate.url}/spot`)).result);
   };
   it.each([
     ["does not list the feature", { features: [], advice: adviceFor([]) }],
@@ -265,7 +265,7 @@ describe("a site that does not take part: the answer is exactly what it is today
     const site = await startSite(over as any);
     const gate = await startGate({ base: "503" });
     setUpEvm(site.url);
-    const r = await buy(`${gate.url}/base`);
+    const r = await buy(`${gate.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(plain(r.result)).toEqual(baseline);
     expect(r.result.recovery).toBeUndefined();
@@ -282,7 +282,7 @@ describe("a site that does not take part: the answer is exactly what it is today
     const site = await startSite({ advice: adviceFor([]) });
     const gate = await startGate({ base: "503" });
     setUpEvm(null);
-    const r = await buy(`${gate.url}/base`);
+    const r = await buy(`${gate.url}/spot`);
     expect(r.code).toBe(3);
     expect(site.calls).toEqual([]);
   }, 60_000);
@@ -295,7 +295,7 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const gate = await startGate({ base: "503", arcSeller });
     const site = await startSite({ advice: (req) => adviceFor(candidates(gate.url), policy)(req) });
     setUpEvm(site.url);
-    const r = await buy(`${gate.url}/base`, { op: o.op });
+    const r = await buy(`${gate.url}/spot`, { op: o.op });
     return { r, gate, site, arcSeller };
   }
 
@@ -315,14 +315,14 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(r.result.recovery.why).toContain("server error after 3 reads");
     expect(JSON.stringify(r.result)).not.toMatch(/owner (approved|agreed)|approved by the owner/i);
     // the original seller was read three times, then left alone
-    expect(gate.hits.filter((h) => h.path === "/base")).toHaveLength(3);
+    expect(gate.hits.filter((h) => h.path === "/spot")).toHaveLength(3);
     // the advice request: signed by the agent key for this site, the contract's fields, and only chains this client found funded
     expect(site.adviceCalls).toHaveLength(1);
     const ask = site.adviceCalls[0]!;
     expect(ask.signed).toBe(true);
     expect(ask.body).toMatchObject({
-      version: 1, original: { url: `${gate.url}/base`, chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", amount_atomic: "50000" },
-      failure: { stage: "seller_error", attempts_used: 3 }, tried: [{ url: `${gate.url}/base`, chain: "base-sepolia" }],
+      version: 1, original: { url: `${gate.url}/spot`, chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", amount_atomic: "50000" },
+      failure: { stage: "seller_error", attempts_used: 3 }, tried: [{ url: `${gate.url}/spot`, chain: "base-sepolia" }],
     });
     expect(ask.body.funded_chains.sort()).toEqual(["arc-testnet", "base-sepolia"]);
     // reported after the fact, signed, with the same order and attempt
@@ -340,7 +340,7 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const { r, gate, site, arcSeller } = await recovered((g) => [arcCandidate(g)]);
     expect(r.code, all(r)).toBe(0);
     const hitsBefore = gate.hits.length;
-    const again = await buy(`${gate.url}/base`, { op: "rec-1" });
+    const again = await buy(`${gate.url}/spot`, { op: "rec-1" });
     expect(again.result).toMatchObject({ rail: "evm", chain: "arc-testnet", op: "rec-1-r2", state: "settled" });
     expect(again.result.recovery.switched).toBe(true);
     expect(gate.hits).toHaveLength(hitsBefore);
@@ -384,8 +384,8 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const bad = (g: string) => [
       arcCandidate(g, { offer_id: "over-margin", listed_price_atomic: "60001" }),
       arcCandidate(g, { offer_id: "family", pricing_family: "test:USDG:6" }),
-      arcCandidate(g, { offer_id: "other-seller", kind: "service", url: "http://127.0.0.1:9/elsewhere", disclosure: { required: true, allowed: false, consent_id: null, fields: [] } }),
-      arcCandidate(g, { offer_id: "no-consent", kind: "service", url: "http://127.0.0.1:9/elsewhere", disclosure: { required: true, allowed: true, consent_id: "c-x", fields: ["asset"] } }),
+      arcCandidate(g, { offer_id: "other-seller", kind: "service", url: "http://127.0.0.1:9/elsewhere", params: {}, seller: { id: "s-x", name: "x", operator: "d", ours: false, origin: "http://127.0.0.1:9" }, disclosure: { required: true, allowed: false, consent_id: null, fields: [] } }),
+      arcCandidate(g, { offer_id: "no-consent", kind: "service", url: "http://127.0.0.1:9/elsewhere", params: {}, seller: { id: "s-x", name: "x", operator: "d", ours: false, origin: "http://127.0.0.1:9" }, disclosure: { required: true, allowed: true, consent_id: "c-x", fields: ["asset"] } }),
       arcCandidate(g, { offer_id: "unfunded", chain: "devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" }),
       "garbage",
     ];
@@ -409,7 +409,7 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const site = await startSite({ advice: adviceFor([arcCandidate(gate.url)]) });
     setUpEvm(site.url);
     arc.setAllowance(owner.address, agent.address, 0n);
-    const unfunded = await buy(`${gate.url}/base`, { op: "rec-unfunded" });
+    const unfunded = await buy(`${gate.url}/spot`, { op: "rec-unfunded" });
     expect(unfunded.code, all(unfunded)).toBe(3);
     expect(unfunded.result.recovery.skipped).toEqual([{ offer_id: "arc-1", reason: "not_funded" }]);
     expect(site.adviceCalls[0]!.body.funded_chains).toEqual(["base-sepolia"]);
@@ -418,13 +418,13 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     // max_offers 1: the original is the only offer
     arc.setAllowance(owner.address, agent.address, usdc("1"));
     site.advice = adviceFor([arcCandidate(gate.url)], { max_offers: 1 });
-    const one = await buy(`${gate.url}/base`, { op: "rec-one" });
+    const one = await buy(`${gate.url}/spot`, { op: "rec-one" });
     expect(one.code, all(one)).toBe(3);
     expect(one.result.recovery.skipped).toEqual([{ offer_id: "arc-1", reason: "over_max_offers" }]);
 
     // expired advice
     site.advice = adviceFor([arcCandidate(gate.url)], {}, { expires_at: new Date(Date.now() - 1000).toISOString() });
-    const old = await buy(`${gate.url}/base`, { op: "rec-old" });
+    const old = await buy(`${gate.url}/spot`, { op: "rec-old" });
     expect(old.code, all(old)).toBe(3);
     expect(old.result.recovery).toBeUndefined();
     expect(arcSeller.creds).toEqual([]);
@@ -437,7 +437,7 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const gate = await startGate({ base: "503", arcSeller });
     const site = await startSite({ advice: () => ({ status: 200, body: "<html>not json</html>" }) });
     setUpEvm(site.url);
-    const r = await buy(`${gate.url}/base`);
+    const r = await buy(`${gate.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(r.result.recovery).toBeUndefined();
     expect(arcSeller.creds).toEqual([]);
@@ -498,27 +498,27 @@ describe("a crash in the middle of a switch", () => {
     const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
     setUpEvm(site.url);
 
-    const first = await buy(`${gate}/base`, { op: "rec-crash", onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
+    const first = await buy(`${gate}/spot`, { op: "rec-crash", onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
     expect(first.result, "the first run was killed before it could answer").toBeNull();
     const rec = JSON.parse(readFileSync(join(recordsDir(), "evm-base-sepolia-rec-crash.json"), "utf8"));
     expect(rec.attempts).toHaveLength(1);
     expect(rec.attempts[0]).toMatchObject({ attempt_no: 2, offer_id: "arc-1", state: "journaled", op: "rec-crash-r2" });
     expect(arcSeller.creds).toEqual([]);
     expect(site.adviceCalls).toHaveLength(1);
-    const baseReads = hits.filter((h) => h === "/base").length;
+    const baseReads = hits.filter((h) => h === "/spot").length;
 
     // the rerun: no new advice, the original seller is not read, the switch is carried on and pays once
-    const again = await buy(`${gate}/base`, { op: "rec-crash" });
+    const again = await buy(`${gate}/spot`, { op: "rec-crash" });
     expect(again.code, all(again)).toBe(0);
     expect(again.result).toMatchObject({ chain: "arc-testnet", op: "rec-crash-r2", state: "settled", paid: true });
     expect(again.result.recovery).toMatchObject({ switched: true, order_ref: rec.order_ref });
     expect(arcSeller.settled).toHaveLength(1);
     expect(site.adviceCalls).toHaveLength(1);
-    expect(hits.filter((h) => h === "/base")).toHaveLength(baseReads);
+    expect(hits.filter((h) => h === "/spot")).toHaveLength(baseReads);
     expect(base.sentRaw).toEqual([]);
 
     // and a third run answers from the candidate's journal without paying again
-    const third = await buy(`${gate}/base`, { op: "rec-crash" });
+    const third = await buy(`${gate}/spot`, { op: "rec-crash" });
     expect(third.result).toMatchObject({ chain: "arc-testnet", op: "rec-crash-r2" });
     expect(["settled", "unknown"]).toContain(third.result.state);
     expect(arcSeller.settled).toHaveLength(1);
@@ -531,11 +531,11 @@ describe("solana: the same retry, and a payment on another rail when the site ad
     cleanups.push(() => baseSeller.close());
     const down = await startGate({ base: "503" });
     const other = {
-      kind: "service", offer_id: "svc-1", seller: { id: "seller-2", name: "Other prices", operator: "demo", ours: false }, url: baseSeller.url, chain: "base-sepolia",
+      kind: "service", offer_id: "svc-1", capability: "spot-price", params: {}, seller: { id: "seller-2", name: "Other prices", operator: "demo", ours: false, origin: new URL(baseSeller.url).origin }, url: baseSeller.url, chain: "base-sepolia",
       asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", listed_price_atomic: "10000", pricing_family: "test:USDC:6",
       disclosure: { required: true, allowed: true, consent_id: "consent-1", fields: ["asset"] }, rank: { tier: "equivalent", health: "4/5", why: "an equivalent seller" },
     };
-    const site = await startSite({ advice: adviceFor([other], { sharing: [{ capability: "spot-price", seller_id: "seller-2", consent_id: "consent-1" }] }) });
+    const site = await startSite({ advice: adviceFor([other], { sharing: [{ capability: "spot-price", seller_id: "seller-2", seller_origin: new URL(baseSeller.url).origin, consent_id: "consent-1" }] }) });
     setUpSolana(site.url);
     setUpEvm(null, ["base-sepolia"]);
     const r = await buy(`${down.url}/sol`, { rail: "solana", op: "rec-sol" });
@@ -555,7 +555,7 @@ describe("solana: the same retry, and a payment on another rail when the site ad
     cleanups.push(() => baseSeller.close());
     const down = await startGate({ base: "503" });
     const other = {
-      kind: "service", offer_id: "svc-1", seller: { id: "seller-2", name: "Other prices", operator: "demo", ours: false }, url: baseSeller.url, chain: "base-sepolia",
+      kind: "service", offer_id: "svc-1", capability: "spot-price", params: {}, seller: { id: "seller-2", name: "Other prices", operator: "demo", ours: false, origin: new URL(baseSeller.url).origin }, url: baseSeller.url, chain: "base-sepolia",
       asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", listed_price_atomic: "10000", pricing_family: "test:USDC:6",
       disclosure: { required: true, allowed: true, consent_id: "consent-1", fields: ["asset"] }, rank: { tier: "equivalent", health: "4/5", why: "an equivalent seller" },
     };

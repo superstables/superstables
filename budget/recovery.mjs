@@ -257,6 +257,28 @@ function policyOf(p) {
 }
 
 /**
+ * Whether a candidate URL is the original request on another chain (a "rail" candidate) or a different request (a "service"
+ * candidate, which needs a consent). Rail: the same ORIGIN as the original (the same seller) and exactly the original's query
+ * (same names, same values, nothing extra, no duplicates); the path may differ, since a seller serves each chain at its own
+ * path, and a rail candidate has no fixed_params. Any difference in the query makes it a service candidate. Service: its query
+ * is exactly params plus fixed_params, once each, with no name in both.
+ */
+function bindCandidate(target, original, params, fixed) {
+  const entries = (u) => [...u.searchParams.entries()];
+  const sorted = (list) => [...list].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+  const query = sorted(entries(target));
+  const clean = target.hash === "" && target.username === "" && target.password === "";
+  const theirs = sorted(entries(original));
+  const railBound = clean && target.origin === original.origin && Object.keys(fixed).length === 0
+    && query.length === theirs.length && query.every((e, i) => e[0] === theirs[i][0] && e[1] === theirs[i][1]);
+  const names = [...Object.keys(params), ...Object.keys(fixed)];
+  const collide = Object.keys(fixed).some((k) => Object.hasOwn(params, k));
+  const expected = { ...params, ...fixed };
+  const paramsExact = clean && !collide && query.length === names.length && new Set(query.map(([k]) => k)).size === query.length && query.every(([k, v]) => Object.hasOwn(expected, k) && expected[k] === v);
+  return { class: railBound ? "rail" : "service", paramsExact };
+}
+
+/**
  * Checks the site's answer against every rule the client enforces on its own (invariants 2 to 6). `ctx`:
  *   now                ms; receivedAt  ms when the answer arrived
  *   original           { rail, chain, url, maxAtomic }  maxAtomic: the --max the caller gave, a ceiling and never the original price (the
@@ -317,7 +339,6 @@ function validate(advice, ctx) {
     if (ctx.hasBody) return skip("request_has_body");
     const kind = raw.kind;
     if (kind !== "rail" && kind !== "service") return skip("unparsable_candidate");
-    if (kind === "rail" ? !policy.rail : !policy.service) return skip("kind_not_enabled");
     const chain = str(raw.chain, 60);
     const url = str(raw.url, 2000);
     const asset = str(raw.asset, 100);
@@ -325,6 +346,11 @@ function validate(advice, ctx) {
     if (!chain || !url || !asset || listed === null || listed === 0n || !isObj(raw.seller)) return skip("unparsable_candidate");
     const sellerId = str(raw.seller.id, 200);
     if (!sellerId) return skip("unparsable_candidate");
+    const sellerOrigin = typeof raw.seller.origin === "string" ? raw.seller.origin : null;
+    const strMap = (m) => (isObj(m) && Object.values(m).every((v) => typeof v === "string") ? m : null);
+    const params = strMap(raw.params);
+    const fixed = raw.fixed_params === undefined ? {} : strMap(raw.fixed_params);
+    if (params === null || fixed === null) return skip("unparsable_candidate");
     const there = Object.hasOwn(RECOVERY_CHAINS, chain) ? RECOVERY_CHAINS[chain] : null;
     if (!there) return skip("unsupported_chain");
     // INVARIANT 3, same pricing family: the client's own table decides, and the site must agree with it
@@ -342,20 +368,28 @@ function validate(advice, ctx) {
     if (listed > marginCap) return skip("over_margin");
     if (listed > original.maxAtomic) return skip("over_max");
     if (listed > remaining) return skip("over_allowance");
-    // INVARIANT 4: another seller gets the request only with a consent the site names that the policy copy covers
-    const sameSeller = target.origin === originalUrl.origin;
-    if (kind === "rail" && !sameSeller) return skip("rail_changes_seller");
+    // INVARIANT 4: the destination is bound to the original request before anything is sent. The class of the candidate is worked
+    // out here from its URL, not taken from its label: a label that disagrees is refused.
+    const bound = bindCandidate(target, originalUrl, params, fixed);
+    if (kind === "rail" && bound.class !== "rail") return skip("rail_binding");
+    if (kind === "service" && bound.class === "rail") return skip("kind_mismatch");
+    if (bound.class === "rail" ? !policy.rail : !policy.service) return skip("kind_not_enabled");
     let consent = null;
-    if (!sameSeller) {
+    if (bound.class === "service") {
+      // the destination must be the seller the site names, serve exactly the parameters it lists, and carry only values of the original request
+      if (sellerOrigin === null || target.origin !== sellerOrigin) return skip("seller_origin");
+      if (!bound.paramsExact) return skip("params_not_exact");
+      const fromOriginal = new Set([...originalUrl.searchParams.values()]);
+      if (!Object.values(params).every((v) => fromOriginal.has(v))) return skip("param_not_from_original");
       const d = raw.disclosure;
       consent = isObj(d) && d.allowed === true ? str(d.consent_id, 200) : null;
       if (!consent) return skip("disclosure_not_allowed");
       if (!policy.sharing.some((s) => s.consent_id === consent && s.seller_id === sellerId)) return skip("no_consent");
     }
     valid.push({
-      offer_id: offer, kind, rail: there.rail, chain, url, sellerId,
-      sellerName: isObj(raw.seller) && typeof raw.seller.name === "string" ? oneLineText(raw.seller.name, 80) : null,
-      listedAtomic: listed, disclosed: !sameSeller, consentId: consent,
+      offer_id: offer, kind: bound.class, rail: there.rail, chain, url, sellerId,
+      fixedParams: fixed, sellerName: isObj(raw.seller) && typeof raw.seller.name === "string" ? oneLineText(raw.seller.name, 80) : null,
+      listedAtomic: listed, disclosed: bound.class === "service", consentId: consent, params,
       why: isObj(raw.rank) && typeof raw.rank.why === "string" ? oneLineText(raw.rank.why, 160) : "",
     });
   });
@@ -495,7 +529,7 @@ export async function recoverOrder(deps) {
       attempt_no: record.attempts.length + 2, offer_id: candidate.offer_id, advice_id: checked.advice_id, kind: candidate.kind,
       rail: candidate.rail, chain: candidate.chain, url: candidate.url, op: attemptOp(f.op, record.attempts.length + 2),
       seller_id: candidate.sellerId, seller_name: candidate.sellerName, listed_atomic: candidate.listedAtomic.toString(), ceiling_atomic: candidate.ceilingAtomic.toString(),
-      disclosed: candidate.disclosed, consent_id: candidate.consentId, why: candidate.why,
+      disclosed: candidate.disclosed, consent_id: candidate.consentId, params: candidate.params, fixed_params: candidate.fixedParams, why: candidate.why,
       journaledAt: new Date(now()).toISOString(), state: "journaled", outcome: null,
     };
     // INVARIANT 7: the switch is journaled, durably, BEFORE the new seller is contacted
@@ -562,7 +596,7 @@ function switchedFields(record, attempt, fields) {
     recovery: recoveryFact(record, attempt, {
       switched: true, kind: attempt.kind, why: `the first seller could not be paid: ${stageWords(record.failure.stage)} after ${record.failure.attempts_used} read${record.failure.attempts_used === 1 ? "" : "s"}`,
       paid_to: { host, rail: attempt.rail, chain: attempt.chain, ...(attempt.seller_name ? { seller_name: attempt.seller_name } : {}) },
-      disclosed: attempt.disclosed,
+      disclosed: attempt.disclosed, params: attempt.params ?? {}, fixed_params: attempt.fixed_params ?? {},
       note: `The agent switched on its own: it ${what}. The owner was not asked about this switch; it stayed inside the budget the owner granted on ${where}.`,
     }),
   };

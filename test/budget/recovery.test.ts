@@ -200,23 +200,31 @@ describe("invariant 1: only a journal that shows nothing signed lets an order mo
 
 const NOW = Date.parse("2026-10-21T12:00:00Z");
 const ORIGIN = "http://127.0.0.1:4001";
+const ORIG_URL = `${ORIGIN}/base?asset=BTC`;
+/** A different seller serving the same capability: its own origin, the request's asset and nothing else. */
+const svcOrigin = (n: number) => `http://127.0.0.1:${4100 + n}`;
+const svcConsent = (n: number) => ({ capability: "spot-price", seller_id: `s-${n}`, seller_origin: svcOrigin(n), consent_id: `c-${n}` });
+const svc = (n: number, over: Record<string, unknown> = {}) => goodCandidate({
+  kind: "service", offer_id: `o${n}`, capability: "spot-price", seller: { id: `s-${n}`, name: `Seller ${n}`, operator: "y", ours: false, origin: svcOrigin(n) },
+  url: `${svcOrigin(n)}/spot?asset=BTC`, params: { asset: "BTC" }, disclosure: { required: true, allowed: true, consent_id: `c-${n}`, fields: ["asset"] }, ...over,
+});
 const goodCandidate = (over: Record<string, unknown> = {}) => ({
-  kind: "rail", offer_id: "o1", seller: { id: "s-orig", name: "Spot", operator: "x", ours: true },
-  url: `${ORIGIN}/arc`, chain: "arc-testnet", asset: ARC_USDC, listed_price_atomic: "10000", pricing_family: "test:USDC:6",
+  kind: "rail", offer_id: "o1", capability: "spot-price", seller: { id: "s-orig", name: "Spot", operator: "x", ours: true, origin: ORIGIN },
+  url: `${ORIGIN}/arc?asset=BTC`, params: {}, chain: "arc-testnet", asset: ARC_USDC, listed_price_atomic: "10000", pricing_family: "test:USDC:6",
   disclosure: { required: false, allowed: false, consent_id: null, fields: [] }, rank: { tier: "exact", health: "3/3", why: "same seller on Arc" },
   ...over,
 });
 const policy = (over: Record<string, unknown> = {}) => ({
-  version: 7, enabled: true, rail: true, service: true, preventive: false, max_offers: 3, allowed_chains: ["base-sepolia", "arc-testnet", "devnet"], margin_bps: 2000, sharing: [], ...over,
+  version: 7, enabled: true, rail: true, service: true, preventive: false, max_offers: 3, allowed_chains: ["base-sepolia", "arc-testnet", "devnet"], margin_bps: 2000, sharing: [1, 2, 3, 4, 5].map(svcConsent), ...over,
 });
 const advice = (over: Record<string, unknown> = {}, candidates = [goodCandidate()]) => ({
   version: 1, advice_id: "adv-1", original: { offer_id: "orig", capability: "spot-price", listed_price_atomic: "10000", origin: ORIGIN }, expires_at: new Date(NOW + 100_000).toISOString(), policy: policy(), candidates, refusals: [], ...over,
 });
 const ctx = (over: Record<string, unknown> = {}) => ({
   now: NOW, receivedAt: NOW,
-  original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 50_000n },
+  original: { rail: "evm", chain: "base-sepolia", url: ORIG_URL, maxAtomic: 50_000n },
   funded: new Map<string, bigint>([["base-sepolia", 500_000n], ["arc-testnet", 500_000n], ["devnet", 500_000n]]),
-  tried: [{ url: `${ORIGIN}/base`, chain: "base-sepolia" }], alreadyOffered: 1, hasBody: false, ...over,
+  tried: [{ url: ORIG_URL, chain: "base-sepolia" }], alreadyOffered: 1, hasBody: false, ...over,
 });
 const check = (a: unknown, c = ctx()) => R.validateAdvice(a, c);
 const why = (a: unknown, c = ctx()) => check(a, c).skipped?.map((s: any) => s.reason);
@@ -248,7 +256,7 @@ describe("the site's advice, checked by the client", () => {
       expect(why(advice({ policy: policy({ margin_bps: 0 }) }, [goodCandidate({ listed_price_atomic: "10001" })]))).toEqual(["over_margin"]);
     });
     it("skips a price over the --max the caller gave, whatever the margin", () => {
-      const c = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 45_000n } });
+      const c = ctx({ original: { rail: "evm", chain: "base-sepolia", url: ORIG_URL, maxAtomic: 45_000n } });
       const a = (price: string) => advice({ original: { ...advice().original, listed_price_atomic: "40000" }, policy: policy({ margin_bps: 5000 }) }, [goodCandidate({ listed_price_atomic: price })]);
       expect(why(a("46000"), c)).toEqual(["over_max"]);
       expect(check(a("45000"), c).valid).toHaveLength(1);
@@ -262,7 +270,7 @@ describe("the site's advice, checked by the client", () => {
         expect(check(a)).toEqual({ ok: false, problem: "no_original_price" });
       }
       // --max 1 USDC and a 0.9 candidate over a 0.01 original: the margin, not the --max, decides
-      const big = ctx({ original: { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, maxAtomic: 1_000_000n } });
+      const big = ctx({ original: { rail: "evm", chain: "base-sepolia", url: ORIG_URL, maxAtomic: 1_000_000n } });
       expect(why(advice({ policy: policy({ margin_bps: 0 }) }, [goodCandidate({ listed_price_atomic: "900000" })]), big)).toEqual(["over_margin"]);
       expect(check(advice({}, [goodCandidate({ listed_price_atomic: "12001" })]), big).skipped).toEqual([{ offer_id: "o1", reason: "over_margin" }]);
       for (const bad of ["0", "ten", 5]) expect(check(advice({ original: { ...advice().original, listed_price_atomic: bad } })).problem).toBe("unparsable");
@@ -275,13 +283,13 @@ describe("the site's advice, checked by the client", () => {
       expect(why(advice({}, [goodCandidate({ chain: "moderato", pricing_family: "test:pathUSD:6" })]))).toEqual(["unsupported_chain"]);
       expect(why(advice({}, [goodCandidate({ chain: "base" })]))).toEqual(["unsupported_chain"]);
       // an original whose own family is not recoverable never mixes
-      expect(why(advice(), ctx({ original: { rail: "evm", chain: "robinhood-testnet", url: `${ORIGIN}/x`, amountAtomic: 1n, maxAtomic: 5n } }))).toEqual(["pricing_family"]);
+      expect(why(advice(), ctx({ original: { rail: "evm", chain: "robinhood-testnet", url: `${ORIGIN}/x`, maxAtomic: 5n } }))).toEqual(["pricing_family"]);
     });
     it("skips a candidate whose asset is not the chain's token", () => {
       expect(why(advice({}, [goodCandidate({ asset: BASE_USDC })]))).toEqual(["wrong_asset"]);
     });
     it("a Solana candidate for an evm original is the same family, with Solana's own mint", () => {
-      const sol = goodCandidate({ chain: "devnet", asset: SOL_USDC, url: `${ORIGIN}/sol` });
+      const sol = goodCandidate({ chain: "devnet", asset: SOL_USDC, url: `${ORIGIN}/sol?asset=BTC`, params: {} });
       expect(check(advice({}, [sol])).valid[0]).toMatchObject({ rail: "solana", chain: "devnet" });
       expect(why(advice({}, [{ ...sol, asset: ARC_USDC }]))).toEqual(["wrong_asset"]);
     });
@@ -290,39 +298,91 @@ describe("the site's advice, checked by the client", () => {
     });
   });
 
-  describe("invariant 4: another seller gets the request only with a consent the policy covers", () => {
-    const other = (over: Record<string, unknown> = {}) => goodCandidate({
-      kind: "service", offer_id: "o9", seller: { id: "s-other", name: "Other", operator: "y", ours: false }, url: "http://127.0.0.1:4002/spot?asset=BTC",
-      disclosure: { required: true, allowed: true, consent_id: "c-1", fields: ["asset"] }, ...over,
-    });
-    const shared = { sharing: [{ capability: "spot-price", seller_id: "s-other", consent_id: "c-1" }] };
+  describe("invariant 4: another seller gets the request only with a consent the policy covers, and only the request's own values", () => {
+    const other = svc;
+    const shared = (n = 1) => ({ sharing: [svcConsent(n)] });
     it("accepts another seller with disclosure allowed, a consent id, and a policy copy that covers it", () => {
-      const r = check(advice({ policy: policy(shared) }, [other()]));
-      expect(r.valid[0]).toMatchObject({ offer_id: "o9", disclosed: true, consentId: "c-1" });
+      const r = check(advice({ policy: policy(shared()) }, [other(1)]));
+      expect(r.valid[0]).toMatchObject({ offer_id: "o1", kind: "service", disclosed: true, consentId: "c-1" });
     });
     it("skips it when the site says disclosure is not allowed, or names no consent", () => {
-      expect(why(advice({ policy: policy(shared) }, [other({ disclosure: { required: true, allowed: false, consent_id: "c-1", fields: [] } })]))).toEqual(["disclosure_not_allowed"]);
-      expect(why(advice({ policy: policy(shared) }, [other({ disclosure: { required: true, allowed: true, consent_id: null, fields: [] } })]))).toEqual(["disclosure_not_allowed"]);
-      expect(why(advice({ policy: policy(shared) }, [other({ disclosure: "yes" })]))).toEqual(["disclosure_not_allowed"]);
-      expect(why(advice({ policy: policy(shared) }, [other({ disclosure: undefined })]))).toEqual(["disclosure_not_allowed"]);
+      for (const d of [{ required: true, allowed: false, consent_id: "c-1", fields: [] }, { required: true, allowed: true, consent_id: null, fields: [] }, "yes", undefined]) {
+        expect(why(advice({ policy: policy(shared()) }, [other(1, { disclosure: d })])), JSON.stringify(d)).toEqual(["disclosure_not_allowed"]);
+      }
     });
     it("skips it when the policy copy in the same answer does not cover that consent and seller", () => {
-      expect(why(advice({ policy: policy() }, [other()]))).toEqual(["no_consent"]);
-      expect(why(advice({ policy: policy({ sharing: [{ capability: "spot-price", seller_id: "s-other", consent_id: "c-2" }] }) }, [other()]))).toEqual(["no_consent"]);
-      expect(why(advice({ policy: policy({ sharing: [{ capability: "spot-price", seller_id: "s-third", consent_id: "c-1" }] }) }, [other()]))).toEqual(["no_consent"]);
+      expect(why(advice({ policy: policy({ sharing: [] }) }, [other(1)]))).toEqual(["no_consent"]);
+      expect(why(advice({ policy: policy({ sharing: [{ ...svcConsent(1), consent_id: "c-2" }] }) }, [other(1)]))).toEqual(["no_consent"]);
+      expect(why(advice({ policy: policy({ sharing: [{ ...svcConsent(1), seller_id: "s-3" }] }) }, [other(1)]))).toEqual(["no_consent"]);
     });
-    it("skips a candidate called a rail that changes the seller, and a kind the policy has switched off", () => {
-      expect(why(advice({ policy: policy(shared) }, [other({ kind: "rail" })]))).toEqual(["rail_changes_seller"]);
-      expect(why(advice({ policy: policy({ ...shared, service: false }) }, [other()]))).toEqual(["kind_not_enabled"]);
+    it("skips a candidate whose label disagrees with where it points, and a kind the policy has switched off", () => {
+      expect(why(advice({ policy: policy(shared()) }, [other(1, { kind: "rail" })]))).toEqual(["rail_binding"]);
+      expect(why(advice({}, [goodCandidate({ kind: "service" })]))).toEqual(["kind_mismatch"]);
+      expect(why(advice({ policy: policy({ ...shared(), service: false }) }, [other(1)]))).toEqual(["kind_not_enabled"]);
       expect(why(advice({ policy: policy({ rail: false }) }))).toEqual(["kind_not_enabled"]);
     });
     it("sends nothing anywhere when the request has a body or a method that is not GET", () => {
       expect(why(advice(), ctx({ hasBody: true }))).toEqual(["request_has_body"]);
     });
+
+    describe("the destination is bound to the original request before anything is sent", () => {
+      it("the smuggling URL: a changed path, changed values and extra parameters on the original's own origin, with a different seller id and no consent", () => {
+        const smuggle = goodCandidate({
+          kind: "rail", seller: { id: "s-other-id", name: "x", operator: "y", ours: false, origin: ORIGIN },
+          url: `${ORIGIN}/different-service?asset=ETH&action=subscribe&extra=smuggled`, params: { asset: "ETH", action: "subscribe", extra: "smuggled" },
+          disclosure: { required: true, allowed: false, consent_id: null, fields: [] },
+        });
+        expect(why(advice({ policy: policy({ sharing: [] }) }, [smuggle]))).toEqual(["rail_binding"]);
+        expect(why(advice({ policy: policy({ sharing: [] }) }, [{ ...smuggle, kind: "service" }]))).toEqual(["param_not_from_original"]);
+      });
+      it("a borrowed seller_id: a consented seller's id on an unrelated origin is not that seller", () => {
+        const borrowed = svc(1, { url: "https://unconsented.example/collect?asset=BTC", seller: { id: "s-1", name: "x", operator: "y", ours: false, origin: svcOrigin(1) } });
+        expect(why(advice({ policy: policy(shared()) }, [borrowed]))).toEqual(["seller_origin"]);
+      });
+      it("a rail candidate is the same seller (origin) with exactly the original's query; its path may differ", () => {
+        const ok = (url: string, over: Record<string, unknown> = {}) => check(advice({}, [goodCandidate({ url, ...over })])).valid.length === 1;
+        expect(ok(`${ORIGIN}/arc?asset=BTC`)).toBe(true);
+        expect(ok(`${ORIGIN}/base?asset=BTC`)).toBe(true);
+        expect(ok(`${ORIGIN}/arc/v2/spot?asset=BTC`)).toBe(true);
+        expect(ok(`${ORIGIN}/arc?asset=ETH`)).toBe(false);
+        expect(ok(`${ORIGIN}/arc?asset=BTC&x=1`)).toBe(false);
+        expect(ok(`${ORIGIN}/arc?asset=BTC&asset=BTC`)).toBe(false);
+        expect(ok(`${ORIGIN}/arc`)).toBe(false);
+        expect(ok(`${ORIGIN}/arc?asset=BTC&chain=arc-testnet`, { params: { chain: "arc-testnet" } })).toBe(false);
+        expect(ok(`http://127.0.0.1:4002/arc?asset=BTC`)).toBe(false);
+        expect(ok(`${ORIGIN}/arc?asset=BTC#frag`)).toBe(false);
+        // a rail candidate has no fixed parameters
+        expect(ok(`${ORIGIN}/arc?asset=BTC`, { fixed_params: { quote: "USD" } })).toBe(false);
+      });
+      it("a service candidate serves exactly the parameters it lists, once each, with values of the original request only", () => {
+        const sp = { policy: policy(shared()) };
+        const t = (over: Record<string, unknown>) => why(advice(sp, [svc(1, over)]));
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC&extra=1` })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC&asset=BTC` })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot` })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=ETH`, params: { asset: "ETH" } })).toEqual(["param_not_from_original"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?symbol=BTC`, params: { symbol: "BTC" } })).toEqual([]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC`, params: { asset: 5 } })).toEqual(["unparsable_candidate"]);
+        expect(t({ params: undefined })).toEqual(["unparsable_candidate"]);
+      });
+      it("a service candidate may carry the capability's constants as fixed_params, and they are journaled-ready in the candidate", () => {
+        const sp = { policy: policy(shared()) };
+        const ok = svc(1, { url: `${svcOrigin(1)}/spot?asset=BTC&quote=USD`, fixed_params: { quote: "USD" } });
+        const r = check(advice(sp, [ok]));
+        expect(r.valid[0]).toMatchObject({ fixedParams: { quote: "USD" }, params: { asset: "BTC" } });
+        const t = (over: Record<string, unknown>) => why(advice(sp, [svc(1, over)]));
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC`, fixed_params: { quote: "USD" } })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC&quote=EUR`, fixed_params: { quote: "USD" } })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC&asset=BTC`, fixed_params: { asset: "BTC" } })).toEqual(["params_not_exact"]);
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=BTC&x=1`, fixed_params: { quote: 1 } })).toEqual(["unparsable_candidate"]);
+        // a constant is not a way to carry a value of the user's: params values must still come from the original request
+        expect(t({ url: `${svcOrigin(1)}/spot?asset=ETH&quote=USD`, params: { asset: "ETH" }, fixed_params: { quote: "USD" } })).toEqual(["param_not_from_original"]);
+      });
+    });
   });
 
   describe("invariant 5: at most max_offers offers per order, the original included", () => {
-    const many = [1, 2, 3, 4, 5].map((n) => goodCandidate({ offer_id: `o${n}`, url: `${ORIGIN}/arc${n}` }));
+    const many = [1, 2, 3, 4, 5].map((n) => svc(n));
     it("looks at no more than max_offers - 1 candidates, and records the rest as skipped", () => {
       const r = check(advice({ policy: policy({ max_offers: 3 }) }, many));
       expect(r.valid.map((c: any) => c.offer_id)).toEqual(["o1", "o2"]);
@@ -383,8 +443,8 @@ describe("the site's advice, checked by the client", () => {
     expect(why(advice({}, [goodCandidate({ url: "http://seller.example/arc" })]))).toEqual(["invalid_url"]);
     expect(why(advice({}, [goodCandidate({ url: "https://user:pw@seller.example/arc" })]))).toEqual(["invalid_url"]);
     expect(why(advice({}, [goodCandidate({ url: "ftp://seller.example/arc" })]))).toEqual(["invalid_url"]);
-    expect(why(advice({}, [goodCandidate({ url: `${ORIGIN}/base`, chain: "base-sepolia", asset: BASE_USDC })]))).toEqual(["already_tried"]);
-    expect(why(advice({}, [goodCandidate(), goodCandidate({ url: `${ORIGIN}/arc2` })]))).toEqual(["duplicate_offer"]);
+    expect(why(advice({}, [goodCandidate({ url: ORIG_URL, chain: "base-sepolia", asset: BASE_USDC })]))).toEqual(["already_tried"]);
+    expect(why(advice({}, [goodCandidate(), goodCandidate()]))).toEqual(["duplicate_offer"]);
   });
 });
 
@@ -398,7 +458,7 @@ const newOp = () => `rb-test-${++opCounter}`;
 function world(over: Record<string, any> = {}) {
   const calls: { kind: string; [k: string]: any }[] = [];
   const op = over.op ?? newOp();
-  const f = { rail: "evm", chain: "base-sepolia", url: `${ORIGIN}/base`, max: "0.05", op, ...(over.f ?? {}) };
+  const f = { rail: "evm", chain: "base-sepolia", url: ORIG_URL, max: "0.05", op, ...(over.f ?? {}) };
   const deps: any = {
     f,
     failure: { stage: "seller_error", detail: "HTTP 503", attempts_used: 3 },
@@ -473,7 +533,7 @@ describe("recovery of one order", () => {
       expect(w.calls).toEqual([]);
     });
     it("a candidate that may have signed ends the order: no second candidate, no new advice, even with more valid ones", async () => {
-      const two = advice({}, [goodCandidate({ offer_id: "o1" }), goodCandidate({ offer_id: "o2", url: `${ORIGIN}/arc2` })]);
+      const two = advice({}, [goodCandidate({ offer_id: "o1" }), svc(2)]);
       const w = world({ adviceReply: { status: 200, body: two }, attempt: (flags: any) => unknown(flags) });
       const out = await R.recoverOrder(w.deps);
       expect(out.kind).toBe("result");
@@ -483,19 +543,19 @@ describe("recovery of one order", () => {
       expect(count(w.calls, "advice")).toBe(1);
     });
     it("a paid candidate ends the order: nothing else is tried", async () => {
-      const two = advice({}, [goodCandidate({ offer_id: "o1" }), goodCandidate({ offer_id: "o2", url: `${ORIGIN}/arc2` })]);
+      const two = advice({}, [goodCandidate({ offer_id: "o1" }), svc(2)]);
       const w = world({ adviceReply: { status: 200, body: two } });
       const out = await R.recoverOrder(w.deps);
       expect(out.fields.state).toBe("settled");
       expect(count(w.calls, "attempt")).toBe(1);
     });
     it("a candidate that only failed to read its terms leaves the order unsigned, so the next valid one may be tried", async () => {
-      const two = advice({}, [goodCandidate({ offer_id: "o1" }), goodCandidate({ offer_id: "o2", url: `${ORIGIN}/arc2` })]);
+      const two = advice({}, [goodCandidate({ offer_id: "o1" }), svc(2)]);
       let n = 0;
       const w = world({ adviceReply: { status: 200, body: two }, attempt: (flags: any) => (++n === 1 ? unsignedTerms(flags) : paid(flags)) });
       const out = await R.recoverOrder(w.deps);
       expect(out.fields.state).toBe("settled");
-      expect(w.calls.filter((c) => c.kind === "attempt").map((c) => c.flags.url)).toEqual([`${ORIGIN}/arc`, `${ORIGIN}/arc2`]);
+      expect(w.calls.filter((c) => c.kind === "attempt").map((c) => c.flags.url)).toEqual([`${ORIGIN}/arc?asset=BTC`, `${svcOrigin(2)}/spot?asset=BTC`]);
       const rec = readRecordFile("evm", "base-sepolia", w.op);
       expect(rec.attempts.map((a: any) => [a.attempt_no, a.outcome])).toEqual([[2, "failed_before_payment"], [3, "paid"]]);
     });
@@ -523,7 +583,7 @@ describe("recovery of one order", () => {
       expect(count(w1.calls, "attempt")).toBe(0);
       expect(R.readRecord("evm", "base-sepolia", w1.op)).toBeNull();
 
-      const four = [1, 2, 3, 4].map((n) => goodCandidate({ offer_id: `o${n}`, url: `${ORIGIN}/arc${n}` }));
+      const four = [1, 2, 3, 4].map((n) => svc(n));
       const w2 = world({ adviceReply: { status: 200, body: advice({ policy: policy({ max_offers: 3 }) }, four) }, attempt: (flags: any) => unsignedTerms(flags) });
       const done = await R.recoverOrder(w2.deps);
       expect(done.kind).toBe("none");
@@ -541,7 +601,7 @@ describe("recovery of one order", () => {
     });
     it("a second candidate is not tried once the advice ran out while the first was being read", async () => {
       let t = NOW;
-      const two = advice({}, [goodCandidate({ offer_id: "o1" }), goodCandidate({ offer_id: "o2", url: `${ORIGIN}/arc2` })]);
+      const two = advice({}, [goodCandidate({ offer_id: "o1" }), svc(2)]);
       const w = world({ adviceReply: { status: 200, body: two }, deps: { now: () => t }, attempt: (flags: any) => { t = NOW + 200_000; return unsignedTerms(flags); } });
       const out = await R.recoverOrder(w.deps);
       expect(out.kind).toBe("none");
@@ -558,7 +618,7 @@ describe("recovery of one order", () => {
       expect(attempt.journaled).toEqual([{ attempt_no: 2, offer_id: "o1", why: "same seller on Arc", op: `${w.op}-r2`, state: "journaled" }]);
       expect(attempt.order_ref).toMatch(/^[0-9a-f-]{36}$/);
       // the ordinary buy runs with the candidate's own chain, url and a --max no higher than the margin allows
-      expect(attempt.flags).toMatchObject({ rail: "evm", chain: "arc-testnet", url: `${ORIGIN}/arc`, max: "0.012", op: `${w.op}-r2` });
+      expect(attempt.flags).toMatchObject({ rail: "evm", chain: "arc-testnet", url: `${ORIGIN}/arc?asset=BTC`, max: "0.012", op: `${w.op}-r2` });
       expect(attempt.flags.method).toBeUndefined();
       expect(attempt.flags.body).toBeUndefined();
       expect(out.fields.state).toBe("settled");
@@ -601,9 +661,7 @@ describe("recovery of one order", () => {
       expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0].reported).toBe(false);
     });
     it("tells the site what disclosure there was", async () => {
-      const consent = { sharing: [{ capability: "spot-price", seller_id: "s-other", consent_id: "c-1" }] };
-      const other = goodCandidate({ kind: "service", offer_id: "o9", seller: { id: "s-other", name: "Other" }, url: "http://127.0.0.1:4002/spot?asset=BTC", disclosure: { required: true, allowed: true, consent_id: "c-1", fields: ["asset"] } });
-      const w = world({ adviceReply: { status: 200, body: advice({ policy: policy(consent) }, [other]) } });
+      const w = world({ adviceReply: { status: 200, body: advice({ policy: policy({ sharing: [svcConsent(9)] }) }, [svc(9)]) } });
       const out = await R.recoverOrder(w.deps);
       expect(w.calls.find((c) => c.kind === "report")!.body).toMatchObject({ offer_id: "o9", disclosed: true });
       expect(out.fields.recovery.disclosed).toBe(true);
@@ -617,9 +675,9 @@ describe("recovery of one order", () => {
       const body = w.calls.find((c) => c.kind === "advice")!.body;
       expect(body).toEqual({
         version: 1, order_ref: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        original: { url: `${ORIGIN}/base`, chain: "base-sepolia", asset: BASE_USDC, amount_atomic: "50000", pay_to: null },
+        original: { url: ORIG_URL, chain: "base-sepolia", asset: BASE_USDC, amount_atomic: "50000", pay_to: null },
         failure: { stage: "seller_error", detail: "HTTP 503", attempts_used: 3 },
-        tried: [{ url: `${ORIGIN}/base`, chain: "base-sepolia" }],
+        tried: [{ url: ORIG_URL, chain: "base-sepolia" }],
         funded_chains: ["base-sepolia", "arc-testnet", "devnet"],
       });
     });
