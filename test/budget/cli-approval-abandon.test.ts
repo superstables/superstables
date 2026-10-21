@@ -44,7 +44,7 @@ afterEach(async () => {
 });
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
-function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?: string): Promise<Run> {
+function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?: string, beforeInput?: () => void): Promise<Run> {
   return new Promise((done, fail) => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc!.url };
     for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME"]) delete env[k];
@@ -52,7 +52,16 @@ function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?
     tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc!.url, operator: "fake-a" }] });
     const preload = terminal === undefined ? [] : ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs")];
     const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
-    child.stdin.end(terminal ?? "");
+    // `beforeInput` runs when the command has shown its confirmation prompt and before the answer is typed
+    if (beforeInput === undefined) child.stdin.end(terminal ?? "");
+    else {
+      let seen = "";
+      let typed = false;
+      child.stderr.on("data", (c) => {
+        seen += String(c);
+        if (!typed && /abandon exactly:/.test(seen)) { typed = true; beforeInput(); child.stdin.end(terminal ?? ""); }
+      });
+    }
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -415,6 +424,23 @@ describe("wait --abandon on a background owner approval", () => {
       expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
       expect(existsSync(lockPath())).toBe(true);
     } finally { try { process.kill(-holder.pid!, "SIGKILL"); } catch { /* gone */ } rmSync(join(approvals(), `${id}.json.lock`), { force: true }); }
+  }, 120_000);
+
+  it("the record disappears between the first read and the locked give-up: unknown, not failed, nothing changed", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const path = join(approvals(), `${id}.json`);
+    const run = await budget(abandonArgs(id), {}, typed(id), () => rmSync(path, { force: true }));
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ command: "setup", rail: "evm", chain: "base-sepolia", id, state: "unknown", final: false });
+    expect(run.result.reason).toMatch(/record disappeared/);
+    expect(run.result.reason).toMatch(/changed nothing/);
+    expect(run.result.reason).toMatch(/whether the approval sent anything is unknown/);
+    expect(run.result.next).toMatch(/which home/);
+    expect(run.result.next).toMatch(/wallet's activity/);
+    expect(run.result.next).toMatch(/superstables budget status --rail evm/);
+    expect(existsSync(path)).toBe(false);
   }, 120_000);
 
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
