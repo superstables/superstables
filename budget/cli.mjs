@@ -2351,6 +2351,19 @@ async function abandonOwnerApproval(record, f) {
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
+/**
+ * Whether an approval may have sent, from its record alone: its wallet step started or the page log says the wallet was asked, a hosted
+ * request is recorded and has no result, or it has a result that is not a refusal made before anything could be sent. The owner's
+ * wallet sends through the site on a hosted approval, so `sending` alone is not the test. Only a refusal before a send (state
+ * refused_precheck, no transaction) is known not to have sent.
+ */
+function approvalMayHaveSent(rec) {
+  if (recordMayHaveSent(rec)) return true;
+  if (!rec.final) return Boolean(rec.hosted);
+  const r = rec.final.result;
+  return !(r?.state === "refused_precheck" && !carriesTx(r.tx));
+}
+
 async function wait({ f }) {
   let once = readApproval(f.id);
   let endedRecord = null;
@@ -2360,7 +2373,7 @@ async function wait({ f }) {
     const fix = `use --site ${madeOn}, or leave --site out`;
     // An approval that may have sent (its wallet step started, or a request on the site is recorded and has no result) is never answered failed
     // for a mistaken flag: the refusal says nothing about what the approval did. Unknown, with the fix to the flag.
-    if (once.sending === true || (once.hosted && !once.final)) {
+    if (approvalMayHaveSent(once)) {
       log(`superstables budget: --site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed`);
       return emit(5, { command: "wait", rail: once.rail, chain: once.chain, state: "unknown", final: false, id: f.id, next: `${fix}. Run superstables budget wait --id ${f.id} --shown again with it; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `--site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed, and whether the approval sent anything is unknown` });
     }

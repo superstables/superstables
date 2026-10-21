@@ -59,6 +59,12 @@ describe("wait --site that is not the site the approval was made on", () => {
     ["a hosted request recorded with no result", {}],
     ["its wallet step started (sending) and a hosted request recorded", { sending: true }],
     ["its wallet step started (sending), though a result is stored", { sending: true, state: "final", final: { code: 0, result: { ok: true, state: "ok", final: true } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    // a hosted approval's wallet sends through the site: `sending` is never set, so a stored result is what says it may have sent
+    ["a stored ok result with a transaction (a hosted setup, no sending)", { state: "final", final: { code: 0, result: { ok: true, state: "ok", final: true, tx: { fundAgent: "0xabc", grant: "0xdef" } } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    ["an approval the owner gave up (stored unknown, the wallet may have been asked)", { state: "final", abandoned: { at: "2026-10-21T00:00:00Z", walletMayHaveBeenAsked: true }, final: { code: 5, result: { ok: false, state: "unknown", final: true, abandonedAt: "2026-10-21T00:00:00Z" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    ["a stored failed result that names no proof", { state: "final", final: { code: 1, result: { ok: false, state: "failed", final: true, reason: "the worker stopped" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
+    ["a buy-once the owner gave up (stored unknown, paid null)", { command: "buy-once", state: "final", final: { code: 5, result: { ok: false, command: "buy-once", state: "unknown", paid: null, delivered: null, final: true, abandonedAt: "2026-10-21T00:00:00Z" } }, hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: undefined } }],
+    ["a buy-once read as paid", { command: "buy-once", state: "final", final: { code: 0, result: { ok: true, command: "buy-once", state: "settled", paid: true, delivered: true, final: true } }, hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: undefined } }],
   ] as const) {
     it(`${what}: unknown (exit 5, final false) with the fix, for wait and for wait --abandon; nothing is changed`, async () => {
       const { id, path } = record(over);
