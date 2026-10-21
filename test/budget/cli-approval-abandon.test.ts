@@ -433,6 +433,23 @@ describe("wait --abandon on a background owner approval", () => {
     expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(before);
   }, 120_000);
 
+  it("an error after the give-up was recorded (a disk fault on the directory sync): the stored give-up is what it answers", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/fail-sync-after-rename.mjs")).href}`;
+    const gone = await budget(abandonArgs(id), { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), FAIL_SYNC_AFTER_RENAME: "1" }, typed(id));
+    expect(gone.code, gone.stderr).toBe(5);
+    expect(gone.stderr).toMatch(/EIO/);
+    // the record holds the give-up, and that is what was answered: not "nothing was ended"
+    expect(record(id)).toMatchObject({ abandoned: expect.any(Object), final: { code: 5 } });
+    expect(gone.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: record(id).final.result.abandonedAt });
+    expect(gone.result.reason ?? "").not.toMatch(/could not be locked|nothing was ended/);
+    // a chain lock file the fault left behind is stale: its approval has a result, so it holds nothing
+    const next = await budget(setupArgs());
+    expect(next.result?.reason ?? "").not.toMatch(/still waiting for the owner/);
+  }, 120_000);
+
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();

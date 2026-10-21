@@ -584,15 +584,17 @@ describe("a restarted worker that runs past its backstop", () => {
     await endEveryProcess(id);
     // the site answers, but never with a final answer: the restarted worker takes the request over and keeps polling
     site.readAnswer = (_r, view) => ({ status: 200, body: { ...view, state: "awaiting_owner", final: false, owner: null } });
-    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/shorten-worker-backstop.mjs")).href}`;
-    const stopped = await budget(["wait", "--shown", "--id", id, "--timeout", "30"], { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), BACKSTOP_TEST_MS: "7000" });
+    // the backstop fires after 7 s; the rail script's stdout stays open for 20 s after the backstop kills it (a process of its own holds
+    // it), so the dispatcher cannot end the worker by seeing the rail script leave: the backstop's own code decides what is recorded
+    const hooks = ["shorten-worker-backstop", "hold-rail-stdout"].map((name) => `--import ${pathToFileURL(resolve(ROOT, `test/helpers/${name}.mjs`)).href}`);
+    const stopped = await budget(["wait", "--shown", "--id", id, "--timeout", "30"], { NODE_OPTIONS: [process.env.NODE_OPTIONS, ...hooks].filter(Boolean).join(" "), BACKSTOP_TEST_MS: "7000", HOLD_RAIL_STDOUT_MS: "20000" });
     expect(stopped.code, stopped.stderr).toBe(5);
     expect(stopped.result).toMatchObject({ state: "unknown", final: false, id });
     const r = record(id);
     // the worker had the request in hand (so a result could have been recorded), and the backstop is what ended it
     expect(r.resumes).toBe(1);
     expect(r.resume?.takenOver).toBe(1);
-    expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/ran past its deadline and recorded no result|stopped without a result \(exit \d+\) and recorded none/);
+    expect(readFileSync(join(approvals(), `${id}.log`), "utf8")).toMatch(/the restarted worker ran past its deadline and recorded no result/);
     expect(r.final).toBeUndefined();
     expect(r.hosted.token).toMatch(/^ssbt_/);
     expect(existsSync(lockPath())).toBe(true);

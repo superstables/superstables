@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -737,7 +737,11 @@ function emit(code, fields) {
   if (fields.rpc === undefined && fields.rail) { const u = customRpc(fields.rail, fields.chain); fields.rpc = u === undefined ? undefined : shownUrl(u); }
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
-  if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
+  // frees the chain. A restarted worker's result is stored only if, under the record's lock, it is still the newest restart and has taken
+  // the request over (the check above is not enough: a worker paused after it may have been replaced since)
+  if (APPROVAL_ID && RESUMING) {
+    if (!recordFinalAsRestart(APPROVAL_ID, RESUME_GENERATION, code, out).stored) log(`superstables budget: approval ${APPROVAL_ID}: this worker is no longer the restart that has the request, or the approval already has a result; it recorded none`);
+  } else if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out);
   if (APPROVAL_ID && FOREGROUND) forget(APPROVAL_ID); // a blocking command's record served only as the lock's holder
   writeResult(out);
   process.exit(code);
@@ -2338,8 +2342,14 @@ async function abandonOwnerApproval(record, f) {
     };
   });
   } catch (err) {
-    // nothing was changed. Busy: the record is locked by a process that is still running (a worker starting its rail script, another
-    // command). Any other error is the file system's (the folder cannot be written, the disk is full).
+    // The give-up may have been stored before the error (a directory sync after the write, say): the record says. Otherwise nothing was
+    // changed. Busy: the record is locked by a process that is still running (a worker starting its rail script, another command).
+    // Any other error is the file system's (the folder cannot be written, the disk is full).
+    const stored = readApproval(id);
+    if (stored?.final && stored.abandoned) {
+      log(`superstables budget: ${id} (${record.command}) given up without a final result (${clean(err.message)} after it was recorded). The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
+      return emit(5, stored.final.result);
+    }
     const busy = err?.code === "RECORD_BUSY";
     return emit(5, { ...base, state: "unknown", final: false, reason: busy ? `the approval's record is busy, so nothing was ended: ${clean(err.message)}` : `the approval's record could not be locked, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in 30 seconds` });
   }

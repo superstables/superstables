@@ -270,6 +270,16 @@ describe("the record lock's errors and a result that is already stored", () => {
     expect(approvals.readApproval(id)?.final).toBeUndefined();
   });
 
+  it("a refused second result frees no chain lock, not even one that names the same approval", async () => {
+    const id = await open();
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true, tag: "first" });
+    // the chain's lock names this approval again (a restart claimed it after the result, say)
+    writeFileSync(lockFile(), JSON.stringify({ id, ...(await goneWorker()), createdAt: Date.now() }));
+    approvals.recordFinal(id, 0, { ok: true, state: "ok", final: true, tag: "second" });
+    expect(approvals.readApproval(id)?.final).toMatchObject({ code: 5, result: { tag: "first" } });
+    expect(JSON.parse(readFileSync(lockFile(), "utf8")).id).toBe(id);
+  });
+
   it("recordFinal does not replace a result that is already stored, and frees nothing a second time", async () => {
     const id = await open();
     approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true, tag: "first" });

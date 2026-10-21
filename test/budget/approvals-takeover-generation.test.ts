@@ -60,6 +60,15 @@ describe("a takeover belongs to the restart that made it", () => {
     expect(approvals.hasTakenOver(id, 1)).toBe(false);
   });
 
+  it("a replaced worker marks nothing even where no mark stands yet", async () => {
+    const id = await open({ resumes: 2 });
+    approvals.recordTakenOver(id, 1);
+    expect(takenOver(id)).toBeUndefined();
+    expect(approvals.hasTakenOver(id, 1)).toBe(false);
+    approvals.recordTakenOver(id, 2);
+    expect(takenOver(id)).toBe(2);
+  });
+
   it("a worker that does not know its restart (no generation) never counts as having taken the request over", async () => {
     const id = await open({ resumes: 3, resume: { takenOver: 3 } });
     expect(approvals.hasTakenOver(id, Number.NaN)).toBe(false);
@@ -91,5 +100,40 @@ describe("a takeover belongs to the restart that made it", () => {
     }
     expect(readFileSync(out, "utf8").trim().split("\n")).toEqual(["1", "2", "3"]);
     expect(existsSync(out)).toBe(true);
+  });
+});
+
+describe("a restarted worker stores its result only while it is the newest restart that has the request", () => {
+  it("a worker that was paused after its own check, and replaced meanwhile, stores nothing; the newest restart does", async () => {
+    const id = await open({ resumes: 1, resume: { takenOver: 1 } });
+    // restart 2 starts (liveness said the first worker was gone): restart 1 wakes up with its check long passed
+    approvals.updateApproval(id, () => ({ resumes: 2 }));
+    const late = approvals.recordFinalAsRestart(id, 1, 0, { ok: true, state: "ok", final: true });
+    expect(late.stored).toBe(false);
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    expect(approvals.readApproval(id)?.hosted?.token).toBeDefined();
+    // restart 2 has not read the request yet: it stores nothing either
+    expect(approvals.recordFinalAsRestart(id, 2, 0, { ok: true, state: "ok", final: true }).stored).toBe(false);
+    approvals.recordTakenOver(id, 2);
+    const mine = approvals.recordFinalAsRestart(id, 2, 0, { ok: true, state: "ok", final: true });
+    expect(mine.stored).toBe(true);
+    expect(approvals.readApproval(id)?.final).toMatchObject({ code: 0 });
+    // and once there is a result, nobody replaces it
+    expect(approvals.recordFinalAsRestart(id, 2, 5, { ok: false, state: "unknown" }).stored).toBe(false);
+    expect(approvals.readApproval(id)?.final).toMatchObject({ code: 0 });
+  });
+
+  it("a worker with no restart number stores nothing", async () => {
+    const id = await open({ resumes: 1, resume: { takenOver: 1 } });
+    expect(approvals.recordFinalAsRestart(id, Number.NaN, 0, { ok: true }).stored).toBe(false);
+    expect(approvals.recordFinalAsRestart(id, undefined as unknown as number, 0, { ok: true }).stored).toBe(false);
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+  });
+
+  it("a replaced worker cannot overwrite the mark of the restart that has the request", async () => {
+    const id = await open({ resumes: 2, resume: { takenOver: 2 } });
+    approvals.recordTakenOver(id, 1);
+    expect(takenOver(id)).toBe(2);
+    expect(approvals.hasTakenOver(id, 2)).toBe(true);
   });
 });
