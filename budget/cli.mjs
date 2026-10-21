@@ -2356,7 +2356,16 @@ async function wait({ f }) {
   let endedRecord = null;
   // --site names the site the approval was made on: another one is a mistake, not a different request
   const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
-  if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
+  if (f.site !== undefined && madeOn && madeOn !== f.site) {
+    const fix = `use --site ${madeOn}, or leave --site out`;
+    // An approval that may have sent (its wallet step started, or a request on the site is recorded and has no result) is never answered failed
+    // for a mistaken flag: the refusal says nothing about what the approval did. Unknown, with the fix to the flag.
+    if (once.sending === true || (once.hosted && !once.final)) {
+      log(`superstables budget: --site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed`);
+      return emit(5, { command: "wait", rail: once.rail, chain: once.chain, state: "unknown", final: false, id: f.id, next: `${fix}. Run superstables budget wait --id ${f.id} --shown again with it; the approval may have sent, so run no other owner command on this chain until it has an answer`, reason: `--site ${f.site} is not the site this approval was made on (${madeOn}); nothing was read or changed, and whether the approval sent anything is unknown` });
+    }
+    return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): ${fix}`);
+  }
   // an owner approval that ran in the background and has no result: the owner gives it up (one that ended is answered as wait does)
   if (f.abandon && once && OWNER_COMMANDS.has(once.command) && !once.foreground && !once.final) {
     const done = await abandonOwnerApproval(once, f);
