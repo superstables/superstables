@@ -517,7 +517,7 @@ export async function recoverOrder(deps) {
     log(`superstables budget: the site's recovery advice was not used (${checked.problem}); nothing was paid`);
     return none;
   }
-  record.advice = { advice_id: checked.advice_id, expires_at_ms: checked.expiresAtMs, policy_version: checked.policy.version, max_offers: checked.policy.maxOffers, margin_bps: checked.policy.marginBps };
+  record.advice = { advice_id: checked.advice_id, expires_at_ms: checked.expiresAtMs, policy_version: checked.policy.version, max_offers: checked.policy.maxOffers, margin_bps: checked.policy.marginBps, rail_ok: checked.policy.rail, service_ok: checked.policy.service, allowed_chains: checked.policy.allowedChains };
   record.skipped = [...checked.skipped];
   for (const s of checked.skipped) log(`superstables budget: recovery candidate ${s.offer_id} skipped (${s.reason})`);
   if (!checked.valid.length) return { kind: "none", recovery: { switched: false, order_ref: record.order_ref, skipped: checked.skipped } };
@@ -623,9 +623,28 @@ async function resume(deps, record) {
   }
   // decided before the crash, and nothing was signed: the order is over, and no new advice is asked for it
   if (last.state === "done" || record.closed) return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
-  // journaled before the crash, nothing signed since: carry on with that same attempt (INVARIANT 6 binds new offers only)
+  // Journaled before the crash, nothing signed since. INVARIANT 6 binds this contact and payment too: the persisted advice must not
+  // have expired, the site must still list the feature, and the persisted policy must still allow this kind of switch on this chain.
+  const stale = await resumeProblem(deps, record, last);
+  if (stale) {
+    last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
+    closeRecord(record, stale);
+    return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }] }) };
+  }
   const done = await runAttempt(deps, record, last);
   if (done.kind === "result") return done;
   closeRecord(record, "no_attempt_paid");
   return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
+}
+
+/** Why an unsigned, journaled attempt may not be carried on after a crash, or "". Nothing is contacted or paid when it is not "". */
+async function resumeProblem(deps, record, attempt) {
+  const now = deps.now ?? Date.now;
+  const a = record.advice;
+  if (!a || !Number.isFinite(a.expires_at_ms) || now() >= a.expires_at_ms) return "advice_expired";
+  const features = await deps.features();
+  if (!features || !features.has(RECOVERY_FEATURE)) return "feature_off";
+  const kindOk = attempt.disclosed ? a.service_ok === true : a.rail_ok === true;
+  if (!kindOk || !Array.isArray(a.allowed_chains) || !a.allowed_chains.includes(attempt.chain)) return "policy_off";
+  return "";
 }

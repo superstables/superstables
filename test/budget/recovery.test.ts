@@ -745,7 +745,7 @@ describe("recovery of one order", () => {
       const out = await R.recoverOrder(again.deps);
       expect(out.fields.state).toBe("settled");
       expect(count(again.calls, "advice")).toBe(0);
-      expect(count(again.calls, "features")).toBe(0);
+      expect(count(again.calls, "features")).toBe(1); // checked again before the contact, not asked for advice
       expect(again.calls.filter((c) => c.kind === "attempt").map((c) => c.flags.op)).toEqual([`${w.op}-r2`]);
       expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0]).toMatchObject({ state: "done", outcome: "paid" });
       expect(readRecordFile("evm", "base-sepolia", w.op).order_ref).toBe(rec.order_ref);
@@ -766,6 +766,51 @@ describe("recovery of one order", () => {
       expect(count(again.calls, "attempt")).toBe(0);
       expect(count(again.calls, "advice")).toBe(0);
       expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0]).toMatchObject({ state: "done", outcome: "unknown" });
+    });
+
+    describe("a resumed attempt that was never contacted is checked again before anything is contacted or paid", () => {
+      const crashed = async () => {
+        const w = world({ attempt: () => { throw new Error("process killed"); } });
+        await expect(R.recoverOrder(w.deps)).rejects.toThrow("killed");
+        return w.op;
+      };
+      it("expired advice after a crash: the attempt is closed, nothing is contacted, nothing is paid, no new advice", async () => {
+        const op = await crashed();
+        const later = world({ op, deps: { now: () => NOW + 600_000 } });
+        const out = await R.recoverOrder(later.deps);
+        expect(out.kind).toBe("none");
+        expect(out.recovery.skipped).toContainEqual({ offer_id: "o1", reason: "advice_expired" });
+        expect(later.calls.filter((c) => c.kind === "attempt" || c.kind === "advice")).toEqual([]);
+        const rec = readRecordFile("evm", "base-sepolia", op);
+        expect(rec.closed).toBe("advice_expired");
+        expect(rec.attempts[0]).toMatchObject({ state: "done", outcome: "failed_before_payment" });
+        // and a further rerun does not start again
+        const again = world({ op });
+        expect((await R.recoverOrder(again.deps)).kind).toBe("none");
+        expect(again.calls.filter((c) => c.kind === "attempt")).toEqual([]);
+      });
+      it("the site no longer lists the feature, or the persisted policy does not allow the switch", async () => {
+        const op = await crashed();
+        const off = world({ op, deps: { features: async () => new Set(["expected_owner"]) } });
+        expect((await R.recoverOrder(off.deps)).recovery.skipped).toContainEqual({ offer_id: "o1", reason: "feature_off" });
+        expect(count(off.calls, "attempt")).toBe(0);
+        const op2 = await crashed();
+        const file = R.recordPath("evm", "base-sepolia", op2);
+        const rec = JSON.parse(readFileSync(file, "utf8"));
+        rec.advice.allowed_chains = ["base-sepolia"];
+        writeFileSync(file, JSON.stringify(rec));
+        const policyOff = world({ op: op2 });
+        expect((await R.recoverOrder(policyOff.deps)).recovery.skipped).toContainEqual({ offer_id: "o1", reason: "policy_off" });
+        expect(count(policyOff.calls, "attempt")).toBe(0);
+      });
+      it("a signed attempt is only reconciled, even when the advice has long expired", async () => {
+        const op = await crashed();
+        const later = world({ op, deps: { now: () => NOW + 600_000, features: async () => new Set() }, attemptState: () => ({ exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: `${op}-r2`, state: "unknown", paid: null, delivered: null, tx: {}, next: "reconcile" } }) });
+        const out = await R.recoverOrder(later.deps);
+        expect(out.kind).toBe("result");
+        expect(out.fields.state).toBe("unknown");
+        expect(count(later.calls, "attempt")).toBe(0);
+      });
     });
 
     it("a rerun after the switch was decided before the crash and nothing was signed does not start another round of advice", async () => {
