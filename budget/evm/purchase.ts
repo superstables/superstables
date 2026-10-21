@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { failureFact, readTerms, supersededWords, termsFailureOf } from "../recovery.mjs";
+import { OP_TAKEN, failureFact, ownedBy, readTerms, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -102,11 +102,13 @@ export type TermsOutcome = { failure: { stage: string; detail: string; attempts_
 /**
  * Wraps `fetch` so that the UNPAID read of the seller's terms is tried at most 3 times (250 ms, then 1 s, with jitter, never
  * before the seller's Retry-After up to 30 s; recovery.mjs readTerms) when it fails before any payment exists: no answer, a
- * 5xx, a 429, or a 402 whose payment requirements cannot be read. A request that carries a payment is passed on as it is,
- * once, whatever it answers: a payment is never retried here. The last answer is returned as it came (or its error thrown), so
- * everything after behaves as it did before; `outcome.failure` says the read failed for good.
+ * 5xx, a 429, or a 402 whose payment requirements cannot be read. A read that ran out of time is not tried again, and all the
+ * reads together take no longer than `timeoutMs` (--http-timeout), the time one read takes without retries. A request that
+ * carries a payment is passed on as it is, once, whatever it answers: a payment is never retried here. The last answer is
+ * returned as it came (or its error thrown), so everything after behaves as it did before; `outcome.failure` says the read
+ * failed for good. `inner` must honour `init.signal` (purchase's timedFetch does).
  */
-export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number } = {}): typeof fetch {
+export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number; timeoutMs?: number } = {}): typeof fetch {
   return async (input: any, init?: any) => {
     const request = new Request(input, init);
     if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) { outcome.failure = null; return inner(request); }
@@ -114,11 +116,11 @@ export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts:
     if (request.method !== "GET" || request.body !== null) { outcome.failure = null; return inner(request); }
     let last: Response | undefined;
     let thrown: unknown;
-    const read = await readTerms(async () => {
+    const read = await readTerms(async (_attempt: number, leftMs?: number) => {
       if (last) await last.body?.cancel().catch(() => {});
       last = undefined; thrown = undefined;
       let r: Response;
-      try { r = await inner(request.clone()); } catch (e: any) { thrown = e; return { failure: termsFailureOf({ error: String(e?.cause?.code ?? e?.message ?? e) }) }; }
+      try { r = await inner(request.clone(), leftMs === undefined ? undefined : { signal: AbortSignal.timeout(leftMs) }); } catch (e: any) { thrown = e; return { failure: termsFailureOf({ error: String(e?.cause?.code ?? e?.message ?? e), timeout: timedOut(e) }) }; }
       last = r;
       // the 402 answer was already cut to 64 KB by capChallengeBody; reading a copy leaves the answer itself whole
       const bodyText = r.status === 402 ? await r.clone().text().catch(() => "") : "";
@@ -256,6 +258,9 @@ export type PurchaseOpts = {
   /** give up on the paid request after this many ms (the chain is read after that; the payment is never retried) */
   httpTimeoutMs?: number;
   tag?: string;
+  /** an attempt of an auto-recovered order (the dispatcher's --recovery-order): the journal names the order, and an op whose journal
+   *  another command wrote is refused before anything is read or signed */
+  recoveryOrder?: string;
   /** tests: the retry's clock and randomness (recovery.mjs readTerms) */
   retry?: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number };
 };
@@ -404,7 +409,16 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   if ((prior as any)?.supersededBy) {
     const why = supersededWords(o.op, (prior as any).supersededBy);
     log(`REFUSED: ${why}`);
-    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "read the operation the order continues as; this --op is never paid", supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: supersededNext((prior as any).supersededBy), supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
+  }
+
+  // An attempt of an auto-recovered order runs only under an op this order owns: never one another command already used
+  if (o.recoveryOrder !== undefined) {
+    if (prior && !ownedBy(prior, o.recoveryOrder)) {
+      log(`REFUSED: operation ${o.op} was already used by another command; this order skips it`);
+      return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: OP_TAKEN, next: "nothing was signed or sent" }, exitCode: 3 };
+    }
+    (j as any).recoveryOf = { order_ref: o.recoveryOrder };
   }
 
   // Frozen for this operation before anything is signed: a later run under the same --op pays under the same referral.
@@ -627,7 +641,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
   const terms: TermsOutcome = { failure: null };
-  const timedFetch: typeof fetch = withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) })), terms, o.retry);
+  const timedFetch: typeof fetch = withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, ...o.retry });
   const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {

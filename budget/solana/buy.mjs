@@ -69,14 +69,14 @@ import {
   OPS_DIR,
 } from "./lib.mjs";
 import { readCapped, saveResponse } from "../response.mjs";
-import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessAgreed } from "./ops.mjs";
+import { newOpId, OP_ID_RE, opIdentity, readOp, updateOp as writeOpUpdate, acquireLock, gateExistingOp, findOwnTx, readTransfer, assessAgreed } from "./ops.mjs";
 import { lockNext } from "../op-lock.mjs";
 import { HOME } from "../paths.mjs";
 import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
-import { failureFact, readTerms, termsFailureOf } from "../recovery.mjs";
+import { OP_TAKEN, RECOVERY_ORDER, failureFact, ownedBy, readTerms, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -94,6 +94,8 @@ Options:
   --owner <addr>     pay from another owner account that approved this agent
                      (default: owner address from the public file or solana-agent.env)
   --check            quote only: parse and check the offer, sign and pay nothing
+  --recovery-order <ref>  set by superstables budget for an attempt of an auto-recovered order: the
+                     journal names the order, and an op another command already used is refused
   -h, --help         show this help
 
 Files: opens only the agent key file, solana-agent.env (after the prechecks pass).
@@ -103,7 +105,7 @@ Exit: 0 settled/quoted, 1 failed, 2 bad flags, 3 refused before signing, 4 unkno
 
 const flags = parseStrict(
   process.argv.slice(2),
-  { url: "value", max: "value", "pay-to": "value", op: "value", method: "value", body: "value", owner: "value", check: "bool" },
+  { url: "value", max: "value", "pay-to": "value", op: "value", method: "value", body: "value", owner: "value", check: "bool", "recovery-order": "value" },
   { usage: USAGE, required: ["url"] }
 );
 const checkOnly = flags.check === true;
@@ -119,6 +121,10 @@ if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) usageError(`uns
 const bodyText = flags.body;
 const opId = flags.op ?? newOpId();
 if (!OP_ID_RE.test(opId)) usageError("--op must be 1-64 characters: letters, digits, '.', '_' or '-'", USAGE);
+const recoveryOrder = flags["recovery-order"];
+if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageError("--recovery-order is an order reference (letters, digits and -, at most 64)", USAGE);
+// every write of this op's journal names the order it is an attempt of (recovery.mjs ownedBy)
+const updateOp = (op, patch, event) => writeOpUpdate(op, recoveryOrder === undefined ? patch : { recoveryOf: { order_ref: recoveryOrder }, ...patch }, event);
 
 const SOLANA_MEMO_PROGRAM = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 const b64encode = (obj) => Buffer.from(JSON.stringify(obj)).toString("base64");
@@ -139,7 +145,9 @@ const refuse = (reasons, extra = {}) => {
   finish("refused_precheck", EXIT.REFUSED, { reason: [].concat(reasons).join("; "), next: "fix the request or pass a new --max/--pay-to; nothing was signed or paid", ...(termsFailure ? { termsFailure } : {}), ...extra });
 };
 
-async function fetchOnce(u, m, body, extraHeaders, timeoutMs = 60_000) {
+// One request to the seller waits at most this long; the unpaid read of the terms, retries included, too.
+const TERMS_TIMEOUT_MS = 60_000;
+async function fetchOnce(u, m, body, extraHeaders, timeoutMs = TERMS_TIMEOUT_MS) {
   const headers = { Accept: "application/json", ...extraHeaders };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   // No redirects: the paid request carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
@@ -160,10 +168,15 @@ let lock = { ok: true };
   }
   const existing = readOp(opId);
   if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana --op ${opId}` });
+  // an attempt of an auto-recovered order never runs under an op another command already used
+  if (recoveryOrder !== undefined && existing && !ownedBy(existing, recoveryOrder)) {
+    console.error(`Refused (nothing signed): operation ${opId} was already used by another command; this order skips it`);
+    finish("refused_precheck", EXIT.REFUSED, { reason: OP_TAKEN, next: "nothing was signed or paid" });
+  }
   const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);
-    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "superseded" ? "read the operation the order continues as; this --op is never paid" : gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "superseded" ? supersededNext(existing.supersededBy) : gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana --op ${opId}` });
   }
 }
 
@@ -174,17 +187,19 @@ let initial;
 let termsReadError;
 // Only a GET without a body is read again: an application request (POST and the rest) may not be safe to repeat, payment or not.
 const retryable = method === "GET" && bodyText === undefined;
-const read = await readTerms(async () => {
+// A read that runs out of time is not tried again, and all the reads together take no longer than the one read of a buy without
+// retries (60 s).
+const read = await readTerms(async (_attempt, leftMs) => {
   termsReadError = undefined;
   let got;
   try {
-    got = await fetchOnce(url, method, bodyText);
+    got = await fetchOnce(url, method, bodyText, undefined, leftMs);
   } catch (e) {
     termsReadError = oneLine(e?.message ?? e, 300);
-    return { failure: termsFailureOf({ error: oneLine(e?.cause?.code ?? e?.message ?? e, 120) }) };
+    return { failure: termsFailureOf({ error: oneLine(e?.cause?.code ?? e?.message ?? e, 120), timeout: timedOut(e) }) };
   }
   return { failure: termsFailureOf({ status: got.res.status, retryAfter: got.res.headers.get("retry-after"), paymentRequired: got.res.headers.get("payment-required"), bodyText: got.text }), value: got };
-}, retryable ? undefined : { maxReads: 1 });
+}, { timeoutMs: TERMS_TIMEOUT_MS, ...(retryable ? {} : { maxReads: 1 }) });
 initial = read.value;
 if (!read.ok && retryable) termsFailure = failureFact(read.failure, read.attemptsUsed);
 if (!initial) refuse(`seller unreachable: ${termsReadError}`);
