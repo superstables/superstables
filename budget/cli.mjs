@@ -2342,24 +2342,32 @@ async function abandonOwnerApproval(record, f) {
     log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
     return emit(5, out.record.final.result);
   }
-  if (out.kind === "ended") return null;
-  if (!out.record) return emit(2, { ...base, state: "failed", reason: `approval ${id} no longer exists under ${approvalsDir()}`, next: "check the id and the home the command ran under; nothing was changed" });
+  // The record was there when this command read it, and an approval in the background with no result may have asked the owner's wallet:
+  // that it is gone now says nothing about whether anything was sent, so this is unknown, never failed.
+  if (!out.record) return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record disappeared from ${approvalsDir()} while it was being given up; this command stored no give-up, its processes may have been stopped, and whether the approval sent anything is unknown`, next: `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: record.rail, chain: record.chain })}` });
+  // a result stood when the record was read under the lock: that locked record is the answer, whatever happens to the file afterwards
+  if (out.kind === "ended") return { ended: out.record };
   if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait a minute, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
 async function wait({ f }) {
   let once = readApproval(f.id);
+  let endedRecord = null;
   // --site names the site the approval was made on: another one is a mistake, not a different request
   const madeOn = once?.hosted?.site ? siteOrigin(once.hosted.site, "read").origin : null;
   if (f.site !== undefined && madeOn && madeOn !== f.site) return badInput({ command: "wait" }, `--site ${f.site} is not the site this approval was made on (${madeOn}): use --site ${madeOn}, or leave --site out`);
   // an owner approval that ran in the background and has no result: the owner gives it up (one that ended is answered as wait does)
   if (f.abandon && once && OWNER_COMMANDS.has(once.command) && !once.foreground && !once.final) {
     const done = await abandonOwnerApproval(once, f);
-    if (done !== null) return done;
+    if (!done?.ended) return done;
+    // the approval ended first: its own result, as read under the lock, is answered as every wait answers a result
+    endedRecord = done.ended;
     f = { ...f, abandon: false };
-    once = readApproval(f.id);
+    once = endedRecord;
   } else if (f.abandon && once?.final && OWNER_COMMANDS.has(once.command)) {
+    // it had ended when it was read: that record is the answer, whatever happens to the file afterwards
+    endedRecord = once;
     f = { ...f, abandon: false };
   }
   if (f.abandon) {
@@ -2388,7 +2396,7 @@ async function wait({ f }) {
     next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const timeoutMs = (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
-  let r = await waitFor(f.id, timeoutMs);
+  let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs);
   if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
