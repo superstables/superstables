@@ -137,7 +137,11 @@ export function readApprovalFile(id) {
   try {
     const value = JSON.parse(text);
     // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
-    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) return { kind: "undecodable" };
+    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) {
+      // an object that carries another id (a record filed under the wrong name) is not this approval's record; readApproval, which lock
+      // recovery reads, still returns what it holds, as it always has: it may name a live process or a token that holds the chain
+      return value && typeof value === "object" && !Array.isArray(value) ? { kind: "undecodable", value } : { kind: "undecodable" };
+    }
     return { kind: usableRecord(value) ? "record" : "damaged", record: value };
   } catch {
     return { kind: "undecodable" };
@@ -145,7 +149,8 @@ export function readApprovalFile(id) {
 }
 
 export function readApproval(id) {
-  return readApprovalFile(id).record ?? null;
+  const file = readApprovalFile(id);
+  return file.record ?? file.value ?? null;
 }
 
 /** The record of `id` for an answer: null for a file that is missing, undecodable or damaged (wait and waitFor read through this). */
