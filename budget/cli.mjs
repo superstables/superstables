@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -691,7 +691,9 @@ const print = (text) => writeSync(1, scrubAgentTokens(text));
 
 // A background worker for a detached owner approval (approvals.mjs) has its id in the environment.
 const workerRecord = readApproval(process.env[WORKER_ENV]);
-const WORKER_ID = workerRecord && !workerRecord.final ? workerRecord.id : undefined;
+// A worker never runs `wait`: for a wait that carries the worker's variables by hand there is no worker identity, so nothing in it stores a result
+// for any approval, takes a worker's gates or arms its backstop.
+const WORKER_ID = process.argv[2] !== "wait" && workerRecord && !workerRecord.final ? workerRecord.id : undefined;
 // A worker whose approval has ended (or is gone) before it started has nothing to do. It must never go on as an ordinary owner
 // command: that would claim the chain and ask the owner for a new approval.
 // (A worker never runs wait: a wait that carries the variable by hand is answered like any other wait.)
@@ -700,7 +702,7 @@ if (process.env[WORKER_ENV] && !WORKER_ID && process.argv[2] !== "wait") {
   process.exit(0);
 }
 // a worker never runs `wait`: a `wait` that carries a worker's variable (by hand) adopts nothing and writes no process into any record
-if (WORKER_ID && !process.argv.slice(2).includes("wait")) adoptWorker(WORKER_ID);
+if (WORKER_ID) adoptWorker(WORKER_ID);
 // The approval this process holds the chain for: the worker's, or a blocking owner command's own (ownerGate).
 let APPROVAL_ID = WORKER_ID;
 let FOREGROUND = false;
@@ -746,8 +748,9 @@ function waitRecord() {
   for (let i = 0; i < argv.length; i++) {
     const id = argv[i] === "--id" ? argv[i + 1] : argv[i].startsWith("--id=") ? argv[i].slice(5) : undefined;
     // a record file that is there but cannot be decoded still names an approval: its existence is what the answer rests on
-    const record = id === undefined ? null : readApproval(id) ?? (isApprovalId(id) && existsSync(join(approvalsDir(), `${id}.json`)) ? { id } : null);
-    if (record) return record;
+    const file = id === undefined ? { kind: "none" } : readApprovalFile(id);
+    if (file.kind === "record") return file.record;
+    if (file.kind === "undecodable") return { id };
   }
   return null;
 }
@@ -791,7 +794,7 @@ function parse(argv) {
   }
   // (wait takes no --mainnet: for an approval that exists it is an unknown flag, which badInput answers unknown; with no such approval the
   // mainnet refusal stands)
-  if (!(cmd === "wait" && waitRecord()) && rest.includes("--mainnet")) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  if (rest.includes("--mainnet") && !(cmd === "wait" && waitRecord())) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
   // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
   if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
   // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
@@ -2325,7 +2328,7 @@ async function abandonOwnerApproval(record, f) {
     writeResult({ ok: false, ...base, state: "refused_precheck", final: false, reason, next });
     process.exit(3);
   };
-  if (!process.stdin.isTTY || WORKER_ID !== undefined) {
+  if (!process.stdin.isTTY || process.env[WORKER_ENV]) {
     return refuse("owner_terminal_required", `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
   }
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
@@ -2375,8 +2378,19 @@ async function abandonOwnerApproval(record, f) {
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
+/** wait's answer when the approval's record cannot be used: unknown, not final, exit 5, written without emit, so nothing is stored for any approval. */
+function waitUnknown(id, record, reason, next) {
+  writeResult({ ok: false, command: "wait", ...(record ? { rail: record.rail, chain: record.chain } : {}), state: "unknown", final: false, id, next, reason });
+  process.exit(5);
+}
+
 async function wait({ f }) {
-  let once = readApproval(f.id);
+  // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
+  const file = readApprovalFile(f.id);
+  if (file.kind === "undecodable") {
+    return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}) and the wallet's activity; do not run another owner command on this chain until the owner has checked what the approval did and looked at the file`);
+  }
+  let once = file.record ?? null;
   let endedRecord = null;
   // --site names the site the approval was made on: another one is a mistake, not a different request. A refusal here goes through badInput,
   // which answers unknown for an approval that exists.
@@ -2425,6 +2439,7 @@ async function wait({ f }) {
   const timeoutMs = (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
   let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs);
   if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
+  if (r?.gone) return waitUnknown(f.id, r.record, `the approval's record disappeared from ${approvalsDir()} while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: r.record?.rail, chain: r.record?.chain })}`);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
     log(`superstables budget: ${reason}`);

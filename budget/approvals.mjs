@@ -82,13 +82,32 @@ function ensureDir() {
   ensurePrivateDir(approvalsDir(), { root: HOME });
 }
 
-export function readApproval(id) {
-  if (!isApprovalId(id)) return null;
+/**
+ * The approval record file of `id`, read so that a bad file is never taken for no approval: { kind: "none" } when there is no
+ * file (or `id` is no approval id), { kind: "undecodable" } when a file is there but does not decode to a record (broken JSON,
+ * `null`, `false`, `0`, an empty file, `{}`, an array, a record filed under another id, a file that cannot be read),
+ * { kind: "record", record } otherwise.
+ */
+export function readApprovalFile(id) {
+  if (!isApprovalId(id)) return { kind: "none" };
+  let text;
   try {
-    return JSON.parse(readFileSync(recordFile(id), "utf8"));
-  } catch {
-    return null;
+    text = readFileSync(recordFile(id), "utf8");
+  } catch (err) {
+    return err?.code === "ENOENT" ? { kind: "none" } : { kind: "undecodable" };
   }
+  try {
+    const value = JSON.parse(text);
+    // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
+    return value && typeof value === "object" && !Array.isArray(value) && value.id === id ? { kind: "record", record: value } : { kind: "undecodable" };
+  } catch {
+    return { kind: "undecodable" };
+  }
+}
+
+export function readApproval(id) {
+  const file = readApprovalFile(id);
+  return file.kind === "record" ? file.record : null;
 }
 
 /**
@@ -1091,8 +1110,12 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
   const first = readApproval(id);
   if (!first) return null;
   const until = Date.now() + timeoutMs;
+  let last = first;
   for (;;) {
     let record = readApproval(id);
+    // the file went (or is not a record any more) after this command read it: no answer is made of what is left
+    if (!record) return { final: false, gone: true, record: last };
+    last = record;
     if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
     if (record.deadline && Date.now() > record.deadline && processesAlive(record)) {
       // past the worker's own backstop: this command started that group, so it stops it
@@ -1108,6 +1131,7 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
     if (!processesAlive(record)) {
       await sleep(100); // a worker that just wrote its RESULT may still be exiting
       record = readApproval(id);
+      if (!record) return { final: false, gone: true, record: last };
       if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
       if (processesAlive(record)) continue;
       if (canResume(record)) return { final: false, resume: true, record };

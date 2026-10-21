@@ -208,6 +208,33 @@ describe("wait --site that is not the site the approval was made on", () => {
     }
   }, 120_000);
 
+  it("a worker's variables set by hand (and the resume variables) never make wait store a result or release a lock: every answer leaves token, record and chain lock alone", async () => {
+    const { id, path } = record();
+    const dir = join(home, "budget", "approvals");
+    const chainLock = join(dir, "active-evm-base-sepolia");
+    writeFileSync(chainLock, JSON.stringify({ id, pid: 2_000_000_000, createdAt: Date.now() - 600_000 }), { mode: 0o600 });
+    const before = { record: readFileSync(path, "utf8"), chain: readFileSync(chainLock, "utf8") };
+    const claims: Record<string, string>[] = [{ SUPERSTABLES_BUDGET_APPROVAL_ID: id }, { SUPERSTABLES_BUDGET_APPROVAL_ID: id, SUPERSTABLES_BUDGET_RESUME: id, SUPERSTABLES_BUDGET_RESUME_GENERATION: "1" }];
+    const forms: [string[], number, string][] = [
+      [["wait", "--id", id], 2, "show_owner_first"],
+      [["wait", "--id", id, "--shown", "--timeout", "0"], 0, "waiting_owner"],
+      [["wait", "--id", id, "--shown", "--timeout", "999"], 5, "unknown"],
+      [waitArgs(id, OTHER), 5, "unknown"],
+      [["wait", "--id", id, "--shown", "--mainnet"], 5, "unknown"],
+    ];
+    for (const env of claims) {
+      for (const [args, code, state] of forms) {
+        const run = await budget(args, "x\n", env);
+        expect(run.code, `${JSON.stringify(env)} ${args.join(" ")}: ${run.stderr}`).toBe(code);
+        expect(run.result, `${args.join(" ")}: a RESULT is printed`).toMatchObject({ state });
+        expect(run.result.final).not.toBe(true);
+        expect(readFileSync(path, "utf8")).toBe(before.record);
+        expect(readFileSync(chainLock, "utf8")).toBe(before.chain);
+      }
+    }
+    expect(JSON.parse(before.record).hosted.token).toMatch(/^ssbt_/);
+  }, 240_000);
+
   it("an --id that names no record, or is malformed, keeps the existing answers", async () => {
     const gone = "oa-20261021010000-00000000";
     for (const args of [["wait", "--id", gone, "--shown", "--timeout", "999"], ["wait", "--id", gone, "--shown", "--site", "https://example.com"], ["wait", "--id", "not-an-id", "--shown"]]) {
@@ -232,18 +259,21 @@ describe("wait --site that is not the site the approval was made on", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   }, 60_000);
 
-  it("a record file that cannot be decoded (broken JSON, null) still names an approval: refusals answer unknown, the file untouched", async () => {
-    for (const content of ["{ not json", "null", ""]) {
+  // a record file that is there but is not a record: every way of reading it in wait counts it as an approval (unknown, exit 5), never as none
+  for (const [label, content] of [["false", "false"], ["0", "0"], ["an empty string", '""'], ["null", "null"], ["broken JSON", "{ not json"], ["an empty file", ""], ["an array", "[]"], ["a number", "42"], ["a string", '"x"'], ["an empty object", "{}"], ["an object with another id", JSON.stringify({ id: "oa-20261021999999-ffffffff", command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner" })]] as const) {
+    it(`a record file holding ${label}: plain wait, --shown, --abandon and a bad flag all answer unknown, the file untouched`, async () => {
       const { id, path } = record();
       writeFileSync(path, content, { mode: 0o600 });
-      for (const args of [["wait", "--id", id, "--shown", "--timeout", "999"], abandonArgs(id, OTHER), ["wait", "--id", id, "--shown", "--mainnet"]]) {
+      const forms: string[][] = [["wait", "--id", id], ["wait", "--id", id, "--shown"], ["wait", "--id", id, "--shown", "--timeout", "0"], abandonArgs(id, MADE_ON), ["wait", "--id", id, "--abandon"], ["wait", "--id", id, "--shown", "--timeout", "999"], ["wait", "--id", id, "--shown", "--mainnet"]];
+      for (const args of forms) {
         const run = await budget(args);
-        expect(run.code, `${JSON.stringify(content)} ${args.join(" ")}: ${run.stderr}`).toBe(5);
-        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.code, `${label} ${args.join(" ")}: ${run.stderr}`).toBe(5);
+        expect(run.result, args.join(" ")).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.result.state).not.toBe("failed");
         expect(readFileSync(path, "utf8")).toBe(content);
       }
-    }
-  }, 120_000);
+    }, 120_000);
+  }
 
   it("a worker's variable naming a finished approval (set by hand) does not silence wait: refusals answer, and a correct rerun returns the stored result", async () => {
     const stored = { ok: true, command: "setup", rail: "evm", chain: "base-sepolia", state: "ok", final: true, tx: { grant: `0x${"b2".repeat(32)}` }, next: "the budget is set" };

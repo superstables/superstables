@@ -235,3 +235,31 @@ describe("spawnRail", () => {
     killGroup(out.child.pid);
   });
 });
+
+describe("waitFor when the record file goes", () => {
+  it("answers gone (not final, and no throw) when the file is removed or stops being a record after it was first read", async () => {
+    for (const how of ["removed", "null"] as const) {
+      const id = await open({}, liveWorker());
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      setTimeout(() => { if (how === "removed") rmSync(path, { force: true }); else writeFileSync(path, "null"); }, 400);
+      const answer = await approvals.waitFor(id, 5000, { poll: 100 });
+      expect(answer, how).toMatchObject({ final: false, gone: true });
+      expect(answer?.record?.id).toBe(id);
+      killGroup(answer!.record.pid);
+    }
+  });
+
+  it("readApprovalFile tells a missing file, a file that is not a record, and a record apart", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    expect(approvals.readApprovalFile(id).kind).toBe("record");
+    for (const content of ["false", "0", '""', "null", "[]", "7", "42", '"x"', "{}", "{ broken", "", JSON.stringify({ id: "oa-20261021999999-ffffffff" })]) {
+      writeFileSync(path, content);
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("undecodable");
+      expect(approvals.readApproval(id)).toBeNull();
+    }
+    rmSync(path, { force: true });
+    expect(approvals.readApprovalFile(id).kind).toBe("none");
+    expect(approvals.readApprovalFile("not an id").kind).toBe("none");
+  });
+});
