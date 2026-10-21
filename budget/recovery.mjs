@@ -224,6 +224,31 @@ export function freezeOriginal({ rail, chain, op }, by) {
   } catch { return { ok: false, why: "write_failed" }; } finally { try { lock.release(); } catch { /* released with the process */ } }
 }
 
+/**
+ * The lock-protected rollback of a freeze that never led to a contact: under the original's record lock, with this order's own
+ * mark on an original that is still provably unsigned, the mark is removed and the original is payable again on the same op.
+ * Idempotent (no mark: ok). Never called because advice expired alone: the callers prove the candidate was never contacted.
+ * @returns {{ ok: boolean, why?: string }}
+ */
+export function unfreezeOriginal({ rail, chain, op }, orderRef) {
+  let dir, lock;
+  try { dir = opsDir(rail, chain); lock = lockRecord(dir, op); } catch { return { ok: false, why: "no_lock" }; }
+  if (!lock.ok) return { ok: false, why: "busy" };
+  try {
+    const file = join(dir, `${op}.json`);
+    let cur;
+    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch { return { ok: false, why: "unreadable" }; }
+    if (!cur || typeof cur !== "object" || journalProblem(rail, cur, op)) return { ok: false, why: "unreadable" };
+    if (!cur.supersededBy) return { ok: true };
+    if (cur.supersededBy.order_ref !== orderRef) return { ok: false, why: "other_order" };
+    if (!provesUnsigned(rail, { present: true, journal: cur })) return { ok: false, why: "may_have_signed" };
+    const { supersededBy: _gone, ...rest } = cur;
+    const now = new Date().toISOString();
+    writeJournalFile(file, JSON.stringify({ ...rest, updatedAt: now, ...(Array.isArray(rest.history) ? { history: [...rest.history, { at: now, state: rest.state, note: "auto recovery released this operation; the candidate was never contacted" }] } : {}) }, null, 2) + "\n");
+    return { ok: true };
+  } catch { return { ok: false, why: "write_failed" }; } finally { try { lock.release(); } catch { /* released with the process */ } }
+}
+
 /** The words a rail gives for an op that auto recovery superseded: never paid, and where the order went. */
 export function supersededWords(op, by) {
   return `operation ${op} was superseded by auto recovery (order ${by?.order_ref ?? "?"}) and is never paid again. The order continues as operation ${by?.op ?? "?"} on ${by?.rail ?? "?"} ${by?.chain ?? "?"}: read it with superstables budget reconcile --rail ${by?.rail ?? "R"} --chain ${by?.chain ?? "C"} --op ${by?.op ?? "ID"}`;
@@ -557,7 +582,7 @@ export async function recoverOrder(deps) {
     previous = done;
   }
   if (record.attempts.length && !record.closed) closeRecord(record, "no_attempt_paid");
-  return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped }) };
+  return { kind: "none", recovery: recoveryFact(record, null, { switched: false, released: record.released === true, skipped: record.skipped }) };
 }
 
 function closeRecord(record, why) {
@@ -566,6 +591,20 @@ function closeRecord(record, why) {
 }
 
 /** Runs one journaled attempt through the ordinary buy, reports it, and decides whether the order goes on. */
+/**
+ * Gives the original op back when its freeze never led to a contact: there is durable evidence that the candidate was not
+ * contacted (no `contacted_at` in the record) and its own journal shows nothing signed (or none), and the unfreeze proves the
+ * original unsigned under its lock. Anything else leaves the freeze where it is.
+ */
+async function release(deps, record, attempt) {
+  if (attempt.contacted_at || !deps.unfreezeOriginal) return false;
+  const probe = await deps.attemptState(attempt);
+  if (probe.exists && !probe.unsigned) return false;
+  const back = deps.unfreezeOriginal({ rail: deps.f.rail, chain: deps.f.chain, op: deps.f.op }, record.order_ref);
+  if (back.ok) record.released = true;
+  return back.ok;
+}
+
 /** INVARIANT 6 at the last moment: the persisted advice has run out. */
 const adviceRanOut = (deps, record) => Boolean(record.advice) && (deps.now ?? Date.now)() >= record.advice.expires_at_ms;
 
@@ -590,7 +629,16 @@ async function runAttempt(deps, record, attempt) {
     return { ...out, freezeFailed: frozen.why };
   }
   attempt.freeze = "done";
-  if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
+  if (adviceRanOut(deps, record)) { await release(deps, record, attempt); return closeUncontacted(record, attempt, "advice_expired"); }
+  // durable before the handoff: from here on the candidate may have been contacted, and the freeze is never rolled back
+  attempt.contacted_at = new Date((deps.now ?? Date.now)()).toISOString();
+  try {
+    writeRecord(record);
+  } catch {
+    delete attempt.contacted_at;
+    await release(deps, record, attempt);
+    return closeUncontacted(record, attempt, "record_unwritable");
+  }
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined };
   const got = await deps.attempt(flags);
   const state = got.fields?.state;
@@ -660,14 +708,15 @@ async function resume(deps, record) {
   const stale = await resumeProblem(deps, record, last);
   if (stale) {
     last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
+    await release(deps, record, last);
     closeRecord(record, stale);
-    return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }] }) };
+    return { kind: "none", recovery: recoveryFact(record, null, { switched: false, released: record.released === true, skipped: [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }] }) };
   }
   const done = await runAttempt(deps, record, last);
   if (done.kind === "result") return done;
   if (done.freezeFailed) return { kind: "none", freezeFailed: done.freezeFailed, recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
   if (!record.closed) closeRecord(record, "no_attempt_paid");
-  return { kind: "none", recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
+  return { kind: "none", recovery: recoveryFact(record, null, { switched: false, released: record.released === true, skipped: record.skipped ?? [] }) };
 }
 
 /** Why an unsigned, journaled attempt may not be carried on after a crash, or "". Nothing is contacted or paid when it is not "". */

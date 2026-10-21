@@ -41,7 +41,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
-import { RECOVERY_CHAINS, atomicOf, freezeOriginal, provesUnsigned, readRecord, recoverOrder } from "./recovery.mjs";
+import { RECOVERY_CHAINS, atomicOf, freezeOriginal, provesUnsigned, readRecord, recoverOrder, unfreezeOriginal } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -1617,6 +1617,7 @@ async function recoveryFor(f, ctx, rr) {
     },
     siteCall: (path, body) => signedCall("POST", path, body),
     freezeOriginal,
+    unfreezeOriginal,
     attempt: (f2) => attemptBuy(f2, ctx),
     attemptState: async (a) => {
       const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
@@ -1649,9 +1650,10 @@ async function buyRecovered({ f, ctx, record }) {
     const reason = `auto recovery could not take over operation ${f.op} (${again.freezeFailed}): another command may be paying it, so its outcome is unknown`;
     return emit(5, { ...ctx, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `wait for any buy of this op to end, then superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`, reason });
   }
-  const reason = "auto recovery already handled this order and nothing was paid on it. Buy again with a new --op";
+  const released = again?.recovery?.released === true;
+  const reason = released ? `auto recovery did not go ahead (the advice ran out before the new seller was contacted), nothing was signed, and operation ${f.op} was given back: it can be bought again with the same --op` : "auto recovery already handled this order and nothing was paid on it. Buy again with a new --op";
   log(`superstables budget: ${reason}.`);
-  return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
+  return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again?.recovery ? { recovery: again.recovery } : {}), next: released ? "buy again with the same --op" : "use a new --op for a new purchase", reason });
 }
 
 async function buy({ f, ctx }) {

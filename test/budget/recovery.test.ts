@@ -517,6 +517,7 @@ function world(over: Record<string, any> = {}) {
       if (over.reportThrows) throw new Error("report site down");
       return { status: 202, body: {} };
     },
+    unfreezeOriginal: (...a: any[]) => { (globalThis as any).__unfreezes?.push(a); return over.unfreeze ?? { ok: true }; },
     freezeOriginal: (...a: any[]) => { (globalThis as any).__freezes?.push(a); return over.freeze ?? { ok: true }; },
     attempt: async (flags: any) => {
       // INVARIANT 7: the switch is on disk before the new seller is contacted
@@ -845,6 +846,78 @@ describe("recovery of one order", () => {
         expect(out.kind).toBe("none");
         expect(count(w.calls, "attempt")).toBe(0);
         expect(readRecordFile("evm", "base-sepolia", w.op).closed).toBe("advice_expired");
+      });
+      describe("the original is given back only with durable no-contact and unsigned evidence", () => {
+        const neverContacted = async () => {
+          const w = world({ deps: { freezeOriginal: () => { throw new Error("process killed after the journal, before the freeze finished"); } } });
+          await expect(R.recoverOrder(w.deps)).rejects.toThrow("killed");
+          expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0].contacted_at).toBeUndefined();
+          return w.op;
+        };
+        const watch = () => { (globalThis as any).__unfreezes = []; return () => (globalThis as any).__unfreezes as any[]; };
+        it("expired advice, never contacted, candidate journal absent or unsigned: the original is payable on the same op again", async () => {
+          for (const state of [{ exists: false, unsigned: true }, { exists: true, unsigned: true }]) {
+            const op = await neverContacted();
+            const seen = watch();
+            const later = world({ op, deps: { now: () => NOW + 600_000 }, attemptState: () => state });
+            const out = await R.recoverOrder(later.deps);
+            expect(seen()).toHaveLength(1);
+            expect(seen()[0][0]).toEqual({ rail: "evm", chain: "base-sepolia", op });
+            expect(out.recovery.released).toBe(true);
+            expect(count(later.calls, "attempt")).toBe(0);
+            expect(readRecordFile("evm", "base-sepolia", op).released).toBe(true);
+          }
+        });
+        it("a contact on record keeps the freeze, however stale the advice is", async () => {
+          const w = world({ attempt: () => { throw new Error("process killed"); } });
+          await expect(R.recoverOrder(w.deps)).rejects.toThrow("killed");
+          expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0].contacted_at).toBeDefined();
+          const seen = watch();
+          const later = world({ op: w.op, deps: { now: () => NOW + 600_000 } });
+          const out = await R.recoverOrder(later.deps);
+          expect(seen()).toEqual([]);
+          expect(out.recovery.released).toBe(false);
+        });
+        it("a candidate that signed keeps the freeze: its outcome is the answer", async () => {
+          const op = await neverContacted();
+          const seen = watch();
+          const later = world({ op, deps: { now: () => NOW + 600_000 }, attemptState: () => ({ exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: `${op}-r2`, state: "unknown", paid: null, delivered: null, tx: {}, next: "x" } }) });
+          expect((await R.recoverOrder(later.deps)).kind).toBe("result");
+          expect(seen()).toEqual([]);
+        });
+        it("an original that cannot be proven unsigned under its lock stays frozen", async () => {
+          const op = await neverContacted();
+          const later = world({ op, deps: { now: () => NOW + 600_000 }, unfreeze: { ok: false, why: "may_have_signed" } });
+          const out = await R.recoverOrder(later.deps);
+          expect(out.recovery.released).toBe(false);
+        });
+        it("advice that runs out between the freeze and the handoff gives the original back", async () => {
+          let t = NOW;
+          const seen = watch();
+          const w = world({ deps: { now: () => t, freezeOriginal: () => { t = NOW + 101_000; return { ok: true }; } } });
+          const out = await R.recoverOrder(w.deps);
+          expect(seen()).toHaveLength(1);
+          expect(out.recovery.released).toBe(true);
+          expect(count(w.calls, "attempt")).toBe(0);
+        });
+        it("on real journals: the mark comes off an unsigned original, and never off one that signed or belongs to another order", () => {
+          const jdir = join(home, "budget", "ops", "evm-base-sepolia");
+          mkdirSync(jdir, { recursive: true, mode: 0o700 });
+          const base = { op: "rb-1", rail: "evm", path: "approve", state: "refused_precheck", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, createdAt: "2026-10-21T00:00:00Z", notes: [], signed: false };
+          const file = join(jdir, "rb-1.json");
+          writeFileSync(file, JSON.stringify(base), { mode: 0o600 });
+          const id = { rail: "evm", chain: "base-sepolia", op: "rb-1" };
+          expect(R.freezeOriginal(id, { order_ref: "o-1", op: "rb-1-r2", rail: "evm", chain: "arc-testnet" }).ok).toBe(true);
+          expect(R.unfreezeOriginal(id, "o-2")).toEqual({ ok: false, why: "other_order" });
+          expect(R.unfreezeOriginal(id, "o-1")).toEqual({ ok: true });
+          expect(JSON.parse(readFileSync(file, "utf8")).supersededBy).toBeUndefined();
+          expect(R.unfreezeOriginal(id, "o-1")).toEqual({ ok: true });
+          // marked, and then the original signed: the mark stays
+          expect(R.freezeOriginal(id, { order_ref: "o-3", op: "rb-1-r2", rail: "evm", chain: "arc-testnet" }).ok).toBe(true);
+          writeFileSync(file, JSON.stringify({ ...JSON.parse(readFileSync(file, "utf8")), signed: true }));
+          expect(R.unfreezeOriginal(id, "o-3")).toEqual({ ok: false, why: "may_have_signed" });
+          expect(JSON.parse(readFileSync(file, "utf8")).supersededBy.order_ref).toBe("o-3");
+        });
       });
       it("a signed attempt is only reconciled, even when the advice has long expired", async () => {
         const op = await crashed();
