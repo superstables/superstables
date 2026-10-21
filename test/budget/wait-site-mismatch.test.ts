@@ -2,7 +2,7 @@
 // approval did: for every approval with a request recorded on a site the answer is unknown (exit 5) with the fix to the flag, never
 // failed, because no field of the record proves nothing was sent. No network: the refusal happens before anything is read from a site.
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,6 +101,39 @@ describe("wait --site that is not the site the approval was made on", () => {
       expect(readFileSync(path, "utf8")).toBe(before);
     }, 60_000);
   }
+
+  it("a finished approval: the wrong --site changes nothing, and a rerun with the right --site (or none) returns the stored result unchanged", async () => {
+    const stored = { ok: true, command: "setup", rail: "evm", chain: "base-sepolia", id: "", state: "ok", final: true, owner: "0x1563915e194D8CfBA1943570603F7606A3115508", agent: "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A", amount: "0.01", tx: { fundAgent: `0x${"a1".repeat(32)}`, grant: `0x${"b2".repeat(32)}` }, next: "the budget is set" };
+    const { id, path } = record({ state: "final", sending: true, endedAt: "2026-10-21T00:00:00.000Z", final: { code: 0, result: { ...stored, id: "" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });
+    // the stored result carries the approval's own id, as a worker leaves it
+    const record1 = JSON.parse(readFileSync(path, "utf8"));
+    record1.final.result.id = id;
+    writeFileSync(path, JSON.stringify(record1, null, 2) + "\n", { mode: 0o600 });
+    const before = readFileSync(path, "utf8");
+    // the right site, or none, before the mistake: the stored result
+    const first = await budget(waitArgs(id, MADE_ON));
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result).toMatchObject({ state: "ok", final: true, id, owner: stored.owner, tx: stored.tx });
+    expect(readFileSync(path, "utf8")).toBe(before);
+    for (const args of [waitArgs(id, OTHER), abandonArgs(id, OTHER)]) {
+      const wrong = await budget(args);
+      expect(wrong.code, wrong.stderr).toBe(5);
+      expect(wrong.result).toMatchObject({ state: "unknown", final: false, id });
+      expect(wrong.result.next).toContain(`--site ${MADE_ON}`);
+      // nothing was written: the record is the same file, byte for byte
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
+    // the rerun the answer asks for, with the right site and with none: the original result, exit code and fields
+    for (const args of [waitArgs(id, MADE_ON), ["wait", "--id", id, "--shown"], abandonArgs(id, MADE_ON)]) {
+      const again = await budget(args);
+      expect(again.code, `${args.join(" ")}: ${again.stderr}`).toBe(0);
+      expect(again.result).toMatchObject({ state: "ok", final: true, id, owner: stored.owner, agent: stored.agent, amount: stored.amount, tx: stored.tx });
+      expect(again.result.state).not.toBe("unknown");
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
+    // no lock was left or taken
+    expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
+  }, 120_000);
 
   it("the site the approval was made on is accepted: no site refusal", async () => {
     const { id } = record({ state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });
