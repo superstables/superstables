@@ -466,6 +466,36 @@ describe("wait --abandon on a background owner approval", () => {
     expect(run.stderr).not.toMatch(/no owner approval with id/);
   }, 120_000);
 
+  it("the approval had ended when the give-up first read it, and the file is gone right after: the result that was read is answered", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const path = join(approvals(), `${id}.json`);
+    const stored = { ok: false, command: "setup", rail: "evm", chain: "base-sepolia", id, state: "unknown", final: true, reason: "the owner's wallet may have been asked to send", next: "read the chain: superstables budget status --rail evm" };
+    const r = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...r, state: "final", sending: true, final: { code: 5, result: stored }, hosted: { ...r.hosted, token: undefined } }, null, 2) + "\n");
+    const hook = `--import ${pathToFileURL(resolve(ROOT, "test/helpers/remove-record-after-lock.mjs")).href}`;
+    const run = await budget(abandonArgs(id), { NODE_OPTIONS: [process.env.NODE_OPTIONS, hook].filter(Boolean).join(" "), REMOVE_RECORD_AFTER_READ: "1" }, typed(id));
+    expect(existsSync(path), "the hook removed the record after the first read").toBe(false);
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ state: "unknown", final: true, id, reason: stored.reason });
+    expect(run.stderr).not.toMatch(/no owner approval with id/);
+  }, 120_000);
+
+  it("a record whose own id is not a valid approval id: answered unknown, never an empty exit 0", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const path = join(approvals(), `${id}.json`);
+    const r = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...r, id: "not a valid id" }, null, 2) + "\n");
+    const before = readFileSync(path, "utf8");
+    const run = await budget(abandonArgs(id), {}, "not a valid id abandon\n");
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ state: "unknown", final: false });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  }, 120_000);
+
   it("a command that only claims to be the approval's worker (its environment variables set by hand) is refused and ends nothing", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();
