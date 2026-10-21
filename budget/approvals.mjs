@@ -38,7 +38,7 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { HOME, approvalsDir, ensurePrivateDir, ownerApprovalsLog } from "./paths.mjs";
 import { writeJournalFile } from "./journal.mjs";
@@ -88,22 +88,57 @@ function ensureDir() {
  * `null`, `false`, `0`, an empty file, `{}`, an array, a record filed under another id, a file that cannot be read),
  * { kind: "record", record } otherwise.
  */
+const existsAsLink = (path) => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isText = (v) => typeof v === "string" && v !== "";
+const absentOr = (v, ok) => v === undefined || v === null || ok(v);
+
+/**
+ * Whether a record that carries its own id is one `wait` can answer from, as every writer makes one: the command, rail and chain are
+ * text, a stored final is { code: integer, result: { state: text } }, and the fields wait goes through (hosted, seen, pid, deadline,
+ * workerArgs, timeoutS) have their own shape. A purchase that is not over is read back from its site, so it needs one. `{ "id": ... }`
+ * alone, `final: true` or a site that is not text make an approval wait cannot read, not one to act on.
+ */
+function usableRecord(value) {
+  return isText(value.command) && isText(value.rail) && isText(value.chain)
+    && absentOr(value.final, (f) => isObject(f) && Number.isInteger(f.code) && isObject(f.result) && isText(f.result.state))
+    && absentOr(value.hosted, (h) => isObject(h) && absentOr(h.site, (x) => typeof x === "string"))
+    && (value.command !== "buy-once" || value.final || (isObject(value.hosted) && isText(value.hosted.site)))
+    && absentOr(value.seen, isObject)
+    && absentOr(value.pid, Number.isInteger)
+    && absentOr(value.deadline, Number.isFinite)
+    && absentOr(value.workerArgs, Array.isArray)
+    && absentOr(value.timeoutS, Number.isFinite);
+}
+
+/**
+ * The approval record file of `id`, read so that a bad file is never taken for no approval: { kind: "none" } when there is no
+ * file (or `id` is no approval id), { kind: "undecodable" } when a file is there but does not decode to an object carrying `id` (broken JSON,
+ * `null`, `false`, `0`, an empty file, `{}`, an array, a record filed under another id, a dangling link, a file that cannot be read),
+ * { kind: "damaged", record } when it carries `id` but is not a record `wait` can answer from (see usableRecord), and
+ * { kind: "record", record } otherwise. A damaged record is still an approval that holds its chain: readApproval returns it.
+ */
 export function readApprovalFile(id) {
   if (!isApprovalId(id)) return { kind: "none" };
   let text;
   try {
     text = readFileSync(recordFile(id), "utf8");
   } catch (err) {
-    return err?.code === "ENOENT" ? { kind: "none" } : { kind: "undecodable" };
+    // a dangling link in the record's place is there, and is not a record
+    return err?.code === "ENOENT" && !existsAsLink(recordFile(id)) ? { kind: "none" } : { kind: "undecodable" };
   }
   try {
     const value = JSON.parse(text);
     // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
     if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) return { kind: "undecodable" };
-    // a record wait can answer from: its command is known, and a stored final (if any) is the { code, result } recordFinalWith writes.
-    // Anything else is { kind: "damaged", record }: still an approval that holds its chain (readApproval, the lock scans), but no answer is made of it
-    const usable = typeof value.command === "string" && (value.final == null || (typeof value.final === "object" && Number.isInteger(value.final.code) && value.final.result && typeof value.final.result === "object"));
-    return { kind: usable ? "record" : "damaged", record: value };
+    return { kind: usableRecord(value) ? "record" : "damaged", record: value };
   } catch {
     return { kind: "undecodable" };
   }
@@ -1112,9 +1147,13 @@ function sentUnknown(record, reason) {
  * result leaves the approval open for the next `wait`. Only an approval that cannot be finished (not resumable) ends the way an
  * approval whose worker is gone always has: the site is asked to cancel it, else unknown.
  */
-export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
-  const first = readUsable(id);
-  if (!first) return null;
+export async function waitFor(id, timeoutMs, { poll = 250, seen = false } = {}) {
+  // null only for an approval this home never had: a caller that already read the record (`seen`) is told it is gone, and a file that is
+  // there and is not a record wait can answer from is never "no such approval"
+  const file = readApprovalFile(id);
+  if (file.kind === "none") return seen ? { final: false, gone: true, record: null } : null;
+  if (file.kind !== "record") return { final: false, gone: true, record: null };
+  const first = file.record;
   const until = Date.now() + timeoutMs;
   let last = first;
   for (;;) {

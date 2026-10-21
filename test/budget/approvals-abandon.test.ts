@@ -253,6 +253,38 @@ describe("waitFor when the record file goes", () => {
     }
   });
 
+  it("answers gone, never null, for a caller that already read the record when the file is missing or not a record at its first read", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const kept = readFileSync(path, "utf8");
+    rmSync(path, { force: true });
+    expect(await approvals.waitFor(id, 1000, { poll: 50, seen: true })).toMatchObject({ final: false, gone: true });
+    expect(await approvals.waitFor(id, 1000, { poll: 50 }), "an approval this home never had").toBeNull();
+    for (const content of ["null", "{}", JSON.stringify({ id }), JSON.stringify({ ...JSON.parse(kept), final: true })]) {
+      writeFileSync(path, content);
+      for (const seen of [true, false]) expect(await approvals.waitFor(id, 1000, { poll: 50, seen }), `${content} seen=${seen}`).toMatchObject({ final: false, gone: true });
+    }
+    writeFileSync(path, kept);
+    killGroup(JSON.parse(kept).pid);
+  });
+
+  it("a record missing what every record has, or with a field of the wrong shape, is not a record", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const kept = JSON.parse(readFileSync(path, "utf8"));
+    expect(approvals.readApprovalFile(id).kind).toBe("record");
+    for (const over of [{ id: undefined }, { command: undefined }, { rail: 5 }, { chain: "" }, { final: true }, { final: "x" }, { final: {} }, { final: { code: "0", result: {} } }, { final: { code: 0, result: null } }, { final: { code: 0, result: {} } }, { command: "buy-once", hosted: null }, { seen: "x" }, { workerArgs: "x" }, { timeoutS: "x" }, { hosted: "x" }, { hosted: { site: {} } }, { hosted: [] }, { pid: "1" }, { pid: 1.5 }, { deadline: "soon" }]) {
+      writeFileSync(path, JSON.stringify({ ...kept, ...over }));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(over)).not.toBe("record");
+    }
+    for (const over of [{ final: null }, { hosted: null }, { pid: null }, { deadline: null }, { final: { code: 5, result: { state: "unknown" } } }]) {
+      writeFileSync(path, JSON.stringify({ ...kept, ...over }));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(over)).toBe("record");
+    }
+    writeFileSync(path, JSON.stringify(kept));
+    killGroup(kept.pid);
+  });
+
   it("answers gone when a live record is rewritten mid-poll to a shape wait cannot answer from, and stores nothing", async () => {
     const shapes: [string, (id: string, base: any) => unknown][] = [
       ["an object holding only the id", (id) => ({ id })],

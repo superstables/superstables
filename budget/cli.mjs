@@ -2304,10 +2304,10 @@ async function finishHosted(f, record, timeoutMs) {
     return stopped(`the background approval ${f.id} stopped and could not be started again just now`);
   }
   if (started.started) log(`superstables budget: the background approval ${f.id} had stopped; finishing it from the request on ${siteName(record.hosted.site)}.`);
-  let r = await waitFor(f.id, timeoutMs);
+  let r = await waitFor(f.id, timeoutMs, { seen: true });
   // the owner already acted: the restarted worker is checking the chain, which can outlast --timeout
   const acted = (p) => p && (p.walletAsked || p.linked || /^hosted:(linked|queued|sending|sent|confirmed|failed|unknown)$/.test(p.status));
-  if (!r?.final && !r?.resume && acted(r?.page)) r = await waitFor(f.id, Math.max(RESUME_WAIT_MS - timeoutMs, 0));
+  if (!r?.final && !r?.resume && acted(r?.page)) r = await waitFor(f.id, Math.max(RESUME_WAIT_MS - timeoutMs, 0), { seen: true });
   if (r?.resume) return stopped(`the restarted background approval ${f.id} stopped before it had a result`);
   return r;
 }
@@ -2384,6 +2384,9 @@ async function abandonOwnerApproval(record, f) {
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
+/** What an unknown wait tells the owner to check: the approval on the site and the wallet, never a guess from the file. */
+const CHECK_APPROVAL = (what) => `check ${what} on superstables.com and in the wallet's activity before running any owner command again`;
+
 /** wait's answer when the approval's record cannot be used: unknown, not final, exit 5, written without emit, so nothing is stored for any approval. */
 function waitUnknown(id, record, reason, next) {
   writeResult({ ok: false, command: "wait", ...(record ? { rail: record.rail, chain: record.chain } : {}), state: "unknown", final: false, id, next, reason });
@@ -2394,7 +2397,7 @@ async function wait({ f }) {
   // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
   const file = readApprovalFile(f.id);
   if (file.kind === "undecodable" || file.kind === "damaged") {
-    return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}) and the wallet's activity; do not run another owner command on this chain until the owner has checked what the approval did and looked at the file`);
+    return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
   }
   let once = file.record ?? null;
   let endedRecord = null;
@@ -2443,11 +2446,9 @@ async function wait({ f }) {
     next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const timeoutMs = (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
-  let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs);
+  let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs, { seen: Boolean(once) });
   if (r?.resume) r = await finishHosted(f, r.record, timeoutMs);
-  if (r?.gone) return waitUnknown(f.id, r.record, `the approval's record disappeared from ${approvalsDir()} while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: r.record?.rail, chain: r.record?.chain })}`);
-  // this command read a record for the id (once): a read that now finds none says nothing about what that approval did
-  if (!r && once) return waitUnknown(f.id, once, `the approval's record disappeared from ${approvalsDir()} while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: once.rail, chain: once.chain })}`);
+  if (r?.gone) return waitUnknown(f.id, r.record ?? once, `the approval's record disappeared from ${approvalsDir()} (or turned into a file that is not a record) while wait was reading it; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, check which home this command ran under (${HOME})${(r.record ?? once)?.rail ? `, then read the chain with ${statusCommand({ rail: (r.record ?? once).rail, chain: (r.record ?? once).chain })}` : ""}`);
   if (!r) {
     const reason = `no owner approval with id ${f.id} under ${approvalsDir()}`;
     log(`superstables budget: ${reason}`);
