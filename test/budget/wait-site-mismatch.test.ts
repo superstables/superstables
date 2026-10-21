@@ -232,6 +232,33 @@ describe("wait --site that is not the site the approval was made on", () => {
     expect(readFileSync(path, "utf8")).toBe(before);
   }, 60_000);
 
+  it("a record file that cannot be decoded (broken JSON, null) still names an approval: refusals answer unknown, the file untouched", async () => {
+    for (const content of ["{ not json", "null", ""]) {
+      const { id, path } = record();
+      writeFileSync(path, content, { mode: 0o600 });
+      for (const args of [["wait", "--id", id, "--shown", "--timeout", "999"], abandonArgs(id, OTHER), ["wait", "--id", id, "--shown", "--mainnet"]]) {
+        const run = await budget(args);
+        expect(run.code, `${JSON.stringify(content)} ${args.join(" ")}: ${run.stderr}`).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(readFileSync(path, "utf8")).toBe(content);
+      }
+    }
+  }, 120_000);
+
+  it("a worker's variable naming a finished approval (set by hand) does not silence wait: refusals answer, and a correct rerun returns the stored result", async () => {
+    const stored = { ok: true, command: "setup", rail: "evm", chain: "base-sepolia", state: "ok", final: true, tx: { grant: `0x${"b2".repeat(32)}` }, next: "the budget is set" };
+    const { id, path } = record({ state: "final", final: { code: 0, result: stored }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });
+    const before = readFileSync(path, "utf8");
+    const env = { SUPERSTABLES_BUDGET_APPROVAL_ID: id };
+    const refused = await budget(["wait", "--id", id, "--shown", "--timeout", "999"], "x\n", env);
+    expect(refused.code, refused.stderr).toBe(5);
+    expect(refused.result).toMatchObject({ state: "unknown", final: false, id });
+    const again = await budget(["wait", "--id", id, "--shown"], "x\n", env);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.result).toMatchObject({ state: "ok", final: true, tx: stored.tx });
+    expect(readFileSync(path, "utf8")).toBe(before);
+  }, 120_000);
+
   it("the site the approval was made on is accepted: no site refusal", async () => {
     const { id } = record({ state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } });
     const run = await budget(waitArgs(id, MADE_ON));

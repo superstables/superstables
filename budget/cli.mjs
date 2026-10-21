@@ -694,7 +694,8 @@ const workerRecord = readApproval(process.env[WORKER_ENV]);
 const WORKER_ID = workerRecord && !workerRecord.final ? workerRecord.id : undefined;
 // A worker whose approval has ended (or is gone) before it started has nothing to do. It must never go on as an ordinary owner
 // command: that would claim the chain and ask the owner for a new approval.
-if (process.env[WORKER_ENV] && !WORKER_ID) {
+// (A worker never runs wait: a wait that carries the variable by hand is answered like any other wait.)
+if (process.env[WORKER_ENV] && !WORKER_ID && process.argv[2] !== "wait") {
   process.stderr.write(`superstables budget: approval ${process.env[WORKER_ENV]} has ended; this worker has nothing to do\n`);
   process.exit(0);
 }
@@ -744,7 +745,8 @@ function waitRecord() {
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     const id = argv[i] === "--id" ? argv[i + 1] : argv[i].startsWith("--id=") ? argv[i].slice(5) : undefined;
-    const record = id === undefined ? null : readApproval(id);
+    // a record file that is there but cannot be decoded still names an approval: its existence is what the answer rests on
+    const record = id === undefined ? null : readApproval(id) ?? (isApprovalId(id) && existsSync(join(approvalsDir(), `${id}.json`)) ? { id } : null);
     if (record) return record;
   }
   return null;
