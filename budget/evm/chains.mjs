@@ -45,7 +45,7 @@ export const EVM_CHAINS = {
   // Gas: a pull used 55,514 (0x2a19bdf7); the other limits are FiatToken's (not measured here).
   "arc-testnet": {
     label: "Arc Testnet", chainId: 5042002, viem: "arcTestnet",
-    rpc: "https://rpc.testnet.arc.network", explorer: "https://explorer.testnet.arc.io",
+    rpc: "https://rpc.testnet.arc.io", explorer: "https://explorer.testnet.arc.io",
     token: { address: "0x3600000000000000000000000000000000000000", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" } },
     legacy: [],
     gas: { symbol: "USDC", decimals: 18, isToken: true, limits: FIAT_TOKEN_GAS, minAgent: "0.01", topUp: "0.1", reserveMax: "2" },

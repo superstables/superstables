@@ -140,7 +140,7 @@ export const ARC_TESTNET: EvmNetwork = evm({
   key: "arc-testnet",
   chainId: 5042002,
   label: "Arc Testnet",
-  rpc: "https://rpc.testnet.arc.network",
+  rpc: "https://rpc.testnet.arc.io",
   explorer: "https://explorer.testnet.arc.io",
   usdc: "0x3600000000000000000000000000000000000000",
   eip712: { name: "USDC", version: "2" },

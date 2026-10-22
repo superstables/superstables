@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 const helper = fileURLToPath(new URL("../helpers/wallet-public-rpc.mjs", import.meta.url));
 const publicRpcs: Record<string, string> = {
   "base-sepolia": "https://sepolia.base.org",
-  "arc-testnet": "https://rpc.testnet.arc.network",
+  "arc-testnet": "https://rpc.testnet.arc.io",
   "arbitrum-sepolia": "https://sepolia-rollup.arbitrum.io/rpc",
   "polygon-amoy": "https://polygon-amoy-bor-rpc.publicnode.com",
   "skale-base-sepolia": "https://base-sepolia-testnet.skalenodes.com/v1/jubilant-horrible-ancha",

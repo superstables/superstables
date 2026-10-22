@@ -7,6 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] - Arc Testnet RPC address
+
+Testnet only.
+
+### Fixed
+
+- Arc Testnet checks, approvals and purchases work again. The client's default Arc Testnet RPC address, `rpc.testnet.arc.network`, no longer resolves, so `budget doctor`, grants and purchases on Arc failed. The default is now `rpc.testnet.arc.io`, the same endpoint the wallet-add request and the explorer links already used. If you set your own Arc RPC address, nothing changes for you.
+
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
 Testnet only.
