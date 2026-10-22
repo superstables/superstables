@@ -103,9 +103,21 @@ const isText = (v) => typeof v === "string" && v !== "";
 const absentOr = (v, ok) => v === undefined || v === null || ok(v);
 
 /**
+ * Whether `s` is payment evidence as budget/once.mjs writes it (unionSeen): `hashes` a list of text, `payers` an object of text or null,
+ * `payer`, `nonce` and `order` text or null, `validBefore` a number or null, and the flags true or false. Older records may lack any of
+ * them. The merge (unionSeen) and the check that evidence only grows (seenGrows) read these, so evidence of another shape is damage.
+ */
+const isEvidence = (s) => isObject(s)
+  && absentOr(s.hashes, (h) => Array.isArray(h) && h.every((t) => typeof t === "string"))
+  && absentOr(s.payers, (p) => isObject(p) && Object.values(p).every((w) => w === null || typeof w === "string"))
+  && ["payer", "nonce", "order"].every((k) => absentOr(s[k], (v) => typeof v === "string"))
+  && absentOr(s.validBefore, Number.isFinite)
+  && ["named", "paid", "stepOver", "moved"].every((k) => absentOr(s[k], (v) => typeof v === "boolean"));
+
+/**
  * Whether a record that carries its own id is one `wait` can answer from, as every writer makes one: the command, rail and chain are
- * text, a stored final is { code: integer, result: { state: text } }, and the fields wait goes through (hosted, seen, pid, deadline,
- * workerArgs, timeoutS) have their own shape. A purchase that is not over is read back from its site, so it needs one. `{ "id": ... }`
+ * text, a stored final is { code: integer, result: { state: text } }, payment evidence has its shape (isEvidence), and the other fields
+ * wait goes through (hosted, pid, deadline, workerArgs, timeoutS) have their own. A purchase that is not over is read back from its site, so it needs one. `{ "id": ... }`
  * alone, `final: true` or a site that is not text make an approval wait cannot read, not one to act on.
  */
 function usableRecord(value) {
@@ -113,7 +125,7 @@ function usableRecord(value) {
     && absentOr(value.final, (f) => isObject(f) && Number.isInteger(f.code) && isObject(f.result) && isText(f.result.state))
     && absentOr(value.hosted, (h) => isObject(h) && absentOr(h.site, (x) => typeof x === "string"))
     && (value.command !== "buy-once" || value.final || (isObject(value.hosted) && isText(value.hosted.site)))
-    && absentOr(value.seen, isObject)
+    && absentOr(value.seen, isEvidence)
     && absentOr(value.pid, Number.isInteger)
     && absentOr(value.deadline, Number.isFinite)
     && absentOr(value.workerArgs, Array.isArray)

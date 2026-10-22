@@ -1,5 +1,5 @@
 // One rule for every read `budget wait` makes of an approval record: once the command has seen a usable record, a later read that finds
-// it missing, damaged, `{ "id" }` only, with a malformed final, or turned into another approval answers unknown (exit 5, final false),
+// it missing, damaged, `{ "id" }` only, with a malformed final or malformed payment evidence, or turned into another approval answers unknown (exit 5, final false),
 // never failed, refused or final, and never an unhandled error. The record file and the chain lock are left as found, no worker is
 // started and nothing is written from what that read found.
 //
@@ -74,6 +74,11 @@ const MUTATIONS: [string, (r: any) => unknown, boolean?][] = [
   ["a record with no command", (r) => ({ ...r, command: undefined })],
   ["another approval's record (another chain)", (r) => ({ ...r, chain: "arc-testnet" })],
   ["the record of another hosted request", (r) => ({ ...r, hosted: { ...r.hosted, requestId: `${r.hosted.requestId}x` } }), true],
+  // payment evidence (`seen`) that is not a list of transactions and their payers: the evidence merge and the check that evidence only
+  // grows would read it as if it were
+  ["payment evidence whose transactions are an object", (r) => ({ ...r, seen: { hashes: {} } })],
+  ["payment evidence whose transactions are a number", (r) => ({ ...r, seen: { hashes: 1 } })],
+  ["payment evidence whose payer is a number", (r) => ({ ...r, seen: { hashes: [], payers: { [`0x${"a".repeat(64)}`]: 7 } } })],
 ];
 
 type Run = { code: number; stderr: string; result: any; events: string[]; file: string | null; chain: string | null; created: string };
