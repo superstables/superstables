@@ -675,13 +675,15 @@ const closedMark = (record, why) => ({ order_ref: record.order_ref, root: rootOf
  */
 function moveOrderTo(deps, record, attempt) {
   const mark = movedTo(record, attempt);
+  // the original FIRST: before any attempt op is touched, the original is durably superseded under its own record lock
+  const root = deps.freezeOp(rootOf(record), mark, { attempt: false });
+  if (!root.ok) return { ...rootOf(record), why: root.why };
   for (const a of record.attempts) {
     if (a === attempt) continue;
     const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true, url: a.url });
     if (!r.ok) return { op: a.op, rail: a.rail, chain: a.chain, why: r.why };
   }
-  const r = deps.freezeOp(rootOf(record), mark, { attempt: false });
-  return r.ok ? null : { ...rootOf(record), why: r.why };
+  return null;
 }
 
 /**
@@ -692,12 +694,13 @@ function moveOrderTo(deps, record, attempt) {
 function closeOrder(deps, record, why) {
   if (!record.closed) closeRecord(record, why);
   const mark = closedMark(record, record.closed);
+  // the original FIRST, then the attempts
+  const root = deps.freezeOp(rootOf(record), mark, { attempt: false });
+  if (!root.ok) return { ...rootOf(record), why: root.why };
   for (const a of record.attempts) {
     const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true, url: a.url });
     if (!r.ok) return { op: a.op, rail: a.rail, chain: a.chain, why: r.why, attempt: a };
   }
-  const r = deps.freezeOp(rootOf(record), mark, { attempt: false });
-  if (!r.ok) return { ...rootOf(record), why: r.why };
   record.sealed = true;
   try { writeRecord(record); } catch { /* the marks are the truth; the record only repeats them */ }
   return null;
@@ -755,11 +758,11 @@ function learn(record, attempt, fields) {
  * cannot be done, the answer is unknown, and the attempt is recorded as at least unknown so every rerun goes back to the order.
  */
 async function decided(deps, record, attempt, probe) {
-  if (!probe.busy) {
-    const held = rootFirst(deps, record, attempt);
-    if (held) return held;
-    learn(record, attempt, probe.fields);
-  }
+  const held = rootFirst(deps, record, attempt);
+  if (held) return held;
+  // a busy candidate says nothing about the outcome yet, but the order has met it: at least unknown on record, so reruns return here
+  if (probe.busy) learn(record, attempt, { state: "unknown", tx: {} });
+  else learn(record, attempt, probe.fields);
   return { kind: "result", code: probe.code, fields: switchedFields(record, attempt, probe.fields) };
 }
 
@@ -769,7 +772,7 @@ async function decided(deps, record, attempt, probe) {
  * attempt is then recorded as at least unknown (saved evidence is kept, never downgraded), so every rerun goes back to the order.
  */
 function rootFirst(deps, record, attempt) {
-  const frozen = deps.freezeOp(rootOf(record), movedTo(record, attempt), { attempt: false });
+  const frozen = deps.freezeOp(rootOf(record), record.sealed ? closedMark(record, record.closed) : movedTo(record, attempt), { attempt: false });
   if (frozen.ok) return null;
   learn(record, attempt, { state: "unknown", tx: {} });
   return stuckResult(record, { ...rootOf(record), why: frozen.why });
@@ -780,9 +783,6 @@ async function runAttempt(deps, record, attempt) {
   const { f } = deps;
   // INVARIANT 6: immediately before the handoff (and again after the freeze), the advice must still hold
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
-  // an attempt op that another command already used is never this order's: skipped, never adopted, never marked
-  const before = await deps.attemptState(attempt, record.order_ref);
-  if (before.exists && !before.unsigned) return decided(deps, record, attempt, before);
   // INVARIANT 1: every earlier op of the order is frozen at the rail boundary before anything of this attempt is contacted
   const stuck = moveOrderTo(deps, record, attempt);
   if (stuck) {
@@ -792,6 +792,9 @@ async function runAttempt(deps, record, attempt) {
     return { ...out, freezeFailed: stuck };
   }
   attempt.freeze = "done";
+  const before = await deps.attemptState(attempt, record.order_ref);
+  if (before.exists && !before.unsigned) return decided(deps, record, attempt, before);
+
   // A freeze is permanent: if the advice ran out after it, the order ends here and the original stays superseded
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined, "pay-to": undefined };
@@ -864,6 +867,10 @@ const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.
 async function resume(deps, record) {
   const last = record.attempts[record.attempts.length - 1];
   if (!last) return { kind: "none" }; // advice was never acted on
+  // The original is durably superseded FIRST, before any attempt journal is read or any attempt lock is tried. If it cannot be, the
+  // answer is unknown (the attempt recorded as at least unknown, so every rerun returns here) and no attempt is touched.
+  const firstHeld = rootFirst(deps, record, last);
+  if (firstHeld) return firstHeld;
   // INVARIANT 1: every attempt, the newest first; an attempt that may have signed is never run again, and what its journal says stands
   for (const a of [...record.attempts].reverse()) {
     const probe = await deps.attemptState(a, record.order_ref);

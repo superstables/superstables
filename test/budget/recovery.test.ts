@@ -502,6 +502,7 @@ const newOp = () => `rb-test-${++opCounter}`;
 function world(over: Record<string, any> = {}) {
   const calls: { kind: string; [k: string]: any }[] = [];
   const freezes: any[][] = [];
+  const events: { kind: string; ok?: boolean; root?: boolean }[] = [];
   const op = over.op ?? newOp();
   const f = { rail: "evm", chain: "base-sepolia", url: ORIG_URL, max: "0.05", op, ...(over.f ?? {}) };
   const deps: any = {
@@ -519,18 +520,19 @@ function world(over: Record<string, any> = {}) {
       if (over.reportThrows) throw new Error("report site down");
       return { status: 202, body: {} };
     },
-    freezeOp: (...a: any[]) => { freezes.push(a); (globalThis as any).__freezes?.push(a); return typeof over.freeze === "function" ? over.freeze(...a) : over.freeze ?? { ok: true }; },
+    freezeOp: (...a: any[]) => { freezes.push(a); (globalThis as any).__freezes?.push(a); const r = typeof over.freeze === "function" ? over.freeze(...a) : over.freeze ?? { ok: true }; events.push({ kind: "freeze", root: a[0].op === op, ok: r.ok }); return r; },
     otherSellers: true,
     attempt: async (flags: any) => {
       // INVARIANT 7: the switch is on disk before the new seller is contacted
       const rec = readRecordFile("evm", "base-sepolia", op);
+      events.push({ kind: "contact" });
       calls.push({ kind: "attempt", flags, journaled: rec.attempts.map((a: any) => ({ attempt_no: a.attempt_no, offer_id: a.offer_id, why: a.why, op: a.op, state: a.state })), order_ref: rec.order_ref });
       return over.attempt ? over.attempt(flags, calls) : paid(flags);
     },
-    attemptState: async (a: any, ref: string) => { calls.push({ kind: "attemptState", op: a.op, ref }); return over.attemptState ? over.attemptState(a) : { exists: false, unsigned: true }; },
+    attemptState: async (a: any, ref: string) => { events.push({ kind: "read" }); calls.push({ kind: "attemptState", op: a.op, ref }); return over.attemptState ? over.attemptState(a) : { exists: false, unsigned: true }; },
     ...(over.deps ?? {}),
   };
-  return { calls, deps, f, op, freezes };
+  return { calls, deps, f, op, freezes, events };
 }
 /** The op of attempt `n` of the order recorded for `op` (recovery.mjs attemptOp: the op, part of the order's reference, the number). */
 const aop = (op: string, n = 2) => R.attemptOp(op, n, readRecordFile("evm", "base-sepolia", op).order_ref);
@@ -1178,7 +1180,7 @@ describe("moving on freezes every earlier attempt, and an order that ends unpaid
     const out = await R.recoverOrder(w.deps);
     expect(out.fields.state).toBe("settled");
     const r2 = aop(w.op, 2), r3 = aop(w.op, 3);
-    expect(order).toEqual([`freeze ${w.op} -> ${r2}`, `attempt ${r2}`, `freeze ${r2} (attempt) -> attempt_refused`, `freeze ${r2} (attempt) -> ${r3}`, `freeze ${w.op} -> ${r3}`, `attempt ${r3}`]);
+    expect(order).toEqual([`freeze ${w.op} -> ${r2}`, `attempt ${r2}`, `freeze ${r2} (attempt) -> attempt_refused`, `freeze ${w.op} -> ${r3}`, `freeze ${r2} (attempt) -> ${r3}`, `attempt ${r3}`]);
   });
   it("an earlier attempt that cannot be frozen stops the order: attempt 3 is never contacted and the outcome is unknown", async () => {
     let n = 0;
@@ -1192,7 +1194,7 @@ describe("moving on freezes every earlier attempt, and an order that ends unpaid
     const out = await R.recoverOrder(w.deps);
     expect(out).toMatchObject({ kind: "none", closed: true });
     const closes = w.freezes.filter((f) => f[1].closed && f[1].closed !== "attempt_refused");
-    expect(closes.map((f) => [f[0].op, f[2].attempt])).toEqual([[aop(w.op), true], [w.op, false]]);
+    expect(closes.map((f) => [f[0].op, f[2].attempt])).toEqual([[w.op, false], [aop(w.op), true]]); // the original first
     expect(readRecordFile("evm", "base-sepolia", w.op)).toMatchObject({ closed: "no_attempt_paid", sealed: true });
 
     const stuck = world({ attempt: (flags: any) => unsignedTerms(flags), freeze: (_t: any, m: any) => (m.closed ? { ok: false, why: "busy" } : { ok: true }) });
@@ -1405,16 +1407,26 @@ describe("the original is frozen before an attempt's payment is accepted, and at
     w.deps.freezeOp = (t: any, m: any, o: any) => { order.push(`freeze ${t.op === w.op ? "root" : "attempt"} ${m.closed ?? "moved"}`); return inner(t, m, o); };
     const out = await R.recoverOrder(w.deps);
     expect(out.fields).toMatchObject({ state: "settled", paid: true });
-    expect(order).toEqual(["freeze root moved"]);
+    expect(order[0]).toBe("freeze root moved");
     expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xs" });
   });
   it("if the original cannot be frozen the payment is not accepted: unknown, and the order stays with recovery on every rerun", async () => {
     const settled = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } };
-    const w = world({ attemptState: () => settled, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) });
+    // a fresh order: the original is the first thing touched, and when it cannot be frozen no attempt is read or contacted
+    const fresh = world({ attemptState: () => settled, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) });
+    const first = await R.recoverOrder(fresh.deps);
+    expect(first).toMatchObject({ kind: "none", freezeFailed: { why: "busy" } });
+    expect(count(fresh.calls, "attemptState")).toBe(0);
+    expect(count(fresh.calls, "attempt")).toBe(0);
+    // a resumed order: unknown, the attempt is recorded as at least unknown, and no attempt journal was read
+    const w0 = world({ attempt: () => { throw new Error("process killed"); } });
+    await expect(R.recoverOrder(w0.deps)).rejects.toThrow("killed");
+    const w = world({ op: w0.op, attemptState: () => settled, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) });
     const out = await R.recoverOrder(w.deps);
     expect(out).toMatchObject({ kind: "result", code: 5 });
     expect(out.fields).toMatchObject({ state: "unknown", paid: null });
-    const a = readRecordFile("evm", "base-sepolia", w.op).attempts[0];
+    expect(count(w.calls, "attemptState")).toBe(0);
+    const a = readRecordFile("evm", "base-sepolia", w0.op).attempts[0];
     expect(a.outcome).toBe("unknown");
     expect(a.tx).toBeFalsy();
   });
@@ -1452,5 +1464,69 @@ describe("one gate for every candidate result: the original is superseded first 
     const a = readRecordFile("evm", "base-sepolia", w.op).attempts[0];
     expect(a.outcome).not.toBe("paid");
     expect(a.tx ?? null).toBeNull();
+  });
+});
+
+describe("every path that touches an attempt freezes the original first", () => {
+  const settledView = (op: string) => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } });
+  const busyView = (op: string) => ({ exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "unknown", paid: null, delivered: null, tx: {}, reason: "op_in_progress" } });
+  const collisionView = (op: string) => ({ exists: true, unsigned: false, collision: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "unknown", paid: null, delivered: null, tx: {}, reason: "different request" } });
+  /** Before the first read or contact of an attempt there is a successful freeze of the original; with a failed one there is none of either. */
+  const assertRootFirst = (w: ReturnType<typeof world>, label: string) => {
+    const firstTouch = w.events.findIndex((e) => e.kind === "read" || e.kind === "contact");
+    const firstRoot = w.events.findIndex((e) => e.kind === "freeze" && e.root);
+    expect(firstRoot, `${label}: the original is frozen`).toBeGreaterThanOrEqual(0);
+    if (w.events[firstRoot]!.ok) {
+      if (firstTouch >= 0) expect(firstRoot, `${label}: the original is frozen before any attempt is read or contacted`).toBeLessThan(firstTouch);
+    } else {
+      expect(firstTouch, `${label}: with the original unfrozen no attempt is read or contacted`).toBe(-1);
+    }
+  };
+  const crashed = async () => {
+    const w0 = world({ attempt: () => { throw new Error("process killed"); } });
+    await expect(R.recoverOrder(w0.deps)).rejects.toThrow("killed");
+    return w0.op;
+  };
+
+  it("fresh orders: paid, refused and closed, signed on first read, busy, collision", async () => {
+    const cases: [string, any][] = [
+      ["paid", {}],
+      ["refused then closed", { attempt: (flags: any) => unsignedTerms(flags) }],
+      ["a signed journal on first read", { attemptState: (a: any) => settledView(a.op) }],
+      ["a busy candidate on first read", { attemptState: (a: any) => busyView(a.op) }],
+      ["a collision on first read", { attemptState: (a: any) => collisionView(a.op) }],
+      ["original not freezable", { freeze: (t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) }],
+    ];
+    for (const [label, over] of cases) {
+      const w = world(over);
+      await R.recoverOrder(w.deps);
+      assertRootFirst(w, label);
+    }
+  });
+
+  it("reruns: signed, busy, collision, recorded payment with the journal gone, closed order, original not freezable", async () => {
+    const reruns: [string, any, any][] = [
+      ["signed journal", { attempt: () => { throw new Error("process killed"); } }, (op: string) => ({ attemptState: (a: any) => settledView(a.op), op })],
+      ["busy candidate", { attempt: () => { throw new Error("process killed"); } }, (op: string) => ({ attemptState: (a: any) => busyView(a.op), op })],
+      ["collision", { attempt: () => { throw new Error("process killed"); } }, (op: string) => ({ attemptState: (a: any) => collisionView(a.op), op })],
+      ["recorded payment, journal gone", { attempt: (flags: any) => paid(flags) }, (op: string) => ({ op })],
+      ["closed order", { attempt: (flags: any) => unsignedTerms(flags) }, (op: string) => ({ op })],
+      ["original not freezable", { attempt: () => { throw new Error("process killed"); } }, (op: string) => ({ op, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) })],
+    ];
+    for (const [label, first, again] of reruns) {
+      const w0 = world(first);
+      await R.recoverOrder(w0.deps).catch(() => undefined);
+      const w = world(again(w0.op));
+      await R.recoverOrder(w.deps);
+      assertRootFirst(w, label);
+    }
+  });
+
+  it("a busy candidate is recorded as at least unknown, so every rerun returns to the order", async () => {
+    const op = await crashed();
+    const w = world({ op, attemptState: (a: any) => busyView(a.op) });
+    const out = await R.recoverOrder(w.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5 });
+    expect(readRecordFile("evm", "base-sepolia", op).attempts[0].outcome).toBe("unknown");
   });
 });

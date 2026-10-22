@@ -589,7 +589,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
   async function frozenOrder(op: string) {
     const arcSeller = await startSeller(arc, 5042002);
     cleanups.push(() => arcSeller.close());
-    const hold: { gate: Promise<void> | null; reached: (() => void) | null; seen: Promise<void> } = { gate: null, reached: null, seen: Promise.resolve() };
+    const hold: { gate: Promise<void> | null; reached: (() => void) | null; seen: Promise<void>; paidOnly?: boolean } = { gate: null, reached: null, seen: Promise.resolve() };
     let killer: (() => void) | undefined;
     let killOnce = true;
     const hits: string[] = [];
@@ -599,8 +599,10 @@ describe("a freeze is permanent: the order is never paid on both the original an
       hits.push(req.url ?? "");
       if (req.url?.startsWith("/arc")) {
         if (killOnce) { killOnce = false; killer?.(); return; }
-        hold.reached?.();
-        if (hold.gate) await hold.gate;
+        if (!hold.paidOnly || req.headers["payment-signature"] || req.headers["x-payment"]) {
+          hold.reached?.();
+          if (hold.gate) await hold.gate;
+        }
         const headers: Record<string, string> = {};
         for (const k of ["payment-signature", "x-payment"]) if (req.headers[k]) headers[k] = String(req.headers[k]);
         const r = await fetch(arcSeller.url, { headers });
@@ -1031,6 +1033,37 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(out.result).toMatchObject({ state: "unknown", paid: null, tx: { recorded: "0x" + "ab".repeat(32) } });
     expect(out.result.tx.settle).toBeUndefined();
   }, 400_000);
+
+  for (const [name, paidOnly] of [["busy-candidate-before-root-freeze", false], ["signed-busy-candidate-before-root-freeze", true]] as const) {
+    it(`${name}: the original is superseded first even though the candidate's lock is held; unknown, never a second payment`, async () => {
+      const tag = paidOnly ? "fz-sb" : "fz-bb";
+      const { gate, arcSeller, baseSeller, hold } = await frozenOrder(tag);
+      const rootFile = join(home, "budget", "ops", "evm-base-sepolia", `${tag}.json`);
+      // the crash window: the original's mark was never written
+      const root = JSON.parse(readFileSync(rootFile, "utf8"));
+      delete root.supersededBy;
+      writeFileSync(rootFile, JSON.stringify(root, null, 2));
+      let release!: () => void;
+      hold.gate = new Promise<void>((r) => (release = r));
+      hold.paidOnly = paidOnly;
+      const reached = new Promise<void>((r) => (hold.reached = r));
+      const candidate = direct("evm/buy.ts", candidateBuy(gate, tag)); // holds the attempt op's record lock
+      await reached;
+      const out = await buy(`${gate}/spot`, { op: tag });
+      expect(out.code, all(out)).toBe(5);
+      expect(out.result).toMatchObject({ state: "unknown", paid: null });
+      // the original is superseded, although the candidate could not be read
+      expect(JSON.parse(readFileSync(rootFile, "utf8")).supersededBy).toMatchObject({ op: aop(tag) });
+      const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", tag]);
+      expect(hand.result.reason).toMatch(/superseded/);
+      release();
+      const done = await candidate;
+      expect(done.result, all(done)).toMatchObject({ state: "settled", paid: true });
+      const after = await buy(`${gate}/spot`, { op: tag });
+      expect(after.result).toMatchObject({ op: aop(tag), state: "settled", paid: true });
+      expect(settlements(arcSeller, baseSeller)).toBe(1);
+    }, 400_000);
+  }
 
   it("a payment seen on a rerun is kept in the record with its transaction, and survives the loss of the journal", async () => {
     const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-k");
