@@ -382,6 +382,19 @@ describe("waitFor when the record file goes", () => {
     writeFileSync(path, JSON.stringify(base));
   });
 
+  it("a record filed under another id takes no result: recordFinal and recordFinalWith say nothing was stored and the chain stays held", async () => {
+    const id = await open();
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    const misfiled = JSON.stringify({ ...base, id: "oa-20261021999999-ffffffff" });
+    writeFileSync(path, misfiled);
+    expect(approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true } })).stored).toBe(false);
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true });
+    expect(readFileSync(path, "utf8"), "the file is as found").toBe(misfiled);
+    expect(approvals.findPending("evm", "base-sepolia"), "the chain stays held").not.toBeNull();
+    killGroup(base.pid);
+  });
+
   it("readApprovalFile tells a missing file, a file that is not a record, and a record apart", async () => {
     const id = await open({}, liveWorker());
     const path = join(home, "budget", "approvals", `${id}.json`);
