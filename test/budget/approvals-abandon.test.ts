@@ -155,6 +155,18 @@ describe("abandonApproval", () => {
     }
   });
 
+  it("a result the record's write refuses is not stored: recordFinalWith does not say it was, and the chain is not freed", async () => {
+    const id = await open();
+    // a result that drops payment evidence is refused by the write, which returns the record as it was
+    const refused = approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true }, record: { seen: undefined } }));
+    expect(refused.stored).toBe(false);
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    expect(approvals.findPending("evm", "base-sepolia")?.id, "the chain stays held").toBe(id);
+    const stored = approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true } }));
+    expect(stored.stored).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
   // every read of the record is strict: a file that is gone, or that is not a record wait can answer from, is no approval to decide on
   // (a stored final that is only `true` included), whenever it is read, and the file is left as found
   for (const [label, replace] of [

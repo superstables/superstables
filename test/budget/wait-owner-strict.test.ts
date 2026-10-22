@@ -52,14 +52,14 @@ function budget(args: string[], terminal: string, extra: Record<string, string>)
 
 let n = 0;
 /** A background owner approval whose worker has ended and that has no result. */
-function open() {
+function open(over: Record<string, unknown> = {}) {
   const id = `oa-2026102201${String(++n).padStart(4, "0")}-${String(n).padStart(8, "0")}`;
   const dir = join(home, "budget", "approvals");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(join(home, "budget"), 0o700);
   chmodSync(dir, 0o700);
   const path = join(dir, `${id}.json`);
-  const record = { id, command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner", createdAt: new Date(Date.now() - 600_000).toISOString(), ...gone, timeoutS: 600, deadline: Date.now() + 600_000 };
+  const record = { id, command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner", createdAt: new Date(Date.now() - 600_000).toISOString(), ...gone, timeoutS: 600, deadline: Date.now() + 600_000, ...over };
   writeFileSync(path, JSON.stringify(record), { mode: 0o600 });
   return { id, path, record };
 }
@@ -70,6 +70,20 @@ const REPLACEMENTS: [string, (record: any) => unknown][] = [
   ["a stored final that is a string", (r) => ({ ...r, final: "yes" })],
   ["a stored final with a result that has no state", (r) => ({ ...r, final: { code: 0, result: {} } })],
   ["a record with no command", (r) => ({ ...r, command: undefined })],
+  ["a stored final that is empty", (r) => ({ ...r, final: {} })],
+  ["a stored final with a result and no code", (r) => ({ ...r, final: { result: { ok: true, command: "setup", state: "ok", final: true } } })],
+  ["a record filed under another id", (r) => ({ ...r, id: "oa-20261021999999-ffffffff" })],
+];
+
+/** The same approval, but a hosted request that its worker (now gone) cannot finish again: asking the site to cancel it comes first. */
+const HOSTED = { site: "http://127.0.0.1:9", requestId: "ba_test0001", kind: "grant", matchCode: "ABC-DEF", token: "ssbt_test_ba_test0001secret" };
+const HOSTED_REPLACEMENTS: [string, (record: any) => unknown][] = [
+  ["only the id", (r) => ({ id: r.id })],
+  ["a record with no hosted request", (r) => ({ ...r, hosted: undefined })],
+  ["a record of another hosted request", (r) => ({ ...r, hosted: { ...r.hosted, requestId: "ba_other0002" } })],
+  ["a stored final that is empty", (r) => ({ ...r, final: {} })],
+  ["a stored final that is true", (r) => ({ ...r, final: true })],
+  ["a record filed under another id", (r) => ({ ...r, id: "oa-20261021999999-ffffffff" })],
 ];
 
 const sentinel = (run: Run) => {
@@ -93,20 +107,47 @@ describe("an owner approval's record that is damaged after wait read it", () => 
       expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
     }, 60_000);
 
-    it(`wait --abandon, record replaced by ${label} right after the command's first read: unknown (exit 5, not final), the file as found`, async () => {
-      const { id, path, record } = open();
+    for (const read of [1, 2]) {
+      it(`wait --abandon, record replaced by ${label} right after the command's read ${read}: unknown (exit 5, not final), the file as found`, async () => {
+        const { id, path, record } = open();
+        const written = JSON.stringify(damaged(record));
+        const replacement = join(home, "rewrite.json");
+        writeFileSync(replacement, written);
+        const run = await budget(["wait", "--id", id, "--abandon", "--timeout", "0"], `${id} abandon\n`, { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: String(read) });
+        sentinel(run);
+        expect(run.code, run.stderr).toBe(5);
+        expect(run.result).toMatchObject({ state: "unknown", final: false, id });
+        expect(run.result.abandonedAt, "nothing was given up").toBeUndefined();
+        expect(readFileSync(path, "utf8"), "the file is left as found").toBe(written);
+        expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
+      }, 60_000);
+    }
+  }
+
+  // a worker that is gone and cannot be restarted: wait asks the site to cancel the request (a network round trip), then ends the approval
+  // under the record's lock. The record may turn into something else during that round trip; nothing is decided from what it was.
+  for (const [label, damaged] of HOSTED_REPLACEMENTS) {
+    it(`wait --shown on a gone worker with a hosted request, record replaced by ${label} right after the poll's second look: unknown (exit 5, not final), the file as found`, async () => {
+      const { id, path, record } = open({ hosted: HOSTED });
       const written = JSON.stringify(damaged(record));
       const replacement = join(home, "rewrite.json");
       writeFileSync(replacement, written);
-      const run = await budget(["wait", "--id", id, "--abandon", "--timeout", "0"], `${id} abandon\n`, { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: "1" });
+      const run = await budget(["wait", "--id", id, "--shown", "--timeout", "0"], "x\n", { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: "4" });
       sentinel(run);
       expect(run.code, run.stderr).toBe(5);
-      expect(run.result).toMatchObject({ command: "setup", state: "unknown", final: false, id });
-      expect(run.result.abandonedAt, "nothing was given up").toBeUndefined();
+      expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
       expect(readFileSync(path, "utf8"), "the file is left as found").toBe(written);
       expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
     }, 60_000);
   }
+
+  it("a gone worker with a hosted request that is left intact is ended unknown, as before: the request may still be open on the site", async () => {
+    const { id, path } = open({ hosted: HOSTED });
+    const run = await budget(["wait", "--id", id, "--shown", "--timeout", "0"], "x\n", {});
+    expect(run.code, run.stderr).toBe(5);
+    expect(run.result).toMatchObject({ state: "unknown", final: true, id });
+    expect(JSON.parse(readFileSync(path, "utf8")).final.code).toBe(5);
+  }, 60_000);
 
   it("wait --shown, record removed right after the poll's second look: unknown (exit 5, not final), nothing written", async () => {
     const { id, path } = open();

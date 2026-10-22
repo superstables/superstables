@@ -185,14 +185,17 @@ export function updateApproval(id, fn, { strict = false } = {}) {
  */
 export function recordFinalWith(id, decide, { strict = false } = {}) {
   let decided = null;
+  const endedAt = new Date().toISOString();
   const record = update(id, (before) => {
     if (before.final) return null;
     decided = decide(before);
     if (!decided) return null;
-    return { ...(decided.record ?? {}), state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+    return { ...(decided.record ?? {}), state: "final", endedAt, final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
   }, { strict });
-  if (record && decided) release(record.rail, record.chain, id);
-  return { record, stored: Boolean(record && decided) };
+  // stored only when the write was accepted: a refused one (a record filed under another id) returns the record as it was
+  const stored = Boolean(record && decided && record.final && record.endedAt === endedAt);
+  if (stored) release(record.rail, record.chain, id);
+  return { record, stored };
 }
 
 /**
@@ -854,13 +857,15 @@ export function recordFinalAsRestart(id, generation, code, result) {
 export function recordFinal(id, code, result, { strict = false } = {}) {
   // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
   // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
-  let stored = false;
+  const endedAt = new Date().toISOString();
+  let decided = false;
   const record = update(id, (before) => {
     if (before.final) return null;
-    stored = true;
-    return { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+    decided = true;
+    return { state: "final", endedAt, final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
   }, { strict });
-  if (record && stored) release(record.rail, record.chain, id);
+  // stored only when the write was accepted (see recordFinalWith)
+  if (decided && record?.final && record.endedAt === endedAt) release(record.rail, record.chain, id);
   return record;
 }
 
@@ -1236,16 +1241,20 @@ export async function waitFor(id, timeoutMs, { poll = 250, seen = false } = {}) 
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
       // decided from the record as stored under its lock: a final another process stored meanwhile stands, and a worker another command started meanwhile keeps the approval open
       // strict: the record under the lock must still be one wait can answer from, or nothing is decided from what is left
+      // and it must still be the approval this command asked the site about: a record that turned into another request while the site was
+      // asked is not decided from what that answer was about
       let ended;
       try {
-        ({ record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)), { strict: true }));
+        ({ record: ended } = recordFinalWith(id, (before) => {
+          if ((before.hosted?.requestId ?? null) !== (record.hosted?.requestId ?? null)) throw Object.assign(new Error(`the request of ${id} changed while the site was asked to cancel it`), { code: RECORD_GONE });
+          return processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled);
+        }, { strict: true }));
       } catch (err) {
         if (err?.code === RECORD_GONE) return { final: false, gone: true, record: last };
         throw err;
       }
-      const stored = ended ?? readUsable(id);
-      if (!stored?.final) continue;
-      return { final: true, code: stored.final.code, result: stored.final.result, record: stored };
+      if (!ended?.final) continue;
+      return { final: true, code: ended.final.code, result: ended.final.result, record: ended };
     }
     const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });
     if (record.url && record.url !== first.url) return { final: false, record, page: await pageStateOf(record), orphaned };
