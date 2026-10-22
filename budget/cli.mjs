@@ -1850,6 +1850,8 @@ async function buy({ f, ctx }) {
     if (t && t.attempts_used === 1 && raw?.final !== true) {
       // asked once; recovery uses the same answer if reads 2 and 3 fail too
       advised = await adviseOrder({ ...recoveryDeps(f, ctx), failure: t });
+      // the rail scripts do not take this command's lock: one run by hand may have paid this op while the site was asked
+      if (!provesUnsigned(f.rail, journalState(f))) return originalAnswer(f, ctx);
       const wait = advised.ok ? nextWait(1, typeof raw?.retry_after === "string" ? raw.retry_after : null) : null;
       if (wait !== null && !interrupted) {
         await new Promise((r) => setTimeout(r, wait));
@@ -1859,9 +1861,11 @@ async function buy({ f, ctx }) {
     }
   }
   const { rr, n } = ran;
+  let waited = advised !== undefined;
   // The terms could not be read and nothing was signed: auto recovery may move this order (recovery.mjs). Anything else, or a
   // site that does not offer it, is answered exactly as before.
   if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
+    waited = true;
     const moved = await recoveryFor(f, ctx, rr, advised);
     if (moved?.kind === "result") return emit(moved.code, moved.fields);
     if (moved?.kind === "original") return originalAnswer(f, ctx);
@@ -1871,6 +1875,9 @@ async function buy({ f, ctx }) {
     if (moved?.closed) n.fields.next = "use a new --op for a new purchase: this --op and every operation of its order are closed and never paid";
     if (moved?.recovery) n.fields.recovery = moved.recovery;
   }
+  // after the site was asked, an unpaid refusal stands only while this op's journal still shows nothing signed: a rail script run
+  // by hand meanwhile, or the further reads finding it paid, is answered from the journal, never as unpaid
+  if (waited && n.fields.paid === false && !provesUnsigned(f.rail, journalState(f))) return originalAnswer(f, ctx);
   emit(n.code, n.fields);
 }
 

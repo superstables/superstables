@@ -362,6 +362,24 @@ describe("without auto recovery, a buy is exactly what it was before it (main): 
     expect(seller.settled).toHaveLength(2);
   }, 120_000);
 
+  it.each([
+    ["refuses the advice (403)", () => ({ status: 403, body: { error: "recovery_off" } })],
+    ["has the policy on", (req: unknown) => adviceFor([])(req)],
+  ])("a rail script run by hand pays the op while the site, which %s, is asked: the answer is that payment, never unpaid", async (_name, answer) => {
+    const f = await flaky();
+    const hand: Out[] = [];
+    const site = await startSite({ advice: async (req: unknown) => {
+      hand.push(await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", f.url, "--max", "0.05", "--op", "race-1"]));
+      return (answer as (r: unknown) => { status: number; body: unknown })(req);
+    } });
+    setUpEvm(site.url);
+    const r = await buy(f.url, { op: "race-1" });
+    expect(hand[0]!.result, all(hand[0]!)).toMatchObject({ state: "settled" });
+    expect(r.result.paid, all(r)).toBe(true);
+    expect(r.result.tx.settle).toBe(hand[0]!.result.tx.settle);
+    expect(f.seller.settled).toHaveLength(1);
+  }, 180_000);
+
   it("a buy recovery cannot follow (--pay-to) reads once too, with a site that offers recovery", async () => {
     const site = await startSite({ advice: adviceFor([]) });
     setUpEvm(site.url);
