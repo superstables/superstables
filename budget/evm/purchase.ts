@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { collides, failureFact, otherOrder, readTerms, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
+import { collides, failureFact, otherOrder, readTerms, recordOwnsWords, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -427,6 +427,12 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
     const why = supersededWords(o.op, (prior as any).supersededBy);
     log(`REFUSED: ${why}`);
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: supersededNext((prior as any).supersededBy), supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
+  }
+  // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
+  const owned = o.recoveryOrder === undefined ? recordOwnsWords("evm", CFG.key, o.op) : "";
+  if (owned) {
+    log(`REFUSED: ${owned}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: owned, next: "rerun the original buy through superstables budget buy with the same --op" }, exitCode: 3 };
   }
 
   // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)

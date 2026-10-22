@@ -76,7 +76,7 @@ import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
-import { RECOVERY_ORDER, collides, failureFact, otherOrder, readTerms, reservedNameProblem, supersededNext, termsFailureOf, termsReadsOf, timedOut } from "../recovery.mjs";
+import { RECOVERY_ORDER, collides, failureFact, otherOrder, readTerms, recordOwnsWords, reservedNameProblem, supersededNext, termsFailureOf, termsReadsOf, timedOut } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -200,6 +200,12 @@ let lock = { ok: true };
     const why = `operation ${opId} belongs to another auto-recovered order; this order does not run it`;
     console.error(`Refused (nothing signed): ${why}`);
     finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "nothing was signed or paid" });
+  }
+  // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
+  const ownedWords = recoveryOrder === undefined && !existing?.supersededBy ? recordOwnsWords("solana", "devnet", opId) : "";
+  if (ownedWords) {
+    console.error(`Refused (nothing signed): ${ownedWords}`);
+    finish("refused_precheck", EXIT.REFUSED, { reason: ownedWords, next: "rerun the original buy through superstables budget buy with the same --op" });
   }
   const gate = gateExistingOp(existing);
   if (!gate.allow) {

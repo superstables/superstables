@@ -788,7 +788,7 @@ function keepDelivery(attempt, fields) {
 }
 
 /** Records what was observed about an attempt, also when it is already done: the stronger outcome, and its transaction. */
-function learn(record, attempt, fields, force = false) {
+function learn(record, attempt, fields) {
   const seen = fields?.state === undefined ? null : outcomeOf(fields.state);
   const settle = fields?.tx && typeof fields.tx === "object" && fields.tx.settle ? fields.tx.settle : null;
   const pull = fields?.tx && typeof fields.tx === "object" && fields.tx.pull ? fields.tx.pull : null;
@@ -802,7 +802,7 @@ function learn(record, attempt, fields, force = false) {
   // a transaction recorded without its kind is promoted only when a journal proves which kind it is
   if (attempt.tx_unknown_kind && (attempt.tx_unknown_kind === settle || attempt.tx_unknown_kind === pull)) { delete attempt.tx_unknown_kind; changed = true; }
   if (keepDelivery(attempt, fields)) changed = true;
-  if (changed || force) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
+  if (changed) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
 }
 
 /**
@@ -819,6 +819,17 @@ export function recordOwns(record) {
   const last = record.attempts[record.attempts.length - 1];
   if (last && last.state === "journaled" && !record.closed) return true;
   return record.attempts.some((a) => recordedSigned(a) || a.freeze === "done");
+}
+
+/**
+ * The rail boundary for an original whose journal lost its mark: when the order's recovery record owns the op (recordOwns), a rail
+ * script run directly refuses it, with these words; "" when there is no such record. The rails call it under the op's record lock.
+ */
+export function recordOwnsWords(rail, chain, op) {
+  try { recordPath(rail, chain, op); } catch { return ""; } // not an op that can have a record
+  const record = readRecord(rail, chain, op);
+  if (!recordOwns(record)) return "";
+  return `operation ${op} belongs to an auto-recovered order (its recovery record says so) and is never bought again here. Rerun the original buy with superstables budget buy and the same --op: it answers from the order`;
 }
 
 /**

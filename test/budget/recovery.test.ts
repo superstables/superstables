@@ -1531,6 +1531,24 @@ describe("an order keeps its original whenever any attempt may have paid (round 
     expect(R.recordOwns(rec([a({ state: "done", outcome: "failed_before_payment", freeze: "failed:busy", note: "not contacted: freeze_failed" })], { closed: "freeze_failed" }))).toBe(false);
   });
 
+  it("a busy candidate (unknown, its lock held) before the first freeze: the record says on disk that it owns the original", async () => {
+    const w = world({ attemptState: (a: any) => ({ ...unsure(a.op), busy: true }) });
+    const out = await R.recoverOrder(w.deps);
+    expect(out.fields.state).toBe("unknown");
+    expect(readRecordFile("evm", "base-sepolia", w.op).owns).toBe(true);
+    expect(rootMarks(w)).toHaveLength(1);
+  });
+
+  it("the rails' check: an op its recovery record owns is refused with words; no record, or one that owns nothing, is not", () => {
+    const w = world();
+    expect(R.recordOwnsWords("evm", "base-sepolia", w.op)).toBe("");
+    R.writeRecord({ version: 2, order_ref: "o-1", rail: "evm", chain: "base-sepolia", op: w.op, attempts: [{ attempt_no: 2, op: "x", rail: "evm", chain: "arc-testnet", url: "u", state: "done", outcome: "paid", tx: "0x1" }] });
+    expect(R.recordOwnsWords("evm", "base-sepolia", w.op)).toMatch(/recovery record says so/);
+    R.writeRecord({ version: 2, order_ref: "o-1", rail: "evm", chain: "base-sepolia", op: w.op, closed: "freeze_failed", attempts: [{ attempt_no: 2, op: "x", rail: "evm", chain: "arc-testnet", url: "u", state: "done", outcome: "failed_before_payment", freeze: "failed:busy" }] });
+    expect(R.recordOwnsWords("evm", "base-sepolia", w.op)).toBe("");
+    expect(R.recordOwnsWords("evm", "base-sepolia", "../bad")).toBe("");
+  });
+
   it("a payment answered from the record alone marks the original first, and is unknown when it cannot", async () => {
     const w0 = world({ attempt: (flags: any) => paid(flags) });
     await R.recoverOrder(w0.deps);
