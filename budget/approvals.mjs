@@ -509,21 +509,32 @@ export const startingUp = (record) => Boolean(record && !record.final && !record
  * step too, and neither can happen between the stop and the write. A worker's own final, a restart and this give-up cannot
  * both happen: whichever the lock admits first stands, and a restart finds the record final. The record keeps everything it holds (its
  * evidence, the request id and site, its log) except the access token. Nothing is asked of the site.
- * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting", record: any }>} `ended`: a result was already
+ * Every read of the record is strict (a file that is there and is not a record wait can answer from is no record, a stored final included):
+ * `gone` (record null) when the file is missing or unusable at the first read or under the lock when the give-up would be stored. Nothing
+ * is stored then and the file is left as found, though the processes it named may have been stopped.
+ * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting" | "gone", record: any }>} `ended`: a result was already
  * stored (the record is returned); `running`: a process of the approval could not be stopped; `starting`: its worker is
  * still being launched. Nothing was stored in the last two.
  */
 export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3 } = {}) {
   if (!isApprovalId(id)) return { kind: "ended", record: null };
   return holdingRecordLock(id, async () => {
-    let record = readApproval(id);
-    for (let attempt = 0; record && !record.final && attempt < attempts; attempt++) {
+    const first = readApprovalFile(id);
+    if (first.kind !== "record") return { kind: "gone", record: null };
+    let record = first.record;
+    for (let attempt = 0; !record.final && attempt < attempts; attempt++) {
       await stop(record);
-      const out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)));
+      let out;
+      try {
+        out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)), { strict: true });
+      } catch (err) {
+        if (err?.code === RECORD_GONE) return { kind: "gone", record: null };
+        throw err;
+      }
       record = out.record;
       if (out.stored) return { kind: "abandoned", record };
     }
-    return { kind: record?.final ? "ended" : startingUp(record) ? "starting" : "running", record };
+    return { kind: record.final ? "ended" : startingUp(record) ? "starting" : "running", record };
   });
 }
 
@@ -1224,7 +1235,14 @@ export async function waitFor(id, timeoutMs, { poll = 250, seen = false } = {}) 
       const h = record.hosted?.token ? record.hosted : null;
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
       // decided from the record as stored under its lock: a final another process stored meanwhile stands, and a worker another command started meanwhile keeps the approval open
-      const { record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)));
+      // strict: the record under the lock must still be one wait can answer from, or nothing is decided from what is left
+      let ended;
+      try {
+        ({ record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)), { strict: true }));
+      } catch (err) {
+        if (err?.code === RECORD_GONE) return { final: false, gone: true, record: last };
+        throw err;
+      }
       const stored = ended ?? readUsable(id);
       if (!stored?.final) continue;
       return { final: true, code: stored.final.code, result: stored.final.result, record: stored };

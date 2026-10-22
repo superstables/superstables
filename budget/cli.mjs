@@ -2388,7 +2388,8 @@ async function abandonOwnerApproval(record, f) {
     // The give-up may have been stored before the error (a directory sync after the write, say): the record says. Otherwise nothing was
     // changed. Busy: the record is locked by a process that is still running (a worker starting its rail script, another command).
     // Any other error is the file system's (the folder cannot be written, the disk is full).
-    const stored = readApproval(id);
+    const after = readApprovalFile(id);
+    const stored = after.kind === "record" ? after.record : null;
     if (stored?.final && stored.abandoned) {
       log(`superstables budget: ${id} (${record.command}) given up without a final result (${clean(err.message)} after it was recorded). The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
       return emit(5, stored.final.result);
@@ -2401,8 +2402,9 @@ async function abandonOwnerApproval(record, f) {
     return emit(5, out.record.final.result);
   }
   // The record was there when this command read it, and an approval in the background with no result may have asked the owner's wallet:
-  // that it is gone now says nothing about whether anything was sent, so this is unknown, never failed.
-  if (!out.record) return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record disappeared from ${approvalsDir()} while it was being given up; this command stored no give-up, its processes may have been stopped, and whether the approval sent anything is unknown`, next: `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: record.rail, chain: record.chain })}` });
+  // that it is gone now, or is a file that is not a record any more, says nothing about whether anything was sent, so this is unknown, never
+  // failed, and the file is left as found.
+  if (!out.record) return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record disappeared from ${approvalsDir()} (or turned into a file that is not a record) while it was being given up; this command stored no give-up and changed no file, its processes may have been stopped, and whether the approval sent anything is unknown`, next: `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: record.rail, chain: record.chain })}` });
   // a result stood when the record was read under the lock: that locked record is the answer, whatever happens to the file afterwards
   if (out.kind === "ended") return { ended: out.record };
   if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait 30 seconds, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
