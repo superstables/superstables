@@ -910,11 +910,15 @@ describe("recovery of one order", () => {
         await R.recoverOrder(w0.deps);
         const settled = world({ op: w0.op, attemptState: () => settledNow(w0.op) });
         expect((await R.recoverOrder(settled.deps)).fields.state).toBe("settled");
-        const busy = world({ op: w0.op, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: false, why: "busy" } : { ok: true }) });
+        // the observed payment is kept on the done attempt, with its transaction
+        expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+        const w1 = world({ attempt: (flags: any) => unsignedTerms(flags) });
+        await R.recoverOrder(w1.deps);
+        const busy = world({ op: w1.op, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: false, why: "busy" } : { ok: true }) });
         const out = await R.recoverOrder(busy.deps);
         expect(out.code).toBe(5);
-        expect(out.fields).toMatchObject({ state: "unknown", paid: null, final: false, op: aop(w0.op) });
-        const held = world({ op: w0.op, attemptState: () => ({ exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: aop(w0.op), state: "unknown", paid: null, tx: {}, reason: "op_in_progress" } }) });
+        expect(out.fields).toMatchObject({ state: "unknown", paid: null, final: false, op: aop(w1.op) });
+        const held = world({ op: w1.op, attemptState: () => ({ exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: aop(w1.op), state: "unknown", paid: null, tx: {}, reason: "op_in_progress" } }) });
         const held1 = await R.recoverOrder(held.deps);
         expect(held1.code).toBe(5);
         expect(held1.fields).toMatchObject({ paid: null, final: false });
@@ -923,15 +927,15 @@ describe("recovery of one order", () => {
 
     describe("losing the candidate's journal never erases a recorded outcome", () => {
       for (const [outcome, attempt] of [["paid", (flags: any) => paid(flags)], ["unknown", (flags: any) => unknown(flags)]] as const) {
-        it(`after ${outcome}: unknown, with the transaction when there is one, never paid=false, never a new op`, async () => {
+        it(`after ${outcome}: what was recorded, with the transaction when there is one, never paid=false, never a new op`, async () => {
           const w = world({ attempt });
           await R.recoverOrder(w.deps);
           for (const state of [{ exists: false, unsigned: true }, { exists: true, unsigned: true }]) {
             const again = world({ op: w.op, attemptState: () => state });
             const out = await R.recoverOrder(again.deps);
             expect(out.kind).toBe("result");
-            expect(out.code).toBe(5);
-            expect(out.fields).toMatchObject({ state: "unknown", paid: null, delivered: null, amount: null, op: aop(w.op) });
+            expect(out.code).toBe(outcome === "paid" ? 0 : 5);
+            expect(out.fields).toMatchObject(outcome === "paid" ? { state: "settled", paid: true, delivered: null, amount: null, op: aop(w.op) } : { state: "unknown", paid: null, delivered: null, amount: null, op: aop(w.op) });
             if (outcome === "paid") expect(out.fields.tx).toEqual({ settle: "0xabc" });
             expect(out.fields.next).toMatch(/never pay again/);
             expect(out.fields.next).not.toMatch(/new --op/);
@@ -1182,11 +1186,11 @@ describe("moving on freezes every earlier attempt, and an order that ends unpaid
     const out = await R.recoverOrder(w.deps);
     expect(out.fields.state).toBe("settled");
     const r2 = aop(w.op, 2), r3 = aop(w.op, 3);
-    expect(order).toEqual([`freeze ${w.op} -> ${r2}`, `attempt ${r2}`, `freeze ${r2} (attempt) -> ${r3}`, `freeze ${w.op} -> ${r3}`, `attempt ${r3}`]);
+    expect(order).toEqual([`freeze ${w.op} -> ${r2}`, `attempt ${r2}`, `freeze ${r2} (attempt) -> attempt_refused`, `freeze ${r2} (attempt) -> ${r3}`, `freeze ${w.op} -> ${r3}`, `attempt ${r3}`]);
   });
   it("an earlier attempt that cannot be frozen stops the order: attempt 3 is never contacted and the outcome is unknown", async () => {
     let n = 0;
-    const w = world({ adviceReply: { status: 200, body: three() }, attempt: (flags: any) => (++n === 1 ? unsignedTerms(flags) : paid(flags)), freeze: (t: any, _m: any, o: any) => (o.attempt ? { ok: false, why: "busy" } : { ok: true }) });
+    const w = world({ adviceReply: { status: 200, body: three() }, attempt: (flags: any) => (++n === 1 ? unsignedTerms(flags) : paid(flags)), freeze: (t: any, m: any, o: any) => (o.attempt && !m.closed ? { ok: false, why: "busy" } : { ok: true }) });
     const out = await R.recoverOrder(w.deps);
     expect(out).toMatchObject({ kind: "none", freezeFailed: { op: aop(w.op, 2), why: "busy" } });
     expect(count(w.calls, "attempt")).toBe(1);
@@ -1195,7 +1199,7 @@ describe("moving on freezes every earlier attempt, and an order that ends unpaid
     const w = world({ attempt: (flags: any) => unsignedTerms(flags), adviceReply: { status: 200, body: advice({}, [goodCandidate()]) } });
     const out = await R.recoverOrder(w.deps);
     expect(out).toMatchObject({ kind: "none", closed: true });
-    const closes = w.freezes.filter((f) => f[1].closed);
+    const closes = w.freezes.filter((f) => f[1].closed && f[1].closed !== "attempt_refused");
     expect(closes.map((f) => [f[0].op, f[2].attempt])).toEqual([[aop(w.op), true], [w.op, false]]);
     expect(readRecordFile("evm", "base-sepolia", w.op)).toMatchObject({ closed: "no_attempt_paid", sealed: true });
 
@@ -1207,21 +1211,21 @@ describe("moving on freezes every earlier attempt, and an order that ends unpaid
     const refused = world({ attempt: (flags: any) => ({ ...unsignedTerms(flags), termsFailure: undefined }) });
     const r = await R.recoverOrder(refused.deps);
     expect(r.fields.state).toBe("refused_precheck");
-    expect(refused.freezes.filter((f) => f[1].closed)).toHaveLength(2);
+    expect(refused.freezes.filter((f) => f[1].closed && f[1].closed !== "attempt_refused")).toHaveLength(2);
   });
 });
 
 describe("a rerun answers from the order's record before anything else (finding: a rerun with --pay-to said unpaid)", () => {
   for (const [outcome, attempt] of [["paid", (flags: any) => paid(flags)], ["unknown", (flags: any) => unknown(flags)]] as const) {
-    it(`a recorded ${outcome} switch whose journal shows nothing stays unknown, whatever the rerun's flags`, async () => {
+    it(`a recorded ${outcome} switch whose journal shows nothing stays what was recorded, whatever the rerun's flags`, async () => {
       const w = world({ attempt });
       await R.recoverOrder(w.deps);
       for (const f of [{ "pay-to": "0x2222222222222222222222222222222222222222" }, { max: "nope" }, { method: "POST", body: "{}" }]) {
         const again = world({ op: w.op, f, attemptState: () => ({ exists: false, unsigned: true }) });
         const out = await R.recoverOrder(again.deps);
         expect(out.kind, JSON.stringify(f)).toBe("result");
-        expect(out.code).toBe(5);
-        expect(out.fields).toMatchObject({ state: "unknown", paid: null, final: false, op: aop(w.op) });
+        expect(out.code).toBe(outcome === "paid" ? 0 : 5);
+        expect(out.fields).toMatchObject(outcome === "paid" ? { state: "settled", paid: true, op: aop(w.op) } : { state: "unknown", paid: null, final: false, op: aop(w.op) });
         if (outcome === "paid") expect(out.fields.tx).toEqual({ settle: "0xabc" });
         expect(count(again.calls, "attempt")).toBe(0);
         expect(count(again.calls, "advice")).toBe(0);
@@ -1241,5 +1245,57 @@ describe("a rerun answers from the order's record before anything else (finding:
     const again = world({ op: w.op, attemptState: (a: any) => (a.op === r2 ? { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: r2, state: "settled", paid: true, delivered: true, tx: { settle: "0xdef" }, next: "none" } } : { exists: true, unsigned: true }) });
     const out = await R.recoverOrder(again.deps);
     expect(out.fields).toMatchObject({ op: r2, state: "settled" });
+  });
+});
+
+describe("the candidate op is closed before an unpaid outcome is recorded or reported, and new payment evidence is kept", () => {
+  const settledView = (op: string, tx = "0xdef") => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "settled", paid: true, delivered: true, amount: "0.01", tx: { settle: tx }, next: "none" } });
+  const refuse = (flags: any) => ({ code: 3, unsigned: true, fields: { command: "buy", rail: flags.rail, chain: flags.chain, op: flags.op, state: "refused_precheck", paid: false, delivered: false, tx: {}, next: "x" } });
+
+  it("an early refusal: the attempt's op is marked closed before the outcome is written and before the report is sent", async () => {
+    const order: string[] = [];
+    const w = world({ attempt: refuse });
+    const freeze = w.deps.freezeOp;
+    w.deps.freezeOp = (t: any, m: any, o: any) => { order.push(`freeze ${m.closed ?? "move"}`); return freeze(t, m, o); };
+    const site = w.deps.siteCall;
+    w.deps.siteCall = async (p: string, b: any) => { if (p.endsWith("report")) order.push(`report (record says ${readRecordFile("evm", "base-sepolia", w.op).attempts[0].outcome})`); return site(p, b); };
+    const out = await R.recoverOrder(w.deps);
+    expect(out.fields.state).toBe("refused_precheck");
+    expect(order.slice(0, 3)).toEqual(["freeze move", "freeze attempt_refused", "report (record says failed_before_payment)"]);
+  });
+
+  it("the candidate settled before it could be closed: its settlement is the answer, recorded with the transaction, and nothing is reported unpaid", async () => {
+    const w = world({ attempt: refuse });
+    w.deps.freezeOp = (t: any, m: any, o: any) => (m.closed ? { ok: false, why: "may_have_signed" } : { ok: true });
+    w.deps.attemptState = async (a: any) => settledView(a.op);
+    const out = await R.recoverOrder(w.deps);
+    expect(out.fields).toMatchObject({ state: "settled", paid: true });
+    expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xdef" });
+    expect(w.calls.filter((c) => c.kind === "report")).toEqual([]);
+  });
+
+  it("a busy candidate op at that moment is unknown, never unpaid", async () => {
+    const w = world({ attempt: refuse });
+    w.deps.freezeOp = (t: any, m: any) => (m.closed ? { ok: false, why: "busy" } : { ok: true });
+    const out = await R.recoverOrder(w.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5 });
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null });
+    expect(w.calls.filter((c) => c.kind === "report")).toEqual([]);
+  });
+
+  it("payment seen on a rerun is kept on an attempt that was already done, never downgraded, and survives the loss of the journal", async () => {
+    const w0 = world({ attempt: (flags: any) => unsignedTerms(flags) });
+    await R.recoverOrder(w0.deps);
+    const r2 = aop(w0.op);
+    const unknownView = { exists: true, unsigned: false, code: 5, fields: { ...settledView(r2).fields, state: "unknown", paid: null, tx: {} } };
+    await R.recoverOrder(world({ op: w0.op, attemptState: () => unknownView }).deps);
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].outcome).toBe("unknown");
+    expect((await R.recoverOrder(world({ op: w0.op, attemptState: () => settledView(r2, "0xabc") }).deps)).fields.state).toBe("settled");
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+    await R.recoverOrder(world({ op: w0.op, attemptState: () => unknownView }).deps);
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+    const lost = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(lost.code).toBe(0);
+    expect(lost.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xabc" } });
   });
 });

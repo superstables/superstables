@@ -43,11 +43,11 @@ afterEach(async () => {
 // ---- the stand-ins -------------------------------------------------------------------------------------------------
 
 type SiteCall = { path: string; body: any; headers: Record<string, string | string[] | undefined>; raw: string; signed: boolean };
-interface Site { url: string; servicesGate: Promise<void> | null; servicesReached: (() => void) | null; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
+interface Site { url: string; servicesGate: Promise<void> | null; servicesReached: (() => void) | null; reportGate: Promise<void> | null; reportReached: (() => void) | null; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
 
 /** A fake superstables.com: the feature list, and the two recovery routes, which check the agent's signature like the real one. */
 async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}): Promise<Site & { close(): Promise<void> }> {
-  const site: Site = { url: "", servicesGate: null, servicesReached: null, serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
+  const site: Site = { url: "", servicesGate: null, servicesReached: null, reportGate: null, reportReached: null, serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
   const server = createServer(async (req, res) => {
     const raw = await text(req);
     if (req.method === "GET" && req.url === "/api/v1/budget/services") {
@@ -66,6 +66,8 @@ async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}):
       site.calls.push(call);
       if (req.url.endsWith("/advice")) { site.adviceCalls.push(call); const a = await site.advice(body); return json(res, a.status, a.body); }
       site.reportCalls.push(call);
+      site.reportReached?.();
+      if (site.reportGate) await site.reportGate;
       return json(res, 202, { ok: true });
     }
     return json(res, 404, { error: "not_found" });
@@ -425,14 +427,14 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(lost.result).toMatchObject({ state: "unknown", paid: null });
   }, 300_000);
 
-  it("losing the candidate's journal after a paid switch leaves the order unknown with its transaction, never unpaid", async () => {
+  it("losing the candidate's journal after a paid switch still reports it paid, with its transaction, never unpaid", async () => {
     const { r, arcSeller } = await recovered((g) => [arcCandidate(g)]);
     expect(r.code, all(r)).toBe(0);
     const journal = join(home, "budget", "ops", "evm-arc-testnet", `${aop("rec-1")}.json`);
     renameSync(journal, `${journal}.away`);
     const again = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
-    expect(again.code, all(again)).toBe(5);
-    expect(again.result).toMatchObject({ state: "unknown", paid: null, op: aop("rec-1"), chain: "arc-testnet" });
+    expect(again.code, all(again)).toBe(0);
+    expect(again.result).toMatchObject({ state: "settled", paid: true, op: aop("rec-1"), chain: "arc-testnet" });
     expect(again.result.tx).toEqual({ settle: r.result.tx.settle });
     expect(JSON.stringify(again.result)).not.toMatch(/new --op/);
     expect(arcSeller.settled).toHaveLength(1);
@@ -777,6 +779,41 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
+  it("report race: the candidate refuses, its op is closed before the outcome is recorded or reported, and a direct buy released during the report is refused", async () => {
+    const { gate, arcSeller, baseSeller, site } = await frozenOrder("fz-r");
+    arc.setAllowance(owner.address, agent.address, 0n); // the candidate refuses: no allowance on Arc
+    let release!: () => void;
+    site.reportGate = new Promise<void>((r) => (release = r));
+    const reached = new Promise<void>((r) => (site.reportReached = r));
+    const rerun = buy(`${gate}/spot`, { op: "fz-r" });
+    await Promise.race([reached, rerun.then((r) => { throw new Error(`the rerun ended before the report: ${all(r).slice(-1500)}`); })]);
+    arc.setAllowance(owner.address, agent.address, usdc("1"));
+    const hand = await direct("evm/buy.ts", candidateBuy(gate, "fz-r"));
+    expect(hand.result, all(hand)).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(hand.result.reason).toMatch(/closed by auto recovery/);
+    release();
+    const out = await rerun;
+    expect(out.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(settlements(arcSeller, baseSeller)).toBe(0);
+    expect(arc.sentRaw).toEqual([]);
+  }, 400_000);
+
+  it("a payment seen on a rerun is kept in the record with its transaction, and survives the loss of the journal", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-k");
+    const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-k"));
+    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    expect(JSON.parse(readFileSync(file, "utf8")).attempts[0].outcome).not.toBe("paid");
+    const again = await buy(`${gate}/spot`, { op: "fz-k" });
+    expect(again.result).toMatchObject({ op: aop("fz-k"), state: "settled", paid: true });
+    expect(JSON.parse(readFileSync(file, "utf8")).attempts[0]).toMatchObject({ outcome: "paid", tx: candidate.result.tx.settle });
+    const journal = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-k")}.json`);
+    renameSync(journal, `${journal}.away`);
+    const lost = await buy(`${gate}/spot`, { op: "fz-k" });
+    expect(lost.code, all(lost)).toBe(0);
+    expect(lost.result).toMatchObject({ state: "settled", paid: true, tx: { settle: candidate.result.tx.settle } });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
   it("schedule: the rerun closes the order unpaid first; the attempt started afterwards is refused, so 'not paid' stays true", async () => {
     const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-h");
     const rec = JSON.parse(readFileSync(file, "utf8"));
@@ -1031,7 +1068,7 @@ describe("an order that moves on freezes every earlier attempt (three offers)", 
 });
 
 describe("a rerun answers from the order's record whatever its flags (--pay-to)", () => {
-  it("a paid switch rerun with --pay-to is that payment; with the attempt's journal lost it is unknown, final: false, exit 5", async () => {
+  it("a paid switch rerun with --pay-to is that payment; with the attempt's journal lost it is still reported paid, with its tx", async () => {
     const arcSeller = await startSeller(arc, 5042002);
     cleanups.push(() => arcSeller.close());
     const gate = await startGate({ base: "503", arcSeller });
@@ -1045,8 +1082,8 @@ describe("a rerun answers from the order's record whatever its flags (--pay-to)"
     const journal = join(home, "budget", "ops", "evm-arc-testnet", `${aop("payto")}.json`);
     renameSync(journal, `${journal}.away`);
     const lost = await buy(`${gate.url}/spot`, { op: "payto", extra: payTo });
-    expect(lost.code, all(lost)).toBe(5);
-    expect(lost.result).toMatchObject({ state: "unknown", paid: null, final: false, tx: { settle: first.result.tx.settle } });
+    expect(lost.code, all(lost)).toBe(0);
+    expect(lost.result).toMatchObject({ state: "settled", paid: true, tx: { settle: first.result.tx.settle } });
     expect(JSON.stringify(lost.result)).not.toMatch(/new --op/);
     expect(arcSeller.settled).toHaveLength(1);
     expect(site.adviceCalls).toHaveLength(1);

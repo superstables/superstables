@@ -707,10 +707,24 @@ async function endUnpaid(deps, record, why) {
   return { kind: "none", closed: true, recovery: recoveryFact(record, null, { switched: false, skipped: record.skipped ?? [] }) };
 }
 
-/** An attempt whose own journal shows it did something: its answer (reconciled from the chain) is the order's. */
+/** Evidence only gets stronger: paid beats unknown, and unknown beats failed_before_payment. Never downgraded. */
+const RANK = { failed_before_payment: 0, unknown: 1, paid: 2 };
+
+/** Records what was observed about an attempt, also when it is already done: the stronger outcome, and its transaction. */
+function learn(record, attempt, fields) {
+  const seen = fields?.state === undefined ? null : outcomeOf(fields.state);
+  const tx = fields?.tx && typeof fields.tx === "object" ? (fields.tx.settle ?? fields.tx.pull ?? null) : null;
+  let changed = false;
+  if (attempt.state !== "done") { attempt.state = "done"; changed = true; }
+  if (seen !== null && (attempt.outcome == null || RANK[seen] > (RANK[attempt.outcome] ?? -1))) { attempt.outcome = seen; changed = true; }
+  if (tx && !attempt.tx) { attempt.tx = tx; changed = true; }
+  if (changed) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
+}
+
+/** An attempt whose own journal shows it did something: its answer (reconciled from the chain) is the order's, and is kept. */
 function decided(record, attempt, probe) {
   // a busy op says nothing about the outcome yet: it is answered as unknown now and read again next time
-  if (!probe.busy && (attempt.state !== "done" || attempt.outcome === "failed_before_payment")) { attempt.state = "done"; attempt.outcome = outcomeOf(probe.fields?.state); try { writeRecord(record); } catch { /* the answer below is the same */ } }
+  if (!probe.busy) learn(record, attempt, probe.fields);
   return { kind: "result", code: probe.code, fields: switchedFields(record, attempt, probe.fields) };
 }
 
@@ -739,10 +753,24 @@ async function runAttempt(deps, record, attempt) {
   if (got.taken) { skipTaken(record, attempt); return { kind: "continue", unsigned: true }; }
   const state = got.fields?.state;
   const outcome = state === undefined ? "unknown" : outcomeOf(state);
-  attempt.state = "done";
-  attempt.outcome = outcome;
   const tx = got.fields?.tx && typeof got.fields.tx === "object" ? (got.fields.tx.settle ?? got.fields.tx.pull ?? null) : null;
-  attempt.tx = tx;
+  // Nothing is recorded or reported as "failed before payment" until THIS attempt's op is closed for good under its record lock:
+  // after that no command can pay it, so no snapshot of it goes stale. If something was signed meanwhile, or a command holds it,
+  // that is the answer, never unpaid.
+  if (outcome === "failed_before_payment" && got.unsigned === true) {
+    const shut = deps.freezeOp({ rail: attempt.rail, chain: attempt.chain, op: attempt.op }, closedMark(record, "attempt_refused"), { attempt: true });
+    if (!shut.ok) {
+      if (shut.why === "may_have_signed") {
+        const probe = await deps.attemptState(attempt, record.order_ref);
+        if (probe.exists && !probe.unsigned && !probe.foreign) { record.closed = "attempt_decided"; return decided(record, attempt, probe); }
+      }
+      record.closed = "attempt_decided";
+      return stuckResult(record, { op: attempt.op, rail: attempt.rail, chain: attempt.chain, why: shut.why });
+    }
+  }
+  attempt.state = "done";
+  attempt.outcome = attempt.outcome && RANK[attempt.outcome] > RANK[outcome] ? attempt.outcome : outcome;
+  attempt.tx = tx ?? attempt.tx ?? null;
   // a refusal before payment that left no signature behind: the order may go on to the next candidate
   const unsigned = outcome === "failed_before_payment" && got.unsigned === true && got.termsFailure !== undefined;
   if (!unsigned) record.closed = "attempt_decided";
@@ -796,13 +824,14 @@ async function resume(deps, record) {
     if (probe.exists && !probe.unsigned) return decided(record, a, probe);
     // Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
     if (recordedSigned(a)) {
+      const paidOnRecord = a.outcome === "paid";
       return {
-        kind: "result", code: 5,
+        kind: "result", code: paidOnRecord ? 0 : 5,
         fields: switchedFields(record, a, {
-          command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: "unknown", paid: null, delivered: null, amount: null,
+          command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: paidOnRecord ? "settled" : "unknown", paid: paidOnRecord ? true : null, delivered: null, amount: null,
           tx: a.tx ? { settle: a.tx } : {},
           next: `superstables budget reconcile --rail ${a.rail} --chain ${a.chain} --op ${a.op} (never pay again for this order)`,
-          reason: `the recovery record says operation ${a.op} ${a.outcome === "paid" ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : ""}, but its journal cannot be read: whether it was paid is unknown, and it is never paid again`,
+          reason: `the recovery record says operation ${a.op} ${paidOnRecord ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
         }),
       };
     }
