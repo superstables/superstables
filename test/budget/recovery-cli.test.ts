@@ -875,8 +875,13 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
     release();
     const out = await rerun;
-    expect(out.result).toMatchObject({ op: aop("fz-e"), state: "settled", paid: true });
-    expect(out.result.reason ?? "").not.toMatch(/new --op/);
+    // The client gives up on a feature read after 15 s; if the candidate was still running then, the rerun met a held op: unknown, never
+    // unpaid. Otherwise it reports the settlement. The next rerun, with the candidate done, always reports it.
+    expect(out.result.paid, all(out)).not.toBe(false);
+    expect(JSON.stringify(out.result)).not.toMatch(/new --op|nothing was paid/i);
+    if (out.result.state !== "settled") expect(out.result).toMatchObject({ state: "unknown", paid: null });
+    const next = await buy(`${gate}/spot`, { op: "fz-e" });
+    expect(next.result, all(next)).toMatchObject({ op: aop("fz-e"), state: "settled", paid: true });
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
@@ -947,7 +952,8 @@ describe("a freeze is permanent: the order is never paid on both the original an
     releaseRead();
     const during = await rerun;
     expect(during.code, all(during)).toBe(5);
-    expect(during.result).toMatchObject({ state: "unknown", paid: null, final: false, op: aop("fz-g") });
+    // (the op is the attempt's, or the original's when the client had already given up on the feature read after 15 s)
+    expect(during.result).toMatchObject({ state: "unknown", paid: null, final: false });
     expect(JSON.stringify(during.result)).not.toMatch(/new --op/);
     releaseTerms();
     const done = await candidate;
@@ -1126,6 +1132,9 @@ describe("a freeze is permanent: the order is never paid on both the original an
     // an ordinary buy of the order's attempt name gets nowhere
     const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
     expect(ordinary.result.reason).toMatch(/reserved/);
+    // and every later rerun reports the same settlement
+    const next = await buy(`${gate}/spot`, { op: "fz-m" });
+    expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 

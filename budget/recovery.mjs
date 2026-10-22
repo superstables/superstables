@@ -290,6 +290,23 @@ export function notThisOrder(journal, orderRef, url, signed) {
 
 const sameMark = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
+/** Why an existing mark's target op blocks replacing the mark, or "": it signed or settled (or its journal cannot be read), or it is held. */
+function markTargetProblem(existing, replacement) {
+  if (!existing || typeof existing.op !== "string" || existing.closed) return ""; // a closed mark points at no op
+  if (existing.op === replacement.op && existing.rail === replacement.rail && existing.chain === replacement.chain) return "";
+  if (!existing.rail || !existing.chain) return "mark_target_unreadable";
+  let dir, lock;
+  try { dir = opsDir(existing.rail, existing.chain); lock = lockRecord(dir, existing.op); } catch { return "mark_target_unreadable"; }
+  if (!lock.ok) return "busy";
+  try {
+    let j = null;
+    try { j = JSON.parse(readFileSync(join(dir, `${existing.op}.json`), "utf8")); } catch (err) { if (err?.code !== "ENOENT") return "mark_target_unreadable"; }
+    if (j === null) return "";
+    if (!j || typeof j !== "object" || journalProblem(existing.rail, j, existing.op)) return "mark_target_unreadable";
+    return provesUnsigned(existing.rail, { present: true, journal: j }) ? "" : "may_have_signed";
+  } finally { try { lock.release(); } catch { /* released with the process */ } }
+}
+
 /**
  * INVARIANT 1, the rail boundary: durably marks one op of an order (its original op, or one of its attempts) under the op's
  * record lock, the lock every rail takes while it works on that op. Every rail entrypoint (evm/purchase.ts, solana/ops.mjs
@@ -325,6 +342,12 @@ export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = nu
       if (otherOrder(cur, mark.order_ref)) return { ok: false, why: "other_order" };
       if (!provesUnsigned(rail, { present: true, journal: cur })) return { ok: false, why: "may_have_signed" };
       if (cur.supersededBy && sameMark(cur.supersededBy, mark)) return { ok: true };
+      // Replacing an existing mark: the op that mark points to is read first, under its own record lock (it need not be in the record's
+      // attempt list). If it signed, settled, is unreadable or is held, the mark stays and the caller's answer is unknown.
+      if (cur.supersededBy) {
+        const target = markTargetProblem(cur.supersededBy, mark);
+        if (target) return { ok: false, why: target };
+      }
       start = cur;
     } else if (rail === "solana") {
       start = { op, rail: "solana", kind: "buy", state: "refused_precheck", createdAt: now, history: [] };
@@ -1065,7 +1088,7 @@ function recordedFields(a) {
     ? `was paid${delivered === true ? " and delivered" : delivered === false ? " and not delivered" : ", and its delivery is not known"}${chainFinal === true ? "" : ", and whether the payment is final on chain is not known"}`
     : "may have paid";
   return {
-    command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: paidOnRecord ? "settled" : "unknown", ...(paidOnRecord ? { chain_final: chainFinal } : {}),
+    command: "buy", rail: a.rail, chain: a.chain, op: a.op, evidence: "record", state: paidOnRecord ? "settled" : "unknown", ...(paidOnRecord ? { chain_final: chainFinal } : {}),
     paid: paidOnRecord ? true : null, delivered, amount: null,
     tx: { ...(a.tx ? { settle: a.tx } : {}), ...(a.tx_pull ? { pull: a.tx_pull } : {}), ...(a.tx_unknown_kind ? { recorded: a.tx_unknown_kind } : {}) },
     next: `superstables budget reconcile --rail ${a.rail} --chain ${a.chain} --op ${a.op} (never pay again for this order${paidOnRecord && delivered !== true ? "; if it was not delivered, report the transaction to the seller" : ""})`,
@@ -1084,17 +1107,18 @@ const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.
  */
 async function resume(deps, record) {
   const last = record.attempts[record.attempts.length - 1];
-  if (!last) return { kind: "none" }; // advice was never acted on
   // an order journaled before attempts were registered registers them now, so their names stay reserved without their journals
   for (const a of record.attempts) { try { registerAttempt(record, a); } catch { /* reserved by its journal's stamp or mark, if any */ } }
   // A record from an earlier development build is never trusted to claim, adopt, start or resume anything: unknown, with its evidence.
+  // Checked before the empty-list shortcut: such a record with no attempts still freezes the original first and answers the same.
   if (earlierBuild(record)) {
-    rootFirst(deps, record, last); // the original is frozen first when it can be; if not, the answer is the same
+    if (last) rootFirst(deps, record, last); // the original is frozen first when it can be; if not, the answer is the same
+    else markRoot(deps, record, closedMark(record, "earlier_build"));
     const txs = record.attempts.flatMap((a) => [a.tx, a.tx_pull, a.tx_unknown_kind]).filter(Boolean);
     return {
       kind: "result", code: 5,
       fields: {
-        command: "buy", rail: record.rail, chain: record.chain, op: record.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null,
+        command: "buy", rail: record.rail, chain: record.chain, op: record.op, evidence: "record", state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null,
         tx: txs.length ? { recorded: txs[0] } : {},
         recovery: recoveryFact(record, null, { switched: record.attempts.length > 0, skipped: record.skipped ?? [] }),
         next: "check the chain yourself (the agent's and the owner's transactions); never pay again for this order",
@@ -1102,6 +1126,7 @@ async function resume(deps, record) {
       },
     };
   }
+  if (!last) return { kind: "none" }; // advice was never acted on
   // The original is durably superseded FIRST, before any attempt journal is read or any attempt lock is tried. If it cannot be, the
   // answer is unknown (the attempt recorded as at least unknown, so every rerun returns here) and no attempt is touched.
   const firstHeld = neverContacted(last) ? rootFirstUncontacted(deps, record, last) : rootFirst(deps, record, last);
