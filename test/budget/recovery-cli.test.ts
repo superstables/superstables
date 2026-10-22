@@ -435,7 +435,7 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     const again = await buy("http://127.0.0.1:9/gone", { op: "rec-1" });
     expect(again.code, all(again)).toBe(0);
     expect(again.result).toMatchObject({ state: "settled", paid: true, op: aop("rec-1"), chain: "arc-testnet" });
-    expect(again.result.tx).toEqual({ settle: r.result.tx.settle });
+    expect(again.result.tx.settle).toBe(r.result.tx.settle);
     expect(JSON.stringify(again.result)).not.toMatch(/new --op/);
     expect(arcSeller.settled).toHaveLength(1);
   }, 240_000);
