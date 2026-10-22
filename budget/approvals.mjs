@@ -169,6 +169,8 @@ export function sameApproval(seen, now) {
   if (!isObject(seen) || !isObject(now)) return false;
   for (const k of ["id", "command", "rail", "chain", "createdAt"]) if (seen[k] !== undefined && now[k] !== seen[k]) return false;
   if (isObject(seen.hosted) && !(isObject(now.hosted) && now.hosted.site === seen.hosted.site)) return false;
+  // a buy-once purchase is one request on the site from start to end: a record of another request is another purchase
+  if (seen.command === "buy-once" && isObject(seen.hosted) && now.hosted.requestId !== seen.hosted.requestId) return false;
   return true;
 }
 

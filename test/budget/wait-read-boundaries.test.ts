@@ -30,6 +30,7 @@ beforeAll(async () => {
 });
 
 type Context = { home: string; id: string; site?: string };
+type Answer = { code: number; state: string; final: boolean };
 type Form = {
   name: string;
   /** the record as a worker or buy-once left it */
@@ -42,22 +43,38 @@ type Form = {
   request?: boolean;
   /** a fake site that answers the purchase as still waiting for the owner */
   site?: boolean;
+  /** the answer to the record as it is (or the answers it may give, by timing) */
+  answer: Answer | Answer[];
+  /** the record as it is starts a worker */
+  launches?: boolean;
 };
 
 const HOSTED = { site: "http://127.0.0.1:9", requestId: "ba_test0001", kind: "grant", matchCode: "ABC-DEF", token: "ssbt_test_ba_test0001secret" };
 const owner = (over: Record<string, unknown> = {}) => (c: Context) => ({ id: c.id, command: "setup", rail: "evm", chain: "base-sepolia", state: "waiting_owner", createdAt: new Date(Date.now() - 600_000).toISOString(), ...gone, timeoutS: 600, deadline: Date.now() + 600_000, ...over });
+const purchase = (c: Context) => ({
+  id: c.id, command: "buy-once", rail: "evm", chain: "base-sepolia", state: "waiting_owner", attributionVersion: 2, createdAt: new Date(Date.now() - 60_000).toISOString(),
+  action: "buy-once", url: `${c.site}/approve/purchase/x`, matchCode: "ABC-DEF", expires: new Date(Date.now() + 600_000).toISOString(), service: { id: "svc" }, pid: null,
+  hosted: { site: c.site, requestId: "11111111-2222-4333-8444-555555555555", kind: "purchase", token: "sspt_test_aaaaaaaaaaaaaaaa" },
+});
 const shown = (c: Context) => ["wait", "--id", c.id, "--shown", "--timeout", "0"];
 const abandon = (c: Context) => ["wait", "--id", c.id, "--abandon", "--timeout", "0"];
 const typed = (c: Context) => `${c.id} abandon\n`;
 const asWorker = (c: Context) => ({ SUPERSTABLES_BUDGET_APPROVAL_ID: c.id });
 
 export const FORMS: Form[] = [
-  { name: "wait --shown, its worker gone, no hosted request", record: owner(), args: shown },
-  { name: "wait --shown, its worker gone, a hosted request no restart can finish", record: owner({ hosted: HOSTED }), args: shown },
-  { name: "wait --shown, its worker gone, a hosted request a restarted worker finishes", record: owner({ hosted: { ...HOSTED, resumable: true }, workerArgs: ["not-a-command"] }), args: shown },
-  { name: "wait --abandon from the owner's terminal", record: owner({ hosted: HOSTED }), args: abandon, terminal: typed },
-  { name: "wait --shown with a worker's variable set by hand", record: owner(), args: shown, env: asWorker },
-  { name: "wait --abandon with a worker's variable set by hand", record: owner(), args: abandon, terminal: typed, env: asWorker },
+  { name: "wait --shown, its worker gone, no hosted request", record: owner(), args: shown, answer: { code: 3, state: "refused_precheck", final: true } },
+  { name: "wait --shown, its worker gone, a hosted request no restart can finish", record: owner({ hosted: HOSTED }), args: shown, answer: { code: 5, state: "unknown", final: true } },
+  { name: "wait --shown, its worker gone, a hosted request a restarted worker finishes", record: owner({ hosted: { ...HOSTED, resumable: true }, workerArgs: ["not-a-command"] }), args: shown, launches: true,
+    // the restarted worker (a command that ends at once) is still starting when wait answers, or has already ended with no result
+    answer: [{ code: 0, state: "waiting_owner", final: false }, { code: 5, state: "unknown", final: false }] },
+  { name: "wait --abandon from the owner's terminal", record: owner({ hosted: HOSTED }), args: abandon, terminal: typed, answer: { code: 5, state: "unknown", final: true } },
+  { name: "wait --shown with a worker's variable set by hand", record: owner(), args: shown, env: asWorker, answer: { code: 3, state: "refused_precheck", final: true } },
+  { name: "wait --abandon with a worker's variable set by hand", record: owner(), args: abandon, terminal: typed, env: asWorker, answer: { code: 5, state: "unknown", final: false } },
+  // wait takes no --mainnet: for an approval that exists, the flag is refused as unknown from the command's first look at the record
+  { name: "wait --mainnet", record: owner(), args: (c) => [...shown(c), "--mainnet"], answer: { code: 5, state: "unknown", final: false } },
+  { name: "wait --mainnet with a worker's variable set by hand", record: owner(), args: (c) => [...shown(c), "--mainnet"], env: asWorker, answer: { code: 5, state: "unknown", final: false } },
+  { name: "wait --shown on a buy-once purchase the site still holds open", record: purchase, args: shown, request: true, site: true, answer: { code: 0, state: "waiting_owner", final: false } },
+  { name: "wait --abandon on a buy-once purchase the site still holds open", record: purchase, args: abandon, terminal: typed, request: true, site: true, answer: { code: 5, state: "unknown", final: true } },
 ];
 
 const MUTATIONS: [string, (r: any) => unknown, boolean?][] = [
@@ -158,6 +175,8 @@ describe("every read wait makes of an approval record, with the file changed rig
     it(form.name, async () => {
       const base = await run(form);
       crashFree(base, `${form.name}, as it is`);
+      expect([form.answer].flat(), `${form.name}, as it is\n${base.stderr}`).toContainEqual({ code: base.code, state: base.result.state, final: base.result.final });
+      if (form.launches) expect(base.events, `${form.name}: a worker was started`).toContain("launch");
       const reads = base.events.filter((e) => e.startsWith("read ")).map((e) => ({ n: Number(e.split(" ")[1]), locked: e.endsWith("locked") }));
       expect(reads.length, `${form.name}: wait read the record`).toBeGreaterThan(0);
       const mutations = MUTATIONS.filter(([, , request]) => !request || form.request);

@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { approvalsDir, onceDir, publicFile } from "./paths.mjs";
 import { readRegularFile } from "./secret-file.mjs";
 import { keccak256 } from "./keccak.mjs";
-import { RECORD_GONE, claim, isApprovalId, newApprovalId, readApproval, readApprovalFile, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
+import { RECORD_GONE, claim, isApprovalId, newApprovalId, readApproval, readStrict, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -240,20 +240,21 @@ const evidenceWords = (s) =>
  */
 export const mayBeUnpaid = (seen) => !anyEvidence(seen);
 
+/** The code of the error a strict read or change throws when the purchase's record file is gone, or is not a usable record, after the command read it. */
+export { RECORD_GONE };
+
 /**
  * The one evidence accumulator per purchase: every answer the client receives for it (a read or a cancel, success or
  * error) goes through here. Under the record's lock, its evidence is unioned with the record as stored at that moment and
  * written (mode 600): another process's evidence is never overwritten, and the union only grows. The record returned is
  * the one every later step of the same command uses; it is never an older copy. Exported for the tests.
  */
-/** The code of the error a strict read or change throws when the purchase's record file is gone, or is not a usable record, after the command read it. */
-export { RECORD_GONE };
-
 export function accumulate(record, answer, { strict = false } = {}) {
-  // strict (wait's reads, after its first): a record that went, or is no longer one wait can answer from, ends the command; no answer is
-  // made of what is left. It is looked at here, so that no lock is taken for a file that is already gone, and again under the record's lock,
-  // where the change is made: a file that goes between the two is not read as the record it was
-  if (strict && isApprovalId(record?.id) && readApprovalFile(record.id).kind !== "record") {
+  // strict (wait's reads, after its first: true, or the record wait read first): a record that went, is no longer one wait can answer from,
+  // or is another purchase ends the command; no answer is made of what is left. It is looked at here (readStrict), so that no lock is taken
+  // for a file that is already gone, and again under the record's lock, where the change is made: a file that goes between the two is not
+  // read as the record it was
+  if (strict && isApprovalId(record?.id) && !readStrict(record.id, strict)) {
     throw Object.assign(new Error(`the record of purchase ${record.id} is gone or is not a record any more`), { code: RECORD_GONE });
   }
   const ev = evidenceOf(answer, networkOfChain(record?.chain));
@@ -283,10 +284,11 @@ function verdictHolds(seen, result) {
 }
 
 /**
- * Tests only: called after an answer is decided and before it is stored (to force another command in between).
- * @type {{ beforeFinal: null | ((id: string) => void) }}
+ * Tests only: called after an answer is decided and before it is stored (beforeFinal), and before an owner's give-up is stored
+ * (beforeAbandon), to force another command in between.
+ * @type {{ beforeFinal: null | ((id: string) => void), beforeAbandon: null | ((id: string) => void) }}
  */
-export const onceTestHook = { beforeFinal: null };
+export const onceTestHook = { beforeFinal: null, beforeAbandon: null };
 
 /**
  * A stored final answer as it may be repeated: a cache of a decision over the evidence. It is checked again against the
@@ -294,7 +296,7 @@ export const onceTestHook = { beforeFinal: null };
  * evidence no longer supports, paid or not, is stored again as unknown, with the transaction the evidence names. The
  * access token is gone from a final record, so that unknown is final.
  */
-function checkedFinal(record) {
+function checkedFinal(record, { strict = false } = {}) {
   const { code, result } = record.final;
   // Older paid records cannot regain their discarded access token. Preserve the recorded proof under I21 and mark
   // its limit, rather than applying a new attribution requirement retroactively. Explicit payer conflicts still overrule it.
@@ -305,12 +307,12 @@ function checkedFinal(record) {
     const attribution = "verification not recorded (older version)";
     const kept = { ...result, attribution };
     updateApproval(record.id, (now) => now.final?.result?.paid === true && now.attributionVersion === undefined && !now.final.attribution
-      ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null);
+      ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null, { strict });
     return { code, result: kept };
   }
   if (cachedVerdictHolds(record)) return { code, result };
   const fixed = overruled(record, result);
-  updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null));
+  updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null), { strict });
   return { code: 5, result: fixed };
 }
 
@@ -786,8 +788,12 @@ export async function abandonOnce(record, { fetchImpl, strict = false } = {}) {
     next: "never buy this again. Whether a payment left is unknown: the owner checks their wallet activity and their account on the site",
     reason: scrub(`given up by the owner at ${at} without a final answer from ${siteName(record.hosted?.site ?? "")}${s.unreachable ? ` (${s.unreachable})` : s.words ? ` (${s.words})` : ""}`),
   };
-  recordFinal(record.id, 5, result, { strict });
-  return { final: true, code: 5, result, record: readApproval(record.id) };
+  onceTestHook.beforeAbandon?.(record.id);
+  const kept = recordFinal(record.id, 5, result, { strict });
+  // another command ended it first (its final stood under the lock): that final is the answer, checked against the evidence as every wait
+  // checks a stored one, not this give-up, which was not stored
+  if (kept?.final && kept.final.result?.abandonedAt !== at) return { final: true, ...checkedFinal(kept, { strict }), record: kept };
+  return { final: true, code: 5, result, record: kept ?? readApproval(record.id) };
 }
 
 function saveResponse(id, delivery) {
@@ -1043,9 +1049,16 @@ function openUnknown(record, view) {
  * @param {{ waitS?: number, fetchImpl?: typeof fetch }} [options]
  */
 export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, fetchImpl, strict = false } = {}) {
+  // the record as stored now, read again for the answer: strict, as every other read here, when the caller is wait
+  const again = (r) => {
+    if (!strict) return readApproval(r.id) ?? r;
+    const now = readStrict(r.id, strict);
+    if (!now) throw Object.assign(new Error(`the record of purchase ${r.id} is gone or is not a record any more`), { code: RECORD_GONE });
+    return now;
+  };
   // the record as stored now, with every answer's evidence so far: never an older copy
   record = accumulate(record, null, { strict });
-  if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+  if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
   const h = record.hosted;
   // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow now is not read
   const allowed = siteOrigin(h.site, "verdict");
@@ -1055,7 +1068,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   if (!r.ok) {
     if (r.body && typeof r.body === "object") record = accumulate(record, r.body, { strict });
     // another command finished it meanwhile: its answer, checked against the evidence this read added
-    if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+    if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
     if (r.status >= 400 && r.status < 500 && ![408, 429].includes(r.status)) {
       const next = accountRefusalNext(r.code);
       const possible = !mayBeUnpaid(record.seen);
@@ -1075,7 +1088,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
     return { final: false, record, status: r.status, errorCode: r.code, unreachable: r.reason };
   }
   record = accumulate(record, r.view, { strict });
-  if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+  if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
   // the owner's step is over, or an answer carried payment evidence, and the outcome is not established: unknown, not
   // stored, never "waiting for the owner"
   const reportedPaid = evidenceOf(r.view, networkOfChain(record.chain)).paid;
@@ -1100,7 +1113,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
         stored = true;
         return { included: { code, result } };
       }, { strict }) ?? readApproval(record.id) ?? record;
-      if (fresh.final) return { final: true, ...checkedFinal(fresh), record: fresh };
+      if (fresh.final) return { final: true, ...checkedFinal(fresh, { strict }), record: fresh };
       if (!stored) return { final: true, code: 5, result: { ...overruled(fresh, result), final: false }, record: fresh };
       return { final: true, code, result, record: fresh };
     }
@@ -1127,7 +1140,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   const now = done.record ?? readApproval(record.id) ?? record;
   if (done.stored) return { final: true, code, result, record: now };
   // another command finished it first: its answer, checked the same way
-  if (now.final) return { final: true, ...checkedFinal(now), record: readApproval(record.id) ?? now };
+  if (now.final) return { final: true, ...checkedFinal(now, { strict }), record: again(now) };
   const fresh = accumulate(now, null, { strict });
   return { final: true, code: 5, result: { ...overruled(fresh, result), final: false }, record: fresh };
 }

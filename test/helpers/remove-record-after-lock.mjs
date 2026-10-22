@@ -37,10 +37,11 @@ if (mutating || events) {
   const nth = mutating ? Number(process.env.REWRITE_RECORD_AFTER_READ ? process.env.REWRITE_RECORD_AFTER_READ_N : process.env.REMOVE_RECORD_AFTER_READ) || 1 : 0;
   let reads = 0;
   fs.readFileSync = function (path) {
-    const out = read.apply(this, arguments);
+    // every attempt counts, one that finds no file included: a read that finds the file gone is a read
+    if (RECORD.test(String(path))) event(`read ${reads + 1} ${holding(String(path)) ? "locked" : "open"}`);
+    let out;
+    try { out = read.apply(this, arguments); } finally { if (RECORD.test(String(path))) reads++; }
     if (RECORD.test(String(path))) {
-      reads++;
-      event(`read ${reads} ${holding(String(path)) ? "locked" : "open"}`);
       if (reads === nth) {
         try {
           if (process.env.REWRITE_RECORD_AFTER_READ) fs.writeFileSync(String(path), read.call(fs, process.env.REWRITE_RECORD_AFTER_READ, "utf8"));

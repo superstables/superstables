@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -2433,6 +2433,10 @@ async function wait({ f }) {
   if (file.kind === "none" && waitSeen) {
     return waitUnknown(f.id, waitSeen, `the approval's record disappeared from ${approvalsDir()} after this command saw it; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
   }
+  // a record that is another approval than the one this command saw first (waitRecord) is no answer to that one
+  if (file.kind === "record" && waitSeen?.command && !sameApproval(waitSeen, file.record)) {
+    return waitUnknown(f.id, waitSeen, `the approval's record in ${approvalsDir()} changed into another approval after this command saw it; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
+  }
   if (file.kind === "undecodable" || file.kind === "damaged") {
     return waitUnknown(f.id, null, `the approval's record file under ${approvalsDir()} is there but cannot be read as a record; this command changed nothing, and whether the approval sent anything is unknown`, `${CHECK_APPROVAL(`approval ${f.id}`)}, and check which home this command ran under (${HOME})`);
   }
@@ -2463,7 +2467,7 @@ async function wait({ f }) {
     // a purchase that already ended is answered as every wait answers it: its stored answer, checked against the evidence
     // (abandonOnce reads it through settleOnce, which never repeats a stored answer the evidence no longer supports)
     let s;
-    try { s = await abandonOnce(once, { strict: true }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(once); throw err; }
+    try { s = await abandonOnce(once, { strict: once }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(once); throw err; }
     if (!s.result.abandonedAt) return emit(s.code, s.result);
     log(`superstables budget: ${f.id} (buy-once) given up without a final answer from the site. Whether a payment left is unknown: check the wallet's activity and the account on the site. buy-once can start a new purchase.`);
     return emit(5, s.result);
@@ -2557,12 +2561,12 @@ async function buyOnce({ f, ctx }) {
 
 /** wait's answer when a buy-once record goes (or stops being a usable record) after wait read it: the payment outcome is unknown. */
 function purchaseGone(rec) {
-  return waitUnknown(rec.id, rec, `the purchase's record disappeared from ${approvalsDir()} (or turned into a file that is not a record) while wait was reading it; this command changed nothing, and whether a payment left is unknown`, `${CHECK_APPROVAL(`purchase ${rec.id}`)}; do not start another purchase for this request`);
+  return waitUnknown(rec.id, rec, `the purchase's record disappeared from ${approvalsDir()} (or is no longer a record of this purchase) while wait was reading it; this command changed nothing, and whether a payment left is unknown`, `${CHECK_APPROVAL(`purchase ${rec.id}`)}; do not start another purchase for this request`);
 }
 
 async function waitBuyOnce(rec, f) {
   let s;
-  try { s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000, { strict: true }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(rec); throw err; }
+  try { s = await waitOnce(rec, (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000, { strict: rec }); } catch (err) { if (err?.code === RECORD_GONE) return purchaseGone(rec); throw err; }
   // final, or an outcome that is not established yet (unknown): the answer as it is, never "waiting for the owner"
   if (s.final || s.result) return emit(s.code, s.result);
   if (rec.cancelUnconfirmed) {
