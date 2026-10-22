@@ -460,6 +460,8 @@ describe("wait --abandon on a background owner approval", () => {
     // a chain lock file the fault left behind is stale: its approval has a result, so it holds nothing
     const next = await budget(setupArgs());
     expect(next.result?.reason ?? "").not.toMatch(/still waiting for the owner/);
+    // the replacement approval runs in the background: it is stopped before the home goes
+    if (next.result?.id && existsSync(join(approvals(), `${next.result.id}.json`))) await endEveryProcess(next.result.id as string);
   }, 120_000);
 
   it("the record disappears between the first read and the locked give-up: unknown, not failed, and no give-up stored", async () => {

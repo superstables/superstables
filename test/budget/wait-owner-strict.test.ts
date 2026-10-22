@@ -168,6 +168,54 @@ describe("an owner approval's record that is damaged after wait read it", () => 
     expect(existsSync(path)).toBe(false);
   }, 60_000);
 
+  // a gone worker whose hosted request a restarted worker can finish: wait reads the record (1), waitFor looks (2), polls (3) and polls again
+  // after the worker is gone (4), then the restart reads it (5) and reads it again under the record's lock, where it would claim the chain,
+  // start the worker and record it (6). A record that turned bad or into another request after read 4 or 5 starts nothing and writes nothing.
+  for (const [label, change] of [
+    ["a record with no command", (r: any) => ({ ...r, command: undefined })],
+    ["the record of another hosted request", (r: any) => ({ ...r, hosted: { ...r.hosted, requestId: "ba_other0002" } })],
+    ["only the id", (r: any) => ({ id: r.id })],
+  ] as [string, (r: any) => unknown][]) {
+    for (const read of [4, 5]) {
+      it(`a restart of a gone worker, record replaced by ${label} right after read ${read}: unknown (exit 5, not final), no worker started, the file and the chain lock as found`, async () => {
+        const { id, path, record } = open({ hosted: { ...HOSTED, resumable: true }, workerArgs: ["not-a-command"] });
+        const chainPath = join(home, "budget", "approvals", "active-evm-base-sepolia");
+        const chain = JSON.stringify({ id, ...gone, createdAt: Date.now() - 600_000 });
+        writeFileSync(chainPath, chain, { mode: 0o600 });
+        const written = JSON.stringify(change(record));
+        const replacement = join(home, "rewrite.json");
+        writeFileSync(replacement, written);
+        const run = await budget(["wait", "--id", id, "--shown", "--timeout", "0"], "x\n", { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: String(read) });
+        sentinel(run);
+        expect(run.code, run.stderr).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(readFileSync(path, "utf8"), "the file is left as found").toBe(written);
+        expect(readFileSync(chainPath, "utf8"), "the chain lock is left as found").toBe(chain);
+        expect(existsSync(join(home, "budget", "approvals", `${id}.log`)), "no worker was started").toBe(false);
+        expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock"))).toEqual([]);
+      }, 60_000);
+    }
+  }
+
+  it("wait --abandon under a long home path, record removed right after the first read: the reason still says the outcome is unknown", async () => {
+    const base = home;
+    home = join(base, "a-home-path-long-enough-that-a-reason-naming-it-runs-past-three-hundred-characters-x");
+    mkdirSync(home, { mode: 0o700 });
+    try {
+      const { id } = open();
+      const run = await budget(["wait", "--id", id, "--abandon", "--timeout", "0"], `${id} abandon\n`, { REMOVE_RECORD_AFTER_READ: "1" });
+      sentinel(run);
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ state: "unknown", final: false, id });
+      expect(home.length).toBeGreaterThan(80);
+      expect(run.result.reason).toMatch(/^whether the approval sent anything is unknown/);
+      expect(run.result.reason).toMatch(/stored no give-up/);
+      expect(run.result.reason).toMatch(/processes may have been stopped/);
+    } finally {
+      home = base;
+    }
+  }, 60_000);
+
   it("an intact record is still finalized by wait --shown and still given up by wait --abandon", async () => {
     const shown = open();
     const ended = await budget(["wait", "--id", shown.id, "--shown", "--timeout", "0"], "x\n", {});
