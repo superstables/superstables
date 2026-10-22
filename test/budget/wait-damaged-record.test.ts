@@ -55,6 +55,10 @@ describe("wait on a record file that is there but is not a valid record", () => 
     ["final with a result that is null", json({ final: { code: 0, result: null } })], ["final with a code that is not a number", json({ final: { code: "x", result: {} } })],
     ["hosted: a string", json({ hosted: "x" })], ["hosted.site: an object", json({ hosted: { site: {} } })], ["pid: a string", json({ pid: "x" })], ["deadline: a string", json({ deadline: "x" })],
     ["final with a result that has no state", json({ final: { code: 0, result: {} } })], ["workerArgs: a string", json({ workerArgs: "x" })], ["seen: a string", json({ seen: "x" })],
+    ["seen.hashes: an object", json({ seen: { hashes: {} } })], ["seen.hashes: a number", json({ seen: { hashes: 1 } })], ["seen.hashes: a string", json({ seen: { hashes: "0xab" } })],
+    ["seen.hashes holding a number", json({ seen: { hashes: [1] } })], ["seen.payers: a list", json({ seen: { payers: ["0xab"] } })], ["seen.payers naming a number", json({ seen: { payers: { "0xab": 7 } } })],
+    ["seen.payer: a number", json({ seen: { payer: 7 } })], ["seen.nonce: an object", json({ seen: { nonce: {} } })], ["seen.order: a number", json({ seen: { order: 1 } })],
+    ["seen.validBefore: a string", json({ seen: { validBefore: "x" } })], ["seen.paid: a string", json({ seen: { paid: "yes" } })],
     ["a buy-once record with no hosted request", json({ command: "buy-once" })], ["a buy-once record whose site is not text", json({ command: "buy-once", hosted: { site: 5 } })],
     ["command: buy-once and nothing else", JSON.stringify({ id: ID, command: "buy-once" })], ["no command", json({ command: undefined })],
   ] as const) {

@@ -350,13 +350,17 @@ describe("waitFor when the record file goes", () => {
     const id = await open({}, liveWorker());
     const path = join(home, "budget", "approvals", `${id}.json`);
     const base = JSON.parse(readFileSync(path, "utf8"));
-    for (const content of [{ id }, { ...base, command: undefined }, { ...base, final: true }, { ...base, final: "yes" }, { ...base, final: {} }, { ...base, final: { code: 0 } }, { ...base, final: { code: 0.5, result: {} } }, { ...base, final: { result: { ok: false } } }]) {
+    for (const content of [{ id }, { ...base, command: undefined }, { ...base, final: true }, { ...base, final: "yes" }, { ...base, final: {} }, { ...base, final: { code: 0 } }, { ...base, final: { code: 0.5, result: {} } }, { ...base, final: { result: { ok: false } } },
+      { ...base, seen: { hashes: {} } }, { ...base, seen: { hashes: 1 } }, { ...base, seen: { hashes: [1] } }, { ...base, seen: { payers: { "0xab": 7 } } }, { ...base, seen: { nonce: 1 } }, { ...base, seen: { moved: "maybe" } }]) {
       writeFileSync(path, JSON.stringify(content));
       expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("damaged");
       expect(approvals.readApproval(id)?.id, "lock scans still see the approval").toBe(id);
     }
-    // a whole record, with or without a stored { code, result }, stays a record
-    for (const content of [base, { ...base, final: { code: 3, result: { ok: false, state: "refused_precheck" } } }]) {
+    // a whole record, with or without a stored { code, result }, stays a record, and so does payment evidence as it is written: every key,
+    // values pinned to null after a conflict, or only the keys an older version wrote
+    const tx = `0x${"a".repeat(64)}`;
+    const evidence = { nonce: `0x${"b".repeat(64)}`, payer: null, order: null, validBefore: null, hashes: [tx], payers: { [tx]: null }, named: true, paid: false, stepOver: true, moved: false };
+    for (const content of [base, { ...base, final: { code: 3, result: { ok: false, state: "refused_precheck" } } }, { ...base, seen: evidence }, { ...base, seen: { ...evidence, payer: `0x${"c".repeat(40)}`, validBefore: 1_800_000_000, payers: { [tx]: `0x${"c".repeat(40)}` } } }, { ...base, seen: { hashes: [], payers: {}, named: false, paid: false, moved: false } }]) {
       writeFileSync(path, JSON.stringify(content));
       expect(approvals.readApprovalFile(id).kind).toBe("record");
     }

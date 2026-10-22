@@ -470,7 +470,7 @@ its own result.`,
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
       prints: "one RESULT line: state, final, chain_final, id, url, matchCode (on superstables.com), expires, terms, next; reason describes the page's state while\n  waiting.",
-      exits: "Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,\n  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it)",
+      exits: "Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,\n  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it; also a refused flag or a record it\n  cannot read, for an approval that exists here: final false, nothing read or changed)",
     }),
   },
   "buy-once": {
