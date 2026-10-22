@@ -39,6 +39,14 @@ Testnet only.
 - Payment records are flushed before submission; approval pages, seller responses, journals and external text receive stricter checks. The npm package includes `npm-shrinkwrap.json` to lock its production dependency tree, including indirect dependencies. Builds include software bills of materials for installed and bundled dependencies and a way to compare release artifacts with their source. npm provenance is not included. See [build verification](https://github.com/superstables/superstables/blob/v0.5.0/docs/install.md#checking-a-build-against-its-commit).
 - **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
 
+## [0.4.1] - Arc Testnet RPC address
+
+Testnet only.
+
+### Fixed
+
+- Arc Testnet checks, approvals and purchases work again. The client's default Arc Testnet RPC address, `rpc.testnet.arc.network`, no longer resolves, so `budget doctor`, grants and purchases on Arc failed. The default is now `rpc.testnet.arc.io`. If you set your own Arc RPC address, nothing changes for you.
+
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
 Testnet only.
