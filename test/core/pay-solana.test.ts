@@ -555,7 +555,7 @@ describe("a Single purchase on Solana devnet", () => {
   });
 
   it("keeps a payment status verified when the seller's answer arrives later, and adds what the service delivered", async () => {
-    // The round-3 review's reproduction: the facilitator lands the payment while the seller's answer is on its way; the
+    // The facilitator lands the payment while the seller's answer is on its way; the
     // caller stops waiting; status, on a working RPC, finds the payment; then the answer reaches the run, whose own chain
     // read fails.
     const s = await stack();
@@ -644,7 +644,7 @@ describe("a Single purchase on Solana devnet", () => {
     ["for a moment", false],
     ["for longer than the run waits for it", true],
   ] as const)("never writes a late answer without the lock: a status holding it %s keeps its verified receipt", async (_label, long) => {
-    // The round-4 review's reproduction: a status in another process finds the payment and holds the lock right before
+    // A status in another process finds the payment and holds the lock right before
     // it writes the receipt, while the seller's answer reaches the run.
     const s = await stack();
     const run = await stoppedRun(s);
@@ -693,7 +693,7 @@ describe("a Single purchase on Solana devnet", () => {
   }, 40_000);
 
   it("reports a waiting answer that status cannot write, keeps it, and records it on the next status", async () => {
-    // The round-5 review's reproduction: the receipt write fails under the lock (a full disk) while status records a
+    // The receipt write fails under the lock (a full disk) while status records a
     // waiting answer. Status says so, and nothing is lost.
     const s = await stack();
     const final = await pay(s);
@@ -717,7 +717,7 @@ describe("a Single purchase on Solana devnet", () => {
   });
 
   it("keeps a payment the chain showed was never made unpaid when the seller's success arrives later, and counts it nowhere", async () => {
-    // The round-4 review's reproduction: the seller took the signed transaction, landed nothing and held its answer; the
+    // The seller took the signed transaction, landed nothing and held its answer; the
     // caller stopped; status read the whole window and recorded unpaid; then the seller's success reached the run.
     const s = await stack("claims-success");
     const run = await stoppedRun(s, chain.url);

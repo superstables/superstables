@@ -85,7 +85,7 @@ describe("status on EVM chains", () => {
   });
 
   it("never records unpaid from a cancellation that a reorganisation replaced with the payment before finality passed it", async () => {
-    // The round-3 review's reproduction, on Polygon Amoy: status reads the cancellation's log above the finalized block;
+    // As seen on Polygon Amoy: status reads the cancellation's log above the finalized block;
     // before it reads further, a reorganisation replaces that block with the payment, and finality passes it.
     const chain = await evmChain();
     const r = ledger();
