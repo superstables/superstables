@@ -419,6 +419,11 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: OP_TAKEN, next: "nothing was signed or sent" }, exitCode: 3 };
     }
     (j as any).recoveryOf = { order_ref: o.recoveryOrder };
+  } else if ((prior as any)?.recoveryOf) {
+    // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)
+    const why = `operation ${o.op} belongs to an auto-recovered order; it is run only by that order. Rerun the original buy of the order, which reads and continues it`;
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "rerun the original buy of the order with its own --op" }, exitCode: 3 };
   }
 
   // Frozen for this operation before anything is signed: a later run under the same --op pays under the same referral.

@@ -173,6 +173,12 @@ let lock = { ok: true };
     console.error(`Refused (nothing signed): operation ${opId} was already used by another command; this order skips it`);
     finish("refused_precheck", EXIT.REFUSED, { reason: OP_TAKEN, next: "nothing was signed or paid" });
   }
+  // an op that belongs to an auto-recovered order is run only as that order's attempt
+  if (recoveryOrder === undefined && existing?.recoveryOf) {
+    const why = `operation ${opId} belongs to an auto-recovered order; it is run only by that order. Rerun the original buy of the order, which reads and continues it`;
+    console.error(`Refused (nothing signed): ${why}`);
+    finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "rerun the original buy of the order with its own --op" });
+  }
   const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);

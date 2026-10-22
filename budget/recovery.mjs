@@ -634,9 +634,12 @@ function closeUncontacted(record, attempt, why) {
 
 /** An attempt op that another command already used: this order never runs under it, and never marks it. */
 function skipTaken(record, attempt) {
+  // an attempt with recorded evidence of a signature or a payment is this order's, whatever its journal's stamp says
+  if (attempt.outcome === "paid" || attempt.outcome === "unknown" || attempt.tx || attempt.tx_pull) return false;
   attempt.taken = true; attempt.state = "done"; attempt.outcome = "failed_before_payment"; attempt.note = "not contacted: op_taken";
   record.skipped = [...(record.skipped ?? []), { offer_id: attempt.offer_id, reason: "op_taken" }];
   try { writeRecord(record); } catch { /* nothing was contacted either way */ }
+  return true;
 }
 
 const rootOf = (record) => ({ rail: record.rail, chain: record.chain, op: record.op });
@@ -713,11 +716,15 @@ const RANK = { failed_before_payment: 0, unknown: 1, paid: 2 };
 /** Records what was observed about an attempt, also when it is already done: the stronger outcome, and its transaction. */
 function learn(record, attempt, fields) {
   const seen = fields?.state === undefined ? null : outcomeOf(fields.state);
-  const tx = fields?.tx && typeof fields.tx === "object" ? (fields.tx.settle ?? fields.tx.pull ?? null) : null;
+  const settle = fields?.tx && typeof fields.tx === "object" && fields.tx.settle ? fields.tx.settle : null;
+  const pull = fields?.tx && typeof fields.tx === "object" && fields.tx.pull ? fields.tx.pull : null;
   let changed = false;
   if (attempt.state !== "done") { attempt.state = "done"; changed = true; }
   if (seen !== null && (attempt.outcome == null || RANK[seen] > (RANK[attempt.outcome] ?? -1))) { attempt.outcome = seen; changed = true; }
-  if (tx && !attempt.tx) { attempt.tx = tx; changed = true; }
+  // transaction kinds stay apart: `tx` is the settlement (the seller's payment), `tx_pull` the owner-to-agent transfer. A settlement
+  // replaces anything stored as `tx` before; a pull never becomes `tx`.
+  if (settle && attempt.tx !== settle) { attempt.tx = settle; changed = true; }
+  if (pull && attempt.tx_pull !== pull) { attempt.tx_pull = pull; changed = true; }
   if (changed) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
 }
 
@@ -770,7 +777,10 @@ async function runAttempt(deps, record, attempt) {
   }
   attempt.state = "done";
   attempt.outcome = attempt.outcome && RANK[attempt.outcome] > RANK[outcome] ? attempt.outcome : outcome;
-  attempt.tx = tx ?? attempt.tx ?? null;
+  const gotSettle = got.fields?.tx?.settle ?? null, gotPull = got.fields?.tx?.pull ?? null;
+  if (gotSettle) attempt.tx = gotSettle;
+  else attempt.tx = attempt.tx ?? null;
+  if (gotPull) attempt.tx_pull = gotPull;
   // a refusal before payment that left no signature behind: the order may go on to the next candidate
   const unsigned = outcome === "failed_before_payment" && got.unsigned === true && got.termsFailure !== undefined;
   if (!unsigned) record.closed = "attempt_decided";
@@ -805,7 +815,7 @@ function switchedFields(record, attempt, fields) {
 }
 
 /** What the record says an attempt did, when its own journal no longer shows it: paid, unknown, or a transaction. */
-const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.outcome === "unknown")) || Boolean(a.tx);
+const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.outcome === "unknown")) || Boolean(a.tx) || Boolean(a.tx_pull);
 
 /**
  * An order that has a record: a crash or a rerun found it. No new advice. Every op the order used is read first, under its record
@@ -820,8 +830,10 @@ async function resume(deps, record) {
   for (const a of [...record.attempts].reverse()) {
     if (a.taken) continue;
     const probe = await deps.attemptState(a, record.order_ref);
-    if (probe.foreign) { skipTaken(record, a); continue; }
-    if (probe.exists && !probe.unsigned) return decided(record, a, probe);
+    // recorded evidence and the journal's own signed state are checked BEFORE foreign: an op this order's record lists as an attempt
+    // that has a signature or a payment on record is never another command's
+    if (probe.foreign && !recordedSigned(a)) { skipTaken(record, a); continue; }
+    if (probe.exists && !probe.unsigned && !probe.foreign) return decided(record, a, probe);
     // Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
     if (recordedSigned(a)) {
       const paidOnRecord = a.outcome === "paid";
@@ -829,9 +841,9 @@ async function resume(deps, record) {
         kind: "result", code: paidOnRecord ? 0 : 5,
         fields: switchedFields(record, a, {
           command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: paidOnRecord ? "settled" : "unknown", paid: paidOnRecord ? true : null, delivered: null, amount: null,
-          tx: a.tx ? { settle: a.tx } : {},
+          tx: { ...(a.tx ? { settle: a.tx } : {}), ...(a.tx_pull ? { pull: a.tx_pull } : {}) },
           next: `superstables budget reconcile --rail ${a.rail} --chain ${a.chain} --op ${a.op} (never pay again for this order)`,
-          reason: `the recovery record says operation ${a.op} ${paidOnRecord ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
+          reason: `the recovery record says operation ${a.op} ${paidOnRecord ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : a.tx_pull ? ` (pull ${a.tx_pull})` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
         }),
       };
     }

@@ -1299,3 +1299,55 @@ describe("the candidate op is closed before an unpaid outcome is recorded or rep
     expect(lost.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xabc" } });
   });
 });
+
+describe("ownership and transaction kinds (round 6 findings)", () => {
+  const view = (op: string, state: string, tx: Record<string, string> = {}, extra: Record<string, unknown> = {}) => ({ exists: true, unsigned: false, code: state === "settled" ? 0 : 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state, paid: state === "settled" ? true : null, delivered: null, amount: null, tx, next: "none" }, ...extra });
+
+  it("foreign-recorded-payment: an attempt with a payment on record is never another command's, whatever its journal's stamp says", async () => {
+    const w0 = world({ attempt: (flags: any) => paid(flags) });
+    await R.recoverOrder(w0.deps);
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+    // the journal now looks foreign (no stamp, nothing signed in it) but the record has the payment
+    const again = world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true, foreign: true }) });
+    const out = await R.recoverOrder(again.deps);
+    expect(out.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xabc" } });
+    const rec = readRecordFile("evm", "base-sepolia", w0.op);
+    expect(rec.attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+    expect(rec.attempts[0].taken).toBeUndefined();
+    expect(rec.closed).not.toBe("no_attempt_paid");
+  });
+
+  it("skipTaken never downgrades recorded evidence, and a fresh attempt on a foreign op is still skipped", async () => {
+    const w0 = world({ attempt: () => unknown({ rail: "evm", chain: "arc-testnet", op: "x" }) });
+    await R.recoverOrder(w0.deps);
+    const out = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true, foreign: true }) }).deps);
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null });
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].outcome).toBe("unknown");
+    // never run, journaled, and the op is another command's: skipped
+    const w1 = world({ attempt: () => { throw new Error("process killed"); } });
+    await expect(R.recoverOrder(w1.deps)).rejects.toThrow("killed");
+    const skipped = await R.recoverOrder(world({ op: w1.op, attemptState: () => ({ exists: false, unsigned: true, foreign: true }) }).deps);
+    expect(skipped.kind).toBe("none");
+    expect(readRecordFile("evm", "base-sepolia", w1.op).attempts[0]).toMatchObject({ taken: true });
+  });
+
+  it("payment-tx-upgrade: a settlement replaces an earlier pull hash; kinds stay apart, also after journal loss", async () => {
+    const w0 = world({ attempt: (flags: any) => ({ code: 5, unsigned: false, fields: { command: "buy", rail: flags.rail, chain: flags.chain, op: flags.op, state: "unknown", paid: null, delivered: null, tx: { pull: "0xpull" }, next: "reconcile" } }) });
+    await R.recoverOrder(w0.deps);
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "unknown", tx_pull: "0xpull" });
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].tx).toBeNull();
+    // journal lost while only a pull is on record: the pull is shown as a pull, never as the settlement
+    const lost1 = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(lost1.fields.tx).toEqual({ pull: "0xpull" });
+    // the settlement is observed
+    const settled = await R.recoverOrder(world({ op: w0.op, attemptState: () => view(aopOf(w0.op), "settled", { pull: "0xpull", settle: "0xsettle" }) }).deps);
+    expect(settled.fields.state).toBe("settled");
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xsettle", tx_pull: "0xpull" });
+    const lost2 = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(lost2.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xsettle", pull: "0xpull" } });
+    // a later pull-only observation changes nothing
+    await R.recoverOrder(world({ op: w0.op, attemptState: () => view(aopOf(w0.op), "unknown", { pull: "0xother" }) }).deps);
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].tx).toBe("0xsettle");
+  });
+  const aopOf = (op: string) => readRecordFile("evm", "base-sepolia", op).attempts[0].op;
+});

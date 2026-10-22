@@ -1584,7 +1584,9 @@ async function attemptView(a, ctx, orderRef) {
   if (!held.ok) return { exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: f2.rail, chain: f2.chain, op: f2.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(held, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
   const st = journalState(f2); // under the lock
   held.release();
-  if (st.present && st.journal && !ownedBy(st.journal, orderRef)) return { exists: false, unsigned: true, foreign: true };
+  // another command's journal is one that shows nothing signed and is not stamped for this order; a journal that shows a signature under
+  // an op named for this order (an older one has no stamp) is this order's payment, never skipped
+  if (st.present && st.journal && !ownedBy(st.journal, orderRef) && provesUnsigned(f2.rail, st)) return { exists: false, unsigned: true, foreign: true };
   if (!st.present || provesUnsigned(f2.rail, st)) return { exists: st.present, unsigned: true };
   return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
 }

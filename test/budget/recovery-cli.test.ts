@@ -798,6 +798,45 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(arc.sentRaw).toEqual([]);
   }, 400_000);
 
+  it("owned-op-retry: a direct retry of an owned candidate op without the order's flag is refused; with it, the payment keeps its stamp and the root reports it", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-o");
+    const journalFile = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-o")}.json`);
+    arc.setAllowance(owner.address, agent.address, 0n);
+    const refused = await direct("evm/buy.ts", candidateBuy(gate, "fz-o"));
+    expect(refused.result, all(refused)).toMatchObject({ state: "refused_precheck" });
+    expect(JSON.parse(readFileSync(journalFile, "utf8")).recoveryOf).toMatchObject({ order_ref: orderRef("fz-o") });
+    arc.setAllowance(owner.address, agent.address, usdc("1"));
+    // a plain retry of the owned op, as a crash and a hurried operator can produce, is refused and cannot take the op over
+    const plain = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("fz-o")]);
+    expect(plain.result, all(plain)).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(plain.result.reason).toMatch(/belongs to an auto-recovered order/);
+    expect(arcSeller.creds).toEqual([]);
+    expect(JSON.parse(readFileSync(journalFile, "utf8")).recoveryOf).toMatchObject({ order_ref: orderRef("fz-o") });
+    // the order's own retry settles, keeps its stamp, and the root reports the payment
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-o"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    expect(JSON.parse(readFileSync(journalFile, "utf8")).recoveryOf).toMatchObject({ order_ref: orderRef("fz-o") });
+    const root = await buy(`${gate}/spot`, { op: "fz-o" });
+    expect(root.result).toMatchObject({ op: aop("fz-o"), state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("legacy-r5-payment: a settled journal from before the ownership stamp is still the order's payment, never skipped as foreign", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-l");
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-l"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    const journalFile = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-l")}.json`);
+    const legacy = JSON.parse(readFileSync(journalFile, "utf8"));
+    delete legacy.recoveryOf;
+    writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
+    const root = await buy(`${gate}/spot`, { op: "fz-l" });
+    expect(root.result, all(root)).toMatchObject({ op: aop("fz-l"), state: "settled", paid: true });
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    expect(rec.attempts[0].taken).toBeUndefined();
+    expect(rec.attempts[0]).toMatchObject({ outcome: "paid" });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
   it("a payment seen on a rerun is kept in the record with its transaction, and survives the loss of the journal", async () => {
     const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-k");
     const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-k"));
