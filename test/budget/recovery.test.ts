@@ -1345,37 +1345,52 @@ describe("ownership and transaction kinds (round 6 findings)", () => {
     expect((await R.recoverOrder(world({ op: c.op, attemptState: () => signed("x") }).deps)).fields).toMatchObject({ state: "settled", paid: true });
   });
 
-  it("legacy-pull-kind: a version 1 record's bare tx is kept as 'recorded', kind unknown, never shown as the settlement", async () => {
-    const w0 = world({ attempt: (flags: any) => unknown(flags) });
-    await R.recoverOrder(w0.deps);
-    const file = R.recordPath("evm", "base-sepolia", w0.op);
-    const rec = JSON.parse(readFileSync(file, "utf8"));
-    // as the previous version wrote it: version 1, one tx of unknown kind
-    rec.version = 1; rec.attempts[0].tx = "0xpull"; delete rec.attempts[0].tx_pull; delete rec.attempts[0].tx_unknown_kind;
-    writeFileSync(file, JSON.stringify(rec));
-    expect(R.readRecord("evm", "base-sepolia", w0.op)).toMatchObject({ version: 2, attempts: [{ tx: null, tx_unknown_kind: "0xpull" }] });
-    // a pull-only observation changes nothing about the kind; the output says "recorded"
-    const pullOnly = { exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "unknown", paid: null, tx: { pull: "0xpull" }, next: "x" } };
-    await R.recoverOrder(world({ op: w0.op, attemptState: () => pullOnly }).deps);
-    const lost = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
-    expect(lost.fields.tx.settle).toBeUndefined();
-    expect(lost.fields.tx).toMatchObject({ pull: "0xpull" });
-    // a journal that proves the kind promotes it: here it is the pull, so it stops being "recorded"
-    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].tx_unknown_kind).toBeUndefined();
-    // a record that never saw a journal keeps it as recorded
-    const w1 = world({ attempt: (flags: any) => unknown(flags) });
-    await R.recoverOrder(w1.deps);
-    const f1 = R.recordPath("evm", "base-sepolia", w1.op);
-    const r1 = JSON.parse(readFileSync(f1, "utf8"));
-    r1.version = 1; r1.attempts[0].tx = "0xold"; delete r1.attempts[0].tx_pull;
-    writeFileSync(f1, JSON.stringify(r1));
-    const out = await R.recoverOrder(world({ op: w1.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
-    expect(out.fields.tx).toEqual({ recorded: "0xold" });
-    expect(out.fields.reason).toMatch(/kind unknown/);
-    // and a settlement seen later replaces it as the settlement
-    const settled = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, tx: { settle: "0xnew" }, next: "none" } };
-    await R.recoverOrder(world({ op: w1.op, attemptState: () => settled }).deps);
-    expect(readRecordFile("evm", "base-sepolia", w1.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xnew" });
+  it("earlier-build records: version 1, or legacy: true, are never trusted: unknown (exit 5), the evidence kept, nothing claimed, adopted, started or resumed", async () => {
+    const downgrade = (op: string, extra: Record<string, unknown> = {}) => {
+      const file = R.recordPath("evm", "base-sepolia", op);
+      const rec = JSON.parse(readFileSync(file, "utf8"));
+      writeFileSync(file, JSON.stringify({ ...rec, ...extra }));
+    };
+    const settledOther = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xunrelated" }, next: "none" } };
+    // 1. a downgraded or edited record never claims an unrelated payment
+    for (const edit of [{ version: 1 }, { legacy: true }]) {
+      const w0 = world({ attempt: () => unknown({ rail: "evm", chain: "arc-testnet", op: "x" }) });
+      await R.recoverOrder(w0.deps);
+      downgrade(w0.op, edit);
+      const w = world({ op: w0.op, attemptState: () => settledOther });
+      const out = await R.recoverOrder(w.deps);
+      expect(out).toMatchObject({ kind: "result", code: 5 });
+      expect(out.fields).toMatchObject({ state: "unknown", paid: null, final: false });
+      expect(out.fields.reason).toMatch(/earlier development build; check the chain yourself/);
+      expect(JSON.stringify(out.fields)).not.toMatch(/0xunrelated/);
+      expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].outcome).toBe("unknown");
+      expect(count(w.calls, "attemptState")).toBe(0);
+      expect(count(w.calls, "attempt")).toBe(0);
+    }
+    // 2. a pending attempt of an earlier build answers unknown without contacting anyone, and the original is frozen first when it can be
+    const p0 = world({ attempt: () => { throw new Error("process killed"); } });
+    await expect(R.recoverOrder(p0.deps)).rejects.toThrow("killed");
+    downgrade(p0.op, { version: 1 });
+    const p = world({ op: p0.op });
+    const pend = await R.recoverOrder(p.deps);
+    expect(pend).toMatchObject({ kind: "result", code: 5 });
+    expect(pend.fields).toMatchObject({ state: "unknown", paid: null });
+    expect(p.calls.filter((c) => ["attempt", "attemptState", "features", "advice", "report"].includes(c.kind))).toEqual([]);
+    expect(p.events[0]).toMatchObject({ kind: "freeze", root: true });
+    // 3. even when the original cannot be frozen, still unknown, never unpaid
+    const stuck = world({ op: p0.op, freeze: { ok: false, why: "busy" } });
+    const held = await R.recoverOrder(stuck.deps);
+    expect(held).toMatchObject({ kind: "result", code: 5 });
+    expect(held.fields.paid).toBeNull();
+    // 4. a recorded transaction is kept, as recorded
+    const t0 = world({ attempt: (flags: any) => paid(flags) });
+    await R.recoverOrder(t0.deps);
+    downgrade(t0.op, { version: 1 });
+    const t = await R.recoverOrder(world({ op: t0.op }).deps);
+    expect(t.fields.tx).toEqual({ recorded: "0xabc" });
+    expect(t.fields.paid).toBeNull();
+    expect(R.earlierBuild(R.readRecord("evm", "base-sepolia", t0.op))).toBe(true);
+    expect(R.recordOwns(R.readRecord("evm", "base-sepolia", t0.op))).toBe(true);
   });
 
   it("payment-tx-upgrade: a settlement replaces an earlier pull hash; kinds stay apart, also after journal loss", async () => {
@@ -1614,10 +1629,8 @@ describe("a journal at an attempt op's name is this order's only with this order
     expect(R.notThisOrder({ url, supersededBy: { order_ref: "other" } }, "mine", url, false)).toBe("other_order");
     expect(R.notThisOrder({ url: "http://127.0.0.1:4001/b" }, "mine", url, false)).toBe("another_request");
     expect(R.notThisOrder({ url, state: "settled" }, "mine", url, true)).toBe("not_stamped");
-    // a version 1 record lists the op: the same url and no other order's stamp is its own payment
-    expect(R.notThisOrder({ url, state: "settled" }, "mine", url, true, true)).toBe("");
-    expect(R.notThisOrder({ url: "http://127.0.0.1:4001/b", state: "settled" }, "mine", url, true, true)).toBe("another_request");
-    expect(R.notThisOrder({ url, state: "settled", recoveryOf: { order_ref: "other" } }, "mine", url, true, true)).toBe("other_order");
+    // no record, of any version, makes an unstamped signed journal its own
+    expect(R.notThisOrder({ url, state: "settled" }, "mine", url, true, true)).toBe("not_stamped");
     expect(R.notThisOrder({ url, state: "refused_precheck" }, "mine", url, false)).toBe("");
     expect(R.notThisOrder({ url, recoveryOf: { order_ref: "mine" }, state: "settled" }, "mine", url, true)).toBe("");
     expect(R.notThisOrder({ url, supersededBy: { order_ref: "mine" } }, "mine", url, true)).toBe("");
@@ -1736,10 +1749,16 @@ describe("the order flag is only for an order's own attempt names", () => {
     expect(R.reservedNameProblem(R.attemptOp("o", 2, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80"), ref)).toMatch(/reserved/);
     expect(R.reservedNameProblem(R.attemptOp("o", 2, ref), ref)).toBe("");
   });
-  it("a version 1 record is read as legacy, in memory, on every read", () => {
+  it("a version 1 record is read as it is and recognised as an earlier build's; no read migrates it", () => {
     const dir = R.recoveryDir();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     writeFileSync(R.recordPath("evm", "base-sepolia", "legacy-op"), JSON.stringify({ version: 1, order_ref: "x", rail: "evm", chain: "base-sepolia", op: "legacy-op", attempts: [{ attempt_no: 2, op: "a", tx: "0x1" }] }));
-    expect(R.readRecord("evm", "base-sepolia", "legacy-op")).toMatchObject({ version: 2, legacy: true });
+    const rec = R.readRecord("evm", "base-sepolia", "legacy-op");
+    expect(rec).toMatchObject({ version: 1, attempts: [{ tx: "0x1" }] });
+    expect(rec.legacy).toBeUndefined();
+    expect(R.earlierBuild(rec)).toBe(true);
+    expect(R.earlierBuild({ version: 2, legacy: true, attempts: [] })).toBe(true);
+    expect(R.earlierBuild({ version: 2, attempts: [] })).toBe(false);
+    expect(R.earlierBuild({ unreadable: true })).toBe(false);
   });
 });

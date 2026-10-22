@@ -933,28 +933,45 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("legacy-r5-payment: an unstamped settled journal is the order's payment when its version 1 record lists the op and the url is the same; a version 2 record keeps the rule", async () => {
-    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-v1");
+  it("legacy-r5-payment: an order recorded by an earlier build (version 1) answers unknown: no payment claimed, nothing contacted, the evidence kept", async () => {
+    const { gate, arcSeller, baseSeller, file, hits } = await frozenOrder("fz-v1");
     const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-v1"));
     expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
     const journalFile = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-v1")}.json`);
-    const legacy = JSON.parse(readFileSync(journalFile, "utf8"));
-    delete legacy.recoveryOf;
-    writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
+    const journalBefore = readFileSync(journalFile, "utf8");
     const rec = JSON.parse(readFileSync(file, "utf8"));
     rec.version = 1;
     writeFileSync(file, JSON.stringify(rec, null, 2));
+    const contactsBefore = hits.length;
     const root = await buy(`${gate}/spot`, { op: "fz-v1" });
-    expect(root.result, all(root)).toMatchObject({ op: aop("fz-v1"), state: "settled", paid: true });
-    const after = JSON.parse(readFileSync(file, "utf8"));
-    expect(after.attempts[0]).toMatchObject({ outcome: "paid" });
+    expect(root.code, all(root)).toBe(5);
+    expect(root.result).toMatchObject({ state: "unknown", paid: null, final: false });
+    expect(root.result.reason).toMatch(/earlier development build; check the chain yourself/);
+    expect(JSON.stringify(root.result)).not.toMatch(/new --op|nothing was paid/i);
+    // the original is superseded (first, when it can be), the evidence is kept, nobody was contacted
     expect(JSON.parse(readFileSync(join(home, "budget", "ops", "evm-base-sepolia", "fz-v1.json"), "utf8")).supersededBy).toMatchObject({ op: aop("fz-v1") });
-    // a different url in the same legacy record is still a collision
-    legacy.url = `${gate}/arc?other=1`;
-    writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
-    const clash = await buy(`${gate}/spot`, { op: "fz-v1" });
-    expect(clash.code, all(clash)).toBe(5);
+    expect(readFileSync(journalFile, "utf8")).toBe(journalBefore);
+    expect(hits.length).toBe(contactsBefore);
+    const again = await buy(`${gate}/spot`, { op: "fz-v1" });
+    expect(again.code).toBe(5);
     expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("legacy-unsigned-resume: a pending attempt of an earlier build is not resumed: unknown, nobody is contacted, nothing is paid", async () => {
+    const { gate, arcSeller, baseSeller, file, site, hits } = await frozenOrder("fz-v1p");
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    rec.version = 1;
+    writeFileSync(file, JSON.stringify(rec, null, 2));
+    const adviceBefore = site.adviceCalls.length, hitsBefore = hits.length;
+    const out = await buy(`${gate}/spot`, { op: "fz-v1p" });
+    expect(out.code, all(out)).toBe(5);
+    expect(out.result).toMatchObject({ state: "unknown", paid: null });
+    expect(site.adviceCalls.length).toBe(adviceBefore);
+    expect(site.reportCalls).toEqual([]);
+    expect(hits.length).toBe(hitsBefore);
+    expect(settlements(arcSeller, baseSeller)).toBe(0);
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-v1p"]);
+    expect(hand.result.state).toBe("refused_precheck");
   }, 400_000);
 
   it("unstamped-payment: a settled journal without this order's stamp is not claimed as the order's payment: unknown, and nothing is paid again", async () => {

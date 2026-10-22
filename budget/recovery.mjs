@@ -194,23 +194,15 @@ export function readRecord(rail, chain, op) {
   try {
     const r = JSON.parse(text);
     if (!(r && typeof r === "object" && !Array.isArray(r) && (r.version === 1 || r.version === 2) && Array.isArray(r.attempts) && typeof r.order_ref === "string")) return { unreadable: true };
-    return migrateRecord(r);
+    return r;
   } catch { return { unreadable: true }; }
 }
 
 /**
- * Version 2 of the record keeps transaction kinds apart: `tx` is the settlement, `tx_pull` the owner-to-agent transfer. In a version 1
- * record a bare `tx` could be either, so it moves to `tx_unknown_kind` and is promoted only when a journal proves which kind it is.
+ * A record written by an earlier development build (version 1, or one carrying `legacy: true`) is never trusted: it never claims or
+ * adopts a payment and never starts or resumes an attempt. Only unreleased builds wrote them. Any rerun answers unknown.
  */
-function migrateRecord(r) {
-  if (r.version === 2) return r;
-  for (const a of r.attempts) {
-    if (a && typeof a === "object" && a.tx) { a.tx_unknown_kind = a.tx; a.tx = null; }
-  }
-  r.version = 2;
-  r.legacy = true; // written before attempt journals were stamped: an unstamped signed journal at its attempts' names is its own
-  return r;
-}
+export const earlierBuild = (record) => Boolean(record) && !record.unreadable && (record.version === 1 || record.legacy === true);
 
 /** Durable: the file and its folder are flushed before this returns (journal.mjs writeJournalFile). */
 export function writeRecord(record) {
@@ -259,12 +251,11 @@ export const otherOrder = (journal, orderRef) => Boolean(journal) && ((journal.r
  * names another order, or (`signed`) a journal that may have signed without this order's stamp. Such a journal is never claimed as
  * this order's payment and never paid again: the order's outcome is unknown.
  */
-export function notThisOrder(journal, orderRef, url, signed, legacy = false) {
+export function notThisOrder(journal, orderRef, url, signed) {
   if (!journal) return "";
   if (collides(journal, url)) return "another_request";
   if (otherOrder(journal, orderRef)) return "other_order";
-  // a record from before stamping (version 1) lists this op as its attempt: a signed journal at the same url is that order's payment
-  if (signed && !ownedBy(journal, orderRef) && !legacy) return "not_stamped";
+  if (signed && !ownedBy(journal, orderRef)) return "not_stamped";
   return "";
 }
 
@@ -766,7 +757,7 @@ async function endUnpaid(deps, record, why) {
   const stuck = closeOrder(deps, record, why);
   if (stuck) {
     if (stuck.attempt && stuck.why === "may_have_signed") {
-      const probe = await deps.attemptState(stuck.attempt, record.order_ref, { legacy: record.legacy === true });
+      const probe = await deps.attemptState(stuck.attempt, record.order_ref);
       if (probe.exists && !probe.unsigned) return decided(deps, record, stuck.attempt, probe);
     }
     return stuckResult(record, stuck);
@@ -818,7 +809,7 @@ function learn(record, attempt, fields) {
 export function recordOwns(record) {
   if (!record) return false;
   if (record.unreadable) return true;
-  if (record.owns === true || record.sealed === true) return true;
+  if (record.owns === true || record.sealed === true || earlierBuild(record)) return true;
   const last = record.attempts[record.attempts.length - 1];
   if (last && last.state === "journaled" && !record.closed) return true;
   return record.attempts.some((a) => recordedSigned(a) || a.freeze === "done");
@@ -909,7 +900,7 @@ async function runAttempt(deps, record, attempt) {
   record.owns = true;
   try { writeRecord(record); } catch { /* the marks are the truth; the record only repeats them */ }
   // an attempt op that already did something is never run again: its own journal is the answer, read only after the original is marked
-  const before = await deps.attemptState(attempt, record.order_ref, { legacy: record.legacy === true });
+  const before = await deps.attemptState(attempt, record.order_ref);
   if (before.exists && !before.unsigned) return decided(deps, record, attempt, before);
 
   // A freeze is permanent: if the advice ran out after it, the order ends here and the original stays superseded
@@ -926,7 +917,7 @@ async function runAttempt(deps, record, attempt) {
     const shut = deps.freezeOp({ rail: attempt.rail, chain: attempt.chain, op: attempt.op }, closedMark(record, "attempt_refused"), { attempt: true, url: attempt.url });
     if (!shut.ok) {
       if (shut.why === "may_have_signed") {
-        const probe = await deps.attemptState(attempt, record.order_ref, { legacy: record.legacy === true });
+        const probe = await deps.attemptState(attempt, record.order_ref);
         if (probe.exists && !probe.unsigned) { record.closed = "attempt_decided"; return decided(deps, record, attempt, probe); }
       }
       record.closed = "attempt_decided";
@@ -1008,13 +999,28 @@ const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.
 async function resume(deps, record) {
   const last = record.attempts[record.attempts.length - 1];
   if (!last) return { kind: "none" }; // advice was never acted on
+  // A record from an earlier development build is never trusted to claim, adopt, start or resume anything: unknown, with its evidence.
+  if (earlierBuild(record)) {
+    rootFirst(deps, record, last); // the original is frozen first when it can be; if not, the answer is the same
+    const txs = record.attempts.flatMap((a) => [a.tx, a.tx_pull, a.tx_unknown_kind]).filter(Boolean);
+    return {
+      kind: "result", code: 5,
+      fields: {
+        command: "buy", rail: record.rail, chain: record.chain, op: record.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null,
+        tx: txs.length ? { recorded: txs[0] } : {},
+        recovery: recoveryFact(record, null, { switched: record.attempts.length > 0, skipped: record.skipped ?? [] }),
+        next: "check the chain yourself (the agent's and the owner's transactions); never pay again for this order",
+        reason: "this order was recorded by an earlier development build; check the chain yourself. Whether it was paid is unknown, and the client does not pay it again",
+      },
+    };
+  }
   // The original is durably superseded FIRST, before any attempt journal is read or any attempt lock is tried. If it cannot be, the
   // answer is unknown (the attempt recorded as at least unknown, so every rerun returns here) and no attempt is touched.
   const firstHeld = rootFirst(deps, record, last);
   if (firstHeld) return firstHeld;
   // INVARIANT 1: every attempt, the newest first; an attempt that may have signed is never run again, and what its journal says stands
   for (const a of [...record.attempts].reverse()) {
-    const probe = await deps.attemptState(a, record.order_ref, { legacy: record.legacy === true });
+    const probe = await deps.attemptState(a, record.order_ref);
     // a journal at an attempt op's name is this order's evidence when it carries this order's stamp, else unknown; rechecked on every rerun
     if (probe.exists && !probe.unsigned) return decided(deps, record, a, probe);
     // Losing local proof never erases what was recorded: the payment, or the unknown, with the evidence that was recorded.
