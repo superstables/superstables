@@ -1320,8 +1320,10 @@ describe("an order that moves on freezes every earlier attempt (three offers)", 
     cleanups.push(() => working.close());
     for (const extra of [[], ["--recovery-order", orderRef("three")]]) {
       const hand = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", working.url, "--max", "0.012", "--op", r2, ...extra]);
-      expect(hand.code, all(hand)).toBe(3);
-      expect(hand.result.reason).toMatch(extra.length ? /superseded by auto recovery/ : /reserved/);
+      // flagged, at another url than the attempt's: a collision (unknown, exit 5) is checked first; unflagged: reserved. Never paid.
+      expect(hand.code, all(hand)).toBe(extra.length ? 5 : 3);
+      expect(hand.result.reason).toMatch(extra.length ? /different request/ : /reserved/);
+      expect(hand.result.state).not.toBe("settled");
     }
     // through the dispatcher: attempt 2 is answered from its order (attempt 3's payment), and so is the original
     for (const op of [r2, "three"]) {
