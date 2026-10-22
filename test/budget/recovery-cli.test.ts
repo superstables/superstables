@@ -1099,7 +1099,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("signed-during-features: the order's candidate settles during the signed feature read, which then says the feature is off; the rerun reports the settlement", async () => {
+  it("signed-during-features: the order's candidate settles during the signed feature read, which then says the feature is off; that rerun is unknown, never unpaid, and the next one reports the settlement", async () => {
     const { gate, arcSeller, baseSeller, site } = await frozenOrder("fz-m");
     site.features = [];
     let release!: () => void;
@@ -1127,14 +1127,18 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settled.result, all(settled)).toMatchObject({ state: "settled", paid: true });
     release();
     const out = await rerun;
-    expect(out.result, all(out)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
-    expect(out.result.reason ?? "").not.toMatch(/new --op/);
+    // the order then ends unpaid only if the original's mark can be closed, and that mark points at the settled candidate: it stays,
+    // and this rerun is unknown, never unpaid
+    expect(out.result, all(out)).toMatchObject({ state: "unknown", paid: null, final: false });
+    expect(JSON.stringify(out.result)).not.toMatch(/new --op|nothing was paid/i);
     // an ordinary buy of the order's attempt name gets nowhere
     const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
     expect(ordinary.result.reason).toMatch(/reserved/);
-    // and every later rerun reports the same settlement
-    const next = await buy(`${gate}/spot`, { op: "fz-m" });
-    expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
+    // the next rerun, and every later one, reports the settlement
+    for (let i = 0; i < 2; i++) {
+      const next = await buy(`${gate}/spot`, { op: "fz-m" });
+      expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
+    }
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
