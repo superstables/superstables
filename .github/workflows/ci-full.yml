@@ -22,12 +22,12 @@ permissions:
 
 concurrency:
   # a newer full run on main supersedes an older one; a dispatch on another ref skips its jobs
-  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || format('ci-full-{0}', github.run_id) }}
+  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || startsWith(github.ref, 'refs/heads/maint/') && format('ci-release-{0}', github.ref_name) || format('ci-full-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 25
@@ -73,7 +73,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
 
   install:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Install routes, Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 30
