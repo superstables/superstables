@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { OP_TAKEN, failureFact, ownedBy, readTerms, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
+import { failureFact, readTerms, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -412,12 +412,9 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: supersededNext((prior as any).supersededBy), supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
   }
 
-  // An attempt of an auto-recovered order runs only under an op this order owns: never one another command already used
+  // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)
   if (o.recoveryOrder !== undefined) {
-    if (prior && !ownedBy(prior, o.recoveryOrder)) {
-      log(`REFUSED: operation ${o.op} was already used by another command; this order skips it`);
-      return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: OP_TAKEN, next: "nothing was signed or sent" }, exitCode: 3 };
-    }
+    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now
     (j as any).recoveryOf = { order_ref: o.recoveryOrder };
   } else if ((prior as any)?.recoveryOf) {
     // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)

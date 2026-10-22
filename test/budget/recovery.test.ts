@@ -1105,39 +1105,31 @@ describe("attempt ops are this order's own, and never adopted (finding: two orde
     expect(R.attemptOp(a, 2, ra)).toMatch(/^[A-Za-z0-9._-]{1,64}$/);
     expect(R.attemptOp("X", 2, ra)).toBe("X-1b4e28ba-r2");
   });
-  it("an attempt op whose journal another command wrote is skipped before anything is frozen or contacted, and the order goes on", async () => {
-    const two = advice({}, [goodCandidate({ offer_id: "o1" }), goodCandidate({ offer_id: "o2", chain: "devnet", asset: SOL_USDC, url: `${ORIGIN}/sol?asset=BTC` })]);
-    let n = 0;
-    const w = world({ adviceReply: { status: 200, body: two }, attemptState: () => (++n === 1 ? { exists: false, unsigned: true, foreign: true } : { exists: false, unsigned: true }) });
+  it("a journal at an attempt op's name for another request is a collision: unknown, never closed, never unpaid", async () => {
+    const w = world({ attemptState: () => ({ exists: true, unsigned: false, collision: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "unknown", paid: null, delivered: null, tx: {}, next: "reconcile", reason: "different request" } }) });
     const out = await R.recoverOrder(w.deps);
-    expect(out.fields).toMatchObject({ state: "settled", chain: "devnet" });
-    expect(w.calls.filter((c) => c.kind === "attempt").map((c) => c.flags.chain)).toEqual(["devnet"]);
-    const rec = readRecordFile("evm", "base-sepolia", w.op);
-    expect(rec.attempts[0]).toMatchObject({ taken: true, outcome: "failed_before_payment", note: "not contacted: op_taken" });
-    expect(rec.skipped).toContainEqual({ offer_id: "o1", reason: "op_taken" });
-    // the taken op is never frozen; the original points at the attempt that was run
-    expect(w.freezes.map((f) => f[0].op)).toEqual([w.op]);
-    expect(w.freezes[0][1]).toMatchObject({ op: aop(w.op, 3), chain: "devnet", root: { op: w.op } });
+    expect(out).toMatchObject({ kind: "result", code: 5 });
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null });
+    expect(count(w.calls, "attempt")).toBe(0);
+    expect(w.freezes.filter((f) => f[1].closed)).toEqual([]);
   });
-  it("the ordinary buy of an attempt names the order, and one the rail finds taken is skipped too", async () => {
-    const w = world({ attempt: () => ({ taken: true, unsigned: true }) });
-    const out = await R.recoverOrder(w.deps);
-    expect(out).toMatchObject({ kind: "none", closed: true });
-    const rec = readRecordFile("evm", "base-sepolia", w.op);
-    expect(w.calls.find((c) => c.kind === "attempt")!.flags.op).toBe(aop(w.op));
-    expect(rec.attempts[0]).toMatchObject({ taken: true });
-  });
-  it("freezeOp leaves another command's journal under an attempt op alone, and marks this order's own", () => {
+  it("freezeOp treats whatever journal is at an attempt op's name as this order's: unsigned is marked, signed is not, another request is a collision", () => {
     const dir = join(home, "budget", "ops", "evm-arc-testnet");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const j = (op: string, extra = {}) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, createdAt: "2026-10-21T00:00:00Z", notes: [], signed: false, ...extra });
-    writeFileSync(join(dir, "att-foreign.json"), JSON.stringify(j("att-foreign")));
+    const j = (op: string, extra = {}) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, createdAt: "2026-10-21T00:00:00Z", notes: [], signed: false, url: "http://127.0.0.1:4001/a", ...extra });
+    writeFileSync(join(dir, "att-bare.json"), JSON.stringify(j("att-bare")));
     writeFileSync(join(dir, "att-mine.json"), JSON.stringify(j("att-mine", { recoveryOf: { order_ref: "ord-9" } })));
+    writeFileSync(join(dir, "att-signed.json"), JSON.stringify(j("att-signed", { state: "settled", signed: true })));
+    writeFileSync(join(dir, "att-other.json"), JSON.stringify(j("att-other", { url: "http://127.0.0.1:4001/elsewhere" })));
     const mark = { order_ref: "ord-9", root: { rail: "evm", chain: "base-sepolia", op: "o" }, closed: "no_attempt_paid" };
-    expect(R.freezeOp({ rail: "evm", chain: "arc-testnet", op: "att-foreign" }, mark, { attempt: true })).toEqual({ ok: true, foreign: true });
-    expect(JSON.parse(readFileSync(join(dir, "att-foreign.json"), "utf8")).supersededBy).toBeUndefined();
-    expect(R.freezeOp({ rail: "evm", chain: "arc-testnet", op: "att-mine" }, mark, { attempt: true })).toEqual({ ok: true });
-    expect(JSON.parse(readFileSync(join(dir, "att-mine.json"), "utf8")).supersededBy).toEqual(mark);
+    const at = (op: string) => R.freezeOp({ rail: "evm", chain: "arc-testnet", op }, mark, { attempt: true, url: "http://127.0.0.1:4001/a" });
+    expect(at("att-bare")).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(dir, "att-bare.json"), "utf8")).supersededBy).toEqual(mark);
+    expect(at("att-mine")).toEqual({ ok: true });
+    expect(at("att-signed")).toEqual({ ok: false, why: "may_have_signed" });
+    expect(JSON.parse(readFileSync(join(dir, "att-signed.json"), "utf8")).supersededBy).toBeUndefined();
+    expect(at("att-other")).toEqual({ ok: false, why: "collision" });
+    expect(JSON.parse(readFileSync(join(dir, "att-other.json"), "utf8")).supersededBy).toBeUndefined();
     // an evm attempt that never ran gets a journal only from the base it is given
     expect(R.freezeOp({ rail: "evm", chain: "arc-testnet", op: "att-none" }, mark, { attempt: true })).toEqual({ ok: false, why: "no_journal" });
     expect(R.freezeOp({ rail: "evm", chain: "arc-testnet", op: "att-none" }, mark, { attempt: true, base: { rail: "evm", path: "approve", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, signed: false, delivered: null, notes: [] } })).toEqual({ ok: true });
@@ -1313,22 +1305,74 @@ describe("ownership and transaction kinds (round 6 findings)", () => {
     expect(out.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xabc" } });
     const rec = readRecordFile("evm", "base-sepolia", w0.op);
     expect(rec.attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
-    expect(rec.attempts[0].taken).toBeUndefined();
     expect(rec.closed).not.toBe("no_attempt_paid");
   });
 
-  it("skipTaken never downgrades recorded evidence, and a fresh attempt on a foreign op is still skipped", async () => {
+  it("an attempt is never skipped: an unstamped journal at its name is read, and recorded evidence is never downgraded", async () => {
     const w0 = world({ attempt: () => unknown({ rail: "evm", chain: "arc-testnet", op: "x" }) });
     await R.recoverOrder(w0.deps);
-    const out = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true, foreign: true }) }).deps);
+    const out = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
     expect(out.fields).toMatchObject({ state: "unknown", paid: null });
     expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].outcome).toBe("unknown");
-    // never run, journaled, and the op is another command's: skipped
+    // a journaled attempt that never ran, whose op already has a signed journal: that journal's result, recorded
     const w1 = world({ attempt: () => { throw new Error("process killed"); } });
     await expect(R.recoverOrder(w1.deps)).rejects.toThrow("killed");
-    const skipped = await R.recoverOrder(world({ op: w1.op, attemptState: () => ({ exists: false, unsigned: true, foreign: true }) }).deps);
-    expect(skipped.kind).toBe("none");
-    expect(readRecordFile("evm", "base-sepolia", w1.op).attempts[0]).toMatchObject({ taken: true });
+    const signed = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } };
+    const got = await R.recoverOrder(world({ op: w1.op, attemptState: () => signed }).deps);
+    expect(got.fields).toMatchObject({ state: "settled", paid: true });
+    expect(readRecordFile("evm", "base-sepolia", w1.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xs" });
+  });
+
+  it("every reader of an attempt journal gives a signed, unstamped journal's result: before the attempt, at closure, on every rerun", async () => {
+    const signed = (op: string) => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } });
+    // 1. the state read before the attempt is contacted
+    const a = world({ attemptState: () => signed("x") });
+    expect((await R.recoverOrder(a.deps)).fields).toMatchObject({ state: "settled", paid: true });
+    expect(count(a.calls, "attempt")).toBe(0);
+    // 2. the attempt runs, finds nothing signed, refuses; the closure (freezeOp) finds it signed meanwhile: that journal's result
+    const b = world({ attempt: (flags: any) => unsignedTerms(flags) });
+    b.deps.freezeOp = (_t: any, m: any) => (m.closed ? { ok: false, why: "may_have_signed" } : { ok: true });
+    let n = 0;
+    b.deps.attemptState = async () => (++n === 1 ? { exists: false, unsigned: true } : signed("x"));
+    expect((await R.recoverOrder(b.deps)).fields).toMatchObject({ state: "settled", paid: true });
+    // 3. a rerun of a record that says failed: rechecked every time
+    const c = world({ attempt: (flags: any) => unsignedTerms(flags) });
+    await R.recoverOrder(c.deps);
+    expect((await R.recoverOrder(world({ op: c.op, attemptState: () => signed("x") }).deps)).fields).toMatchObject({ state: "settled", paid: true });
+    expect((await R.recoverOrder(world({ op: c.op, attemptState: () => signed("x") }).deps)).fields).toMatchObject({ state: "settled", paid: true });
+  });
+
+  it("legacy-pull-kind: a version 1 record's bare tx is kept as 'recorded', kind unknown, never shown as the settlement", async () => {
+    const w0 = world({ attempt: (flags: any) => unknown(flags) });
+    await R.recoverOrder(w0.deps);
+    const file = R.recordPath("evm", "base-sepolia", w0.op);
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    // as the previous version wrote it: version 1, one tx of unknown kind
+    rec.version = 1; rec.attempts[0].tx = "0xpull"; delete rec.attempts[0].tx_pull; delete rec.attempts[0].tx_unknown_kind;
+    writeFileSync(file, JSON.stringify(rec));
+    expect(R.readRecord("evm", "base-sepolia", w0.op)).toMatchObject({ version: 2, attempts: [{ tx: null, tx_unknown_kind: "0xpull" }] });
+    // a pull-only observation changes nothing about the kind; the output says "recorded"
+    const pullOnly = { exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "unknown", paid: null, tx: { pull: "0xpull" }, next: "x" } };
+    await R.recoverOrder(world({ op: w0.op, attemptState: () => pullOnly }).deps);
+    const lost = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(lost.fields.tx.settle).toBeUndefined();
+    expect(lost.fields.tx).toMatchObject({ pull: "0xpull" });
+    // a journal that proves the kind promotes it: here it is the pull, so it stops being "recorded"
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0].tx_unknown_kind).toBeUndefined();
+    // a record that never saw a journal keeps it as recorded
+    const w1 = world({ attempt: (flags: any) => unknown(flags) });
+    await R.recoverOrder(w1.deps);
+    const f1 = R.recordPath("evm", "base-sepolia", w1.op);
+    const r1 = JSON.parse(readFileSync(f1, "utf8"));
+    r1.version = 1; r1.attempts[0].tx = "0xold"; delete r1.attempts[0].tx_pull;
+    writeFileSync(f1, JSON.stringify(r1));
+    const out = await R.recoverOrder(world({ op: w1.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(out.fields.tx).toEqual({ recorded: "0xold" });
+    expect(out.fields.reason).toMatch(/kind unknown/);
+    // and a settlement seen later replaces it as the settlement
+    const settled = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, tx: { settle: "0xnew" }, next: "none" } };
+    await R.recoverOrder(world({ op: w1.op, attemptState: () => settled }).deps);
+    expect(readRecordFile("evm", "base-sepolia", w1.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xnew" });
   });
 
   it("payment-tx-upgrade: a settlement replaces an earlier pull hash; kinds stay apart, also after journal loss", async () => {

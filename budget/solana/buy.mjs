@@ -76,7 +76,7 @@ import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
-import { OP_TAKEN, RECOVERY_ORDER, failureFact, ownedBy, readTerms, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
+import { RECOVERY_ORDER, failureFact, readTerms, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -168,11 +168,6 @@ let lock = { ok: true };
   }
   const existing = readOp(opId);
   if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana --op ${opId}` });
-  // an attempt of an auto-recovered order never runs under an op another command already used
-  if (recoveryOrder !== undefined && existing && !ownedBy(existing, recoveryOrder)) {
-    console.error(`Refused (nothing signed): operation ${opId} was already used by another command; this order skips it`);
-    finish("refused_precheck", EXIT.REFUSED, { reason: OP_TAKEN, next: "nothing was signed or paid" });
-  }
   // an op that belongs to an auto-recovered order is run only as that order's attempt
   if (recoveryOrder === undefined && existing?.recoveryOf) {
     const why = `operation ${opId} belongs to an auto-recovered order; it is run only by that order. Rerun the original buy of the order, which reads and continues it`;

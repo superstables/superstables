@@ -177,9 +177,24 @@ export function readRecord(rail, chain, op) {
   try { text = readFileSync(recordPath(rail, chain, op), "utf8"); } catch (err) { return err?.code === "ENOENT" ? null : { unreadable: true }; }
   try {
     const r = JSON.parse(text);
-    return r && typeof r === "object" && !Array.isArray(r) && r.version === 1 && Array.isArray(r.attempts) && typeof r.order_ref === "string" ? r : { unreadable: true };
+    if (!(r && typeof r === "object" && !Array.isArray(r) && (r.version === 1 || r.version === 2) && Array.isArray(r.attempts) && typeof r.order_ref === "string")) return { unreadable: true };
+    return migrateRecord(r);
   } catch { return { unreadable: true }; }
 }
+
+/**
+ * Version 2 of the record keeps transaction kinds apart: `tx` is the settlement, `tx_pull` the owner-to-agent transfer. In a version 1
+ * record a bare `tx` could be either, so it moves to `tx_unknown_kind` and is promoted only when a journal proves which kind it is.
+ */
+function migrateRecord(r) {
+  if (r.version === 2) return r;
+  for (const a of r.attempts) {
+    if (a && typeof a === "object" && a.tx) { a.tx_unknown_kind = a.tx; a.tx = null; }
+  }
+  r.version = 2;
+  return r;
+}
+
 /** Durable: the file and its folder are flushed before this returns (journal.mjs writeJournalFile). */
 export function writeRecord(record) {
   writeJournalFile(recordPath(record.rail, record.chain, record.op), `${JSON.stringify(record, null, 2)}\n`);
@@ -205,9 +220,6 @@ export function provesUnsigned(rail, read) {
 
 /** An order reference as --recovery-order carries it to a rail (a UUID made by recoverOrder). */
 export const RECOVERY_ORDER = /^[A-Za-z0-9-]{1,64}$/;
-/** The reason a rail gives when --recovery-order names an op whose journal is not that order's: the op is another command's. */
-export const OP_TAKEN = "op_taken";
-
 /** Whether an op's journal belongs to this order: the rail stamped it for this order's attempt, or this order marked it. */
 export const ownedBy = (journal, orderRef) => Boolean(journal) && (journal.recoveryOf?.order_ref === orderRef || journal.supersededBy?.order_ref === orderRef);
 
@@ -222,12 +234,13 @@ const sameMark = (a, b) => JSON.stringify(a) === JSON.stringify(b);
  * Fails closed: a busy lock, a journal that is not provably unsigned, a mark of another order, or (evm) no journal and no `base`
  * means the op is not marked.
  *   attempt  the op is an attempt of this order: a journal that this order's rail run did not write is another command's and is
- *            left alone ({ ok: true, foreign: true }); this order never ran under that op.
+ *            named for this order, so whatever journal is there is this order's evidence; a journal for another url is a collision
+ *            ({ ok: false, why: "collision" }), never marked.
  *   base     evm only: the journal to create for an op that has none (an attempt that was never run). evm journals name the
  *            owner and the agent, which this module does not know.
- * @returns {{ ok: boolean, why?: string, foreign?: boolean }}
+ * @returns {{ ok: boolean, why?: string }}
  */
-export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = null } = {}) {
+export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = null, url = null } = {}) {
   let dir, lock;
   try {
     dir = opsDir(rail, chain);
@@ -242,7 +255,9 @@ export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = nu
     let start;
     if (cur !== null) {
       if (!cur || typeof cur !== "object" || journalProblem(rail, cur, op)) return { ok: false, why: "unreadable" };
-      if (attempt && !ownedBy(cur, mark.order_ref)) return { ok: true, foreign: true };
+      // an attempt op's name is derived from the order: whatever journal is at that name is this order's evidence. The one case that is
+      // not is a request that clearly differs (another url): a collision, never marked and never skipped
+      if (attempt && collides(cur, url)) return { ok: false, why: "collision" };
       if (cur.supersededBy && cur.supersededBy.order_ref !== mark.order_ref) return { ok: false, why: "other_order" };
       if (!provesUnsigned(rail, { present: true, journal: cur })) return { ok: false, why: "may_have_signed" };
       if (cur.supersededBy && sameMark(cur.supersededBy, mark)) return { ok: true };
@@ -260,6 +275,9 @@ export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = nu
     return { ok: true };
   } catch { return { ok: false, why: "write_failed" }; } finally { try { lock.release(); } catch { /* released with the process */ } }
 }
+
+/** Whether a journal at an attempt op's name is for a different request than the attempt's: the one collision there can be. */
+export const collides = (journal, url) => Boolean(journal) && typeof journal.url === "string" && typeof url === "string" && journal.url !== url;
 
 /** What to do next with an op that auto recovery marked. */
 export const supersededNext = (by) => (by?.closed ? "use a new --op for a new purchase; this --op is never paid" : "read the operation the order continues as; this --op is never paid");
@@ -464,7 +482,7 @@ const stageWords = (stage) => ({ terms: "its payment terms could not be read", s
 /**
  * The op id of an attempt: the order's op, 8 characters of the order's reference and the attempt number, within the 64-character
  * limit every rail accepts. Two orders whose ops share a prefix, or a user op that looks like an attempt, get different ids; an id
- * that is taken anyway (its journal is not this order's) is skipped, never adopted.
+ * whatever journal is at that name is this order's evidence.
  */
 export const attemptOp = (op, attemptNo, orderRef) => `${op.slice(0, 52)}-${String(orderRef).replace(/[^A-Za-z0-9]/g, "").slice(0, 8)}-r${attemptNo}`;
 
@@ -513,10 +531,10 @@ function recoveryFact(record, attempt, extra = {}) {
  *   features()           -> Set | null      what the site lists; null: it did not answer
  *   funded()             -> Promise<Map chain -> remaining atomic>   this client's own chain reads
  *   siteCall(path, body) -> Promise<{ status, body }>   a request signed with the agent key
- *   freezeOp(target, mark, { attempt }) -> { ok, why?, foreign? }   freezeOp with the evm journal base filled in
- *   attempt(flags, orderRef) -> Promise<{ code, fields, unsigned, termsFailure?, taken? }>   the ordinary buy of an attempt op
- *   attemptState(attempt, orderRef) -> Promise<{ exists, unsigned, foreign?, code?, fields? }>   the attempt op's journal, read
- *                        under its record lock: foreign when another command wrote it; otherwise reconciled when it may have signed
+ *   freezeOp(target, mark, { attempt }) -> { ok, why? }   freezeOp with the evm journal base filled in
+ *   attempt(flags, orderRef) -> Promise<{ code, fields, unsigned, termsFailure? }>   the ordinary buy of an attempt op
+ *   attemptState(attempt, orderRef) -> Promise<{ exists, unsigned, collision?, code?, fields? }>   the attempt op's journal, read
+ *                        under its record lock: a journal for another request is a collision (unknown); one that may have signed is reconciled
  *   now(), log(msg), otherSellers (tests only: see INVARIANT 4)
  */
 export async function recoverOrder(deps) {
@@ -551,7 +569,7 @@ export async function recoverOrder(deps) {
   // The order's reference is made here and written with the first switch, not before: until a switch is journaled nothing
   // for this order has happened anywhere, so a crash before it leaves nothing to resume and the next run asks again.
   const record = {
-    version: 1, order_ref: randomUUID(), rail: f.rail, chain: f.chain, op: f.op, url: f.url, max: f.max,
+    version: 2, order_ref: randomUUID(), rail: f.rail, chain: f.chain, op: f.op, url: f.url, max: f.max,
     failure, createdAt: new Date(now()).toISOString(), advice: null, attempts: [], skipped: [],
   };
 
@@ -632,16 +650,6 @@ function closeUncontacted(record, attempt, why) {
   return { kind: "continue", unsigned: true, blocked: true };
 }
 
-/** An attempt op that another command already used: this order never runs under it, and never marks it. */
-function skipTaken(record, attempt) {
-  // an attempt with recorded evidence of a signature or a payment is this order's, whatever its journal's stamp says
-  if (attempt.outcome === "paid" || attempt.outcome === "unknown" || attempt.tx || attempt.tx_pull) return false;
-  attempt.taken = true; attempt.state = "done"; attempt.outcome = "failed_before_payment"; attempt.note = "not contacted: op_taken";
-  record.skipped = [...(record.skipped ?? []), { offer_id: attempt.offer_id, reason: "op_taken" }];
-  try { writeRecord(record); } catch { /* nothing was contacted either way */ }
-  return true;
-}
-
 const rootOf = (record) => ({ rail: record.rail, chain: record.chain, op: record.op });
 /** The mark that says the order continues as `attempt`. */
 const movedTo = (record, attempt) => ({ order_ref: record.order_ref, root: rootOf(record), op: attempt.op, rail: attempt.rail, chain: attempt.chain, attempt_no: attempt.attempt_no });
@@ -656,8 +664,8 @@ const closedMark = (record, why) => ({ order_ref: record.order_ref, root: rootOf
 function moveOrderTo(deps, record, attempt) {
   const mark = movedTo(record, attempt);
   for (const a of record.attempts) {
-    if (a === attempt || a.taken) continue;
-    const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true });
+    if (a === attempt) continue;
+    const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true, url: a.url });
     if (!r.ok) return { op: a.op, rail: a.rail, chain: a.chain, why: r.why };
   }
   const r = deps.freezeOp(rootOf(record), mark, { attempt: false });
@@ -673,8 +681,7 @@ function closeOrder(deps, record, why) {
   if (!record.closed) closeRecord(record, why);
   const mark = closedMark(record, record.closed);
   for (const a of record.attempts) {
-    if (a.taken) continue;
-    const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true });
+    const r = deps.freezeOp({ rail: a.rail, chain: a.chain, op: a.op }, mark, { attempt: true, url: a.url });
     if (!r.ok) return { op: a.op, rail: a.rail, chain: a.chain, why: r.why, attempt: a };
   }
   const r = deps.freezeOp(rootOf(record), mark, { attempt: false });
@@ -690,7 +697,7 @@ function stuckResult(record, stuck) {
     kind: "result", code: 5,
     fields: {
       command: "buy", rail: stuck.rail, chain: stuck.chain, op: stuck.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {},
-      recovery: recoveryFact(record, null, { switched: record.attempts.some((a) => !a.taken), skipped: record.skipped ?? [] }),
+      recovery: recoveryFact(record, null, { switched: record.attempts.length > 0, skipped: record.skipped ?? [] }),
       next: `wait for any command on operation ${stuck.op} to end, then run this buy again with the same --op; never pay again for this order while its outcome is unknown`,
       reason: `auto recovery could not close operation ${stuck.op} of this order (${stuck.why}): a command may be using it or it may have paid, so the order's outcome is unknown`,
     },
@@ -703,7 +710,7 @@ async function endUnpaid(deps, record, why) {
   if (stuck) {
     if (stuck.attempt && stuck.why === "may_have_signed") {
       const probe = await deps.attemptState(stuck.attempt, record.order_ref);
-      if (probe.exists && !probe.unsigned && !probe.foreign) return decided(record, stuck.attempt, probe);
+      if (probe.exists && !probe.unsigned) return decided(record, stuck.attempt, probe);
     }
     return stuckResult(record, stuck);
   }
@@ -725,6 +732,8 @@ function learn(record, attempt, fields) {
   // replaces anything stored as `tx` before; a pull never becomes `tx`.
   if (settle && attempt.tx !== settle) { attempt.tx = settle; changed = true; }
   if (pull && attempt.tx_pull !== pull) { attempt.tx_pull = pull; changed = true; }
+  // a transaction recorded without its kind is promoted only when a journal proves which kind it is
+  if (attempt.tx_unknown_kind && (attempt.tx_unknown_kind === settle || attempt.tx_unknown_kind === pull)) { delete attempt.tx_unknown_kind; changed = true; }
   if (changed) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
 }
 
@@ -742,7 +751,6 @@ async function runAttempt(deps, record, attempt) {
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   // an attempt op that another command already used is never this order's: skipped, never adopted, never marked
   const before = await deps.attemptState(attempt, record.order_ref);
-  if (before.foreign) { skipTaken(record, attempt); return { kind: "continue", unsigned: true }; }
   if (before.exists && !before.unsigned) return decided(record, attempt, before);
   // INVARIANT 1: every earlier op of the order is frozen at the rail boundary before anything of this attempt is contacted
   const stuck = moveOrderTo(deps, record, attempt);
@@ -757,7 +765,6 @@ async function runAttempt(deps, record, attempt) {
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   const flags = { ...f, rail: attempt.rail, chain: attempt.chain, url: attempt.url, max: decimalOf(attempt.ceiling_atomic), op: attempt.op, method: undefined, body: undefined, agent: undefined, "pay-to": undefined };
   const got = await deps.attempt(flags, record.order_ref);
-  if (got.taken) { skipTaken(record, attempt); return { kind: "continue", unsigned: true }; }
   const state = got.fields?.state;
   const outcome = state === undefined ? "unknown" : outcomeOf(state);
   const tx = got.fields?.tx && typeof got.fields.tx === "object" ? (got.fields.tx.settle ?? got.fields.tx.pull ?? null) : null;
@@ -769,7 +776,7 @@ async function runAttempt(deps, record, attempt) {
     if (!shut.ok) {
       if (shut.why === "may_have_signed") {
         const probe = await deps.attemptState(attempt, record.order_ref);
-        if (probe.exists && !probe.unsigned && !probe.foreign) { record.closed = "attempt_decided"; return decided(record, attempt, probe); }
+        if (probe.exists && !probe.unsigned) { record.closed = "attempt_decided"; return decided(record, attempt, probe); }
       }
       record.closed = "attempt_decided";
       return stuckResult(record, { op: attempt.op, rail: attempt.rail, chain: attempt.chain, why: shut.why });
@@ -815,7 +822,7 @@ function switchedFields(record, attempt, fields) {
 }
 
 /** What the record says an attempt did, when its own journal no longer shows it: paid, unknown, or a transaction. */
-const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.outcome === "unknown")) || Boolean(a.tx) || Boolean(a.tx_pull);
+const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.outcome === "unknown")) || Boolean(a.tx) || Boolean(a.tx_pull) || Boolean(a.tx_unknown_kind);
 
 /**
  * An order that has a record: a crash or a rerun found it. No new advice. Every op the order used is read first, under its record
@@ -828,12 +835,9 @@ async function resume(deps, record) {
   if (!last) return { kind: "none" }; // advice was never acted on
   // INVARIANT 1: every attempt, the newest first; an attempt that may have signed is never run again, and what its journal says stands
   for (const a of [...record.attempts].reverse()) {
-    if (a.taken) continue;
     const probe = await deps.attemptState(a, record.order_ref);
-    // recorded evidence and the journal's own signed state are checked BEFORE foreign: an op this order's record lists as an attempt
-    // that has a signature or a payment on record is never another command's
-    if (probe.foreign && !recordedSigned(a)) { skipTaken(record, a); continue; }
-    if (probe.exists && !probe.unsigned && !probe.foreign) return decided(record, a, probe);
+    // whatever journal is at an attempt op's name is this order's evidence, stamped or not; rechecked on every rerun
+    if (probe.exists && !probe.unsigned) return decided(record, a, probe);
     // Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
     if (recordedSigned(a)) {
       const paidOnRecord = a.outcome === "paid";
@@ -841,16 +845,16 @@ async function resume(deps, record) {
         kind: "result", code: paidOnRecord ? 0 : 5,
         fields: switchedFields(record, a, {
           command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: paidOnRecord ? "settled" : "unknown", paid: paidOnRecord ? true : null, delivered: null, amount: null,
-          tx: { ...(a.tx ? { settle: a.tx } : {}), ...(a.tx_pull ? { pull: a.tx_pull } : {}) },
+          tx: { ...(a.tx ? { settle: a.tx } : {}), ...(a.tx_pull ? { pull: a.tx_pull } : {}), ...(a.tx_unknown_kind ? { recorded: a.tx_unknown_kind } : {}) },
           next: `superstables budget reconcile --rail ${a.rail} --chain ${a.chain} --op ${a.op} (never pay again for this order)`,
-          reason: `the recovery record says operation ${a.op} ${paidOnRecord ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : a.tx_pull ? ` (pull ${a.tx_pull})` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
+          reason: `the recovery record says operation ${a.op} ${paidOnRecord ? "was paid" : "may have paid"}${a.tx ? ` (transaction ${a.tx})` : a.tx_pull ? ` (pull ${a.tx_pull})` : a.tx_unknown_kind ? ` (recorded transaction ${a.tx_unknown_kind}, kind unknown)` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
         }),
       };
     }
   }
   // Journaled before the crash, nothing signed since. INVARIANT 6 binds this contact and payment too: the persisted advice must not
   // have expired, the site must still list the feature, and the persisted policy must still allow this kind of switch on this chain.
-  if (last.state === "journaled" && !record.closed && !last.taken) {
+  if (last.state === "journaled" && !record.closed) {
     const stale = await resumeProblem(deps, record, last);
     if (stale) {
       last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
