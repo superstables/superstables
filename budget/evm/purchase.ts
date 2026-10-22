@@ -341,8 +341,8 @@ const gasStop = (g: GasNeed) =>
 export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
-  // Attempt op names are reserved for the order that owns them: refused before any lock, journal or signature, journal or not
-  const reserved = reservedNameProblem(o.op, o.recoveryOrder);
+  // An op an order registered as its attempt is reserved for that order: refused before any lock, journal or signature, journal or not
+  const reserved = reservedNameProblem("evm", CFG.key, o.op, o.recoveryOrder);
   if (reserved) {
     console.log(oneLine(reserved, 2000));
     const j = newJournal({ op: o.op, url: o.url, owner: o.c.owner, agent: (o.agent ?? o.c.wallet).account.address, token: USDC, max: usdc(o.max), expectPayTo: o.payTo });

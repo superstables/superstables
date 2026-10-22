@@ -1067,7 +1067,7 @@ describe("the agent-signed requests to the site", () => {
   });
 });
 
-// ---- review round 1: regressions ------------------------------------------------------------------------------------------
+// ---- the bounded read, two orders, and op names ---------------------------------------------------------------------------
 
 describe("a seller that does not answer is refused no later than without the retry (--http-timeout bounds all the reads)", () => {
   it("a read that ran out of time is not tried again", async () => {
@@ -1295,7 +1295,7 @@ describe("the candidate op is closed before an unpaid outcome is recorded or rep
   });
 });
 
-describe("ownership and transaction kinds (round 6 findings)", () => {
+describe("ownership and transaction kinds", () => {
   const view = (op: string, state: string, tx: Record<string, string> = {}, extra: Record<string, unknown> = {}) => ({ exists: true, unsigned: false, code: state === "settled" ? 0 : 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state, paid: state === "settled" ? true : null, delivered: null, amount: null, tx, next: "none" }, ...extra });
 
   it("foreign-recorded-payment: an attempt with a payment on record is never another command's, whatever its journal's stamp says", async () => {
@@ -1446,13 +1446,31 @@ describe("the original is frozen before an attempt's payment is accepted, and at
     expect(a.outcome).toBe("unknown");
     expect(a.tx).toBeFalsy();
   });
-  it("attempt names are reserved: only the order they belong to may buy them", () => {
+  it("a registered attempt name is reserved: only the order it belongs to may buy it", () => {
     const ref = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
     const op = R.attemptOp("my-op", 2, ref);
-    expect(R.reservedNameProblem(op, undefined)).toMatch(/reserved/);
-    expect(R.reservedNameProblem(op, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80")).toMatch(/reserved/);
-    expect(R.reservedNameProblem(op, ref)).toBe("");
-    for (const plain of ["my-op", "rb-20261021120000-0123456789abcdef", "b4-20261021120000-0123456789abcdef", "weather-001", "x-abcdefg-r2", "rec-1"]) expect(R.reservedNameProblem(plain, undefined), plain).toBe("");
+    R.registerAttempt({ order_ref: ref, rail: "evm", chain: "base-sepolia", op: "my-op" }, { op, rail: "evm", chain: "arc-testnet" });
+    expect(R.reservedNameProblem("evm", "arc-testnet", op, undefined)).toMatch(/reserved/);
+    expect(R.reservedNameProblem("evm", "arc-testnet", op, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80")).toMatch(/reserved/);
+    // the full reference, not only the 8 characters in the name
+    expect(R.reservedNameProblem("evm", "arc-testnet", op, "1b4e28ba-0000-0000-0000-000000000000")).toMatch(/reserved/);
+    expect(R.reservedNameProblem("evm", "arc-testnet", op, ref)).toBe("");
+    for (const plain of ["my-op", "rb-20261021120000-0123456789abcdef", "b4-20261021120000-0123456789abcdef", "weather-001", "x-abcdefg-r2", "rec-1"]) expect(R.reservedNameProblem("evm", "arc-testnet", plain, undefined), plain).toBe("");
+  });
+  it("a name no order registered is an ordinary op, whatever it looks like: only a registration reserves it", () => {
+    for (const plain of ["order-20261022-r2", R.attemptOp("my-op", 2, "5f0e0a52-1d3c-4a3c-9c1e-0a2b3c4d5e6f"), "x-abcdefgh-r9"]) {
+      for (const [rail, chain] of [["evm", "base-sepolia"], ["evm", "arc-testnet"], ["solana", "devnet"]]) expect(R.reservedNameProblem(rail, chain, plain, undefined), `${rail} ${chain} ${plain}`).toBe("");
+    }
+  });
+  it("a registration is per rail and chain, survives the order's record, and an unreadable one reserves the name", () => {
+    const ref = "2c5f39cb-3ab2-42e3-994a-1127e4ddb538";
+    const op = R.attemptOp("kept", 2, ref);
+    R.registerAttempt({ order_ref: ref, rail: "evm", chain: "base-sepolia", op: "kept" }, { op, rail: "solana", chain: "devnet" });
+    expect(R.reservedNameProblem("solana", "devnet", op, undefined)).toMatch(/reserved/);
+    expect(R.reservedNameProblem("evm", "arc-testnet", op, undefined)).toBe("");
+    writeFileSync(R.attemptRegistrationPath("solana", "devnet", op), "{ torn");
+    expect(R.reservedNameProblem("solana", "devnet", op, ref)).toMatch(/reserved/);
+    expect(() => R.registerAttempt({ order_ref: "other", rail: "evm", chain: "base-sepolia", op: "kept" }, { op, rail: "solana", chain: "devnet" })).toThrow();
   });
 });
 
@@ -1483,7 +1501,7 @@ describe("one gate for every candidate result: the original is superseded first 
   });
 });
 
-describe("an order keeps its original whenever any attempt may have paid (round 2: a paid record left the original payable)", () => {
+describe("an order keeps its original whenever any attempt may have paid ", () => {
   const settled = (op: string, extra: Record<string, unknown> = {}) => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "settled", paid: true, delivered: true, chain_final: true, amount: "0.01", tx: { settle: "0xsig" }, next: "none", ...extra } });
   const unsure = (op: string) => ({ exists: true, unsigned: false, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op, state: "unknown", paid: null, delivered: null, amount: null, tx: {}, next: "reconcile" } });
   const rootMarks = (w: { freezes: any[][]; op: string }) => w.freezes.filter((f) => f[0].op === w.op && !f[1].closed);
@@ -1577,7 +1595,7 @@ describe("an order keeps its original whenever any attempt may have paid (round 
   });
 });
 
-describe("a payment on record without its journal is never more than what was recorded (round 2: lost journal said delivered)", () => {
+describe("a payment on record without its journal is never more than what was recorded ", () => {
   const settledWith = (delivered: boolean | undefined, chainFinal?: boolean | null) => (flags: any) => ({ code: delivered === true ? 0 : 4, unsigned: false, fields: { command: "buy", rail: flags.rail, chain: flags.chain, op: flags.op, state: "settled", paid: true, ...(delivered === undefined ? {} : { delivered }), ...(chainFinal === undefined ? {} : { chain_final: chainFinal }), amount: "0.01", tx: { settle: "0xabc" }, next: "none" } });
   const lostRerun = async (op: string) => R.recoverOrder(world({ op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
 
@@ -1621,7 +1639,7 @@ describe("a payment on record without its journal is never more than what was re
   });
 });
 
-describe("a journal at an attempt op's name is this order's only with this order's stamp (round 2: another order's journal was claimed)", () => {
+describe("a journal at an attempt op's name is this order's only with this order's stamp ", () => {
   it("names another order's journal, a different request and a signed journal without the stamp; this order's stamp or mark is its own", () => {
     const url = "http://127.0.0.1:4001/a";
     expect(R.notThisOrder({ url, recoveryOf: { order_ref: "other" } }, "mine", url, true)).toBe("other_order");
@@ -1648,7 +1666,7 @@ describe("a journal at an attempt op's name is this order's only with this order
   });
 });
 
-describe("the rails' --terms-reads: which reads of the seller's terms a run makes (round 2: retries without recovery)", () => {
+describe("the rails' --terms-reads: which reads of the seller's terms a run makes ", () => {
   it("parses a read number or a range from 1 to 3, and nothing else", () => {
     expect(R.termsReadsOf("1")).toEqual({ first: 1, last: 1 });
     expect(R.termsReadsOf("1-3")).toEqual({ first: 1, last: 3 });
@@ -1744,10 +1762,15 @@ describe("every path that touches an attempt freezes the original first", () => 
 describe("the order flag is only for an order's own attempt names", () => {
   const ref = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
   it("is refused on an original or ordinary op, on another order's names, and accepted on its own", () => {
-    expect(R.reservedNameProblem("my-original", ref)).toMatch(/only for an order's own attempt op/);
-    expect(R.reservedNameProblem("my-original", undefined)).toBe("");
-    expect(R.reservedNameProblem(R.attemptOp("o", 2, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80"), ref)).toMatch(/reserved/);
-    expect(R.reservedNameProblem(R.attemptOp("o", 2, ref), ref)).toBe("");
+    const other = "9c5b94b1-35ad-49bb-b118-8e8fc24abf80";
+    R.registerAttempt({ order_ref: other, rail: "evm", chain: "base-sepolia", op: "o" }, { op: R.attemptOp("o", 2, other), rail: "evm", chain: "arc-testnet" });
+    R.registerAttempt({ order_ref: ref, rail: "evm", chain: "base-sepolia", op: "o" }, { op: R.attemptOp("o", 2, ref), rail: "evm", chain: "arc-testnet" });
+    expect(R.reservedNameProblem("evm", "base-sepolia", "my-original", ref)).toMatch(/only for an order's own attempt op/);
+    expect(R.reservedNameProblem("evm", "base-sepolia", "my-original", undefined)).toBe("");
+    // an attempt-shaped name no order registered is not one of this order's attempt names either
+    expect(R.reservedNameProblem("evm", "arc-testnet", R.attemptOp("o", 3, ref), ref)).toMatch(/only for an order's own attempt op/);
+    expect(R.reservedNameProblem("evm", "arc-testnet", R.attemptOp("o", 2, other), ref)).toMatch(/reserved/);
+    expect(R.reservedNameProblem("evm", "arc-testnet", R.attemptOp("o", 2, ref), ref)).toBe("");
   });
   it("a version 1 record is read as it is and recognised as an earlier build's; no read migrates it", () => {
     const dir = R.recoveryDir();
@@ -1760,5 +1783,122 @@ describe("the order flag is only for an order's own attempt names", () => {
     expect(R.earlierBuild({ version: 2, legacy: true, attempts: [] })).toBe(true);
     expect(R.earlierBuild({ version: 2, attempts: [] })).toBe(false);
     expect(R.earlierBuild({ unreadable: true })).toBe(false);
+  });
+});
+
+describe("the advice is asked for once, before the terms are read again, and only an enabled policy lets recovery go on", () => {
+  const first = { stage: "seller_error", detail: "HTTP 503", attempts_used: 1 };
+  it.each([
+    ["the policy is off", { status: 200, body: advice({ policy: policy({ enabled: false }) }) }],
+    ["403 recovery_off", { status: 403, body: { error: "recovery_off" } }],
+    ["404", { status: 404, body: { error: "not_found" } }],
+    ["500", { status: 500, body: null }],
+    ["no answer", { network: "ECONNREFUSED" }],
+    ["expired advice", { status: 200, body: advice({ expires_at: new Date(NOW - 1).toISOString() }) }],
+  ])("%s: not ok, and recovery asks nothing more, journals nothing and contacts no one", async (_name, reply) => {
+    const w = world({ adviceReply: reply });
+    const advised = await R.adviseOrder({ ...w.deps, failure: first });
+    expect(advised.ok).toBe(false);
+    expect(await R.recoverOrder({ ...w.deps, advised })).toEqual({ kind: "none" });
+    expect(count(w.calls, "advice")).toBe(1);
+    expect(count(w.calls, "attempt")).toBe(0);
+    expect(R.readRecord("evm", "base-sepolia", w.op)).toBeNull();
+  });
+  it("an enabled policy: recovery uses that same advice and order reference after the further reads, and asks no second time", async () => {
+    const w = world();
+    const advised = await R.adviseOrder({ ...w.deps, failure: first });
+    expect(advised).toMatchObject({ ok: true });
+    expect(w.calls.find((c) => c.kind === "advice")!.body).toMatchObject({ order_ref: advised.orderRef, failure: { attempts_used: 1 } });
+    const out = await R.recoverOrder({ ...w.deps, advised });
+    expect(out).toMatchObject({ kind: "result", code: 0, fields: { state: "settled", paid: true } });
+    expect(count(w.calls, "advice")).toBe(1);
+    const rec = readRecordFile("evm", "base-sepolia", w.op);
+    expect(rec.order_ref).toBe(advised.orderRef);
+    // the record says what really happened: the reads of this run, not the one read the advice was asked after
+    expect(rec.failure.attempts_used).toBe(3);
+  });
+  it("advice that ran out while the terms were read again, or an original that signed meanwhile, is not used", async () => {
+    const w = world();
+    const advised = await R.adviseOrder({ ...w.deps, failure: first });
+    expect(advised.ok).toBe(true);
+    const late = world({ op: w.op, deps: { now: () => NOW + 121_000 } });
+    expect(await R.recoverOrder({ ...late.deps, advised })).toEqual({ kind: "none" });
+    const signed = world({ op: w.op, deps: { unsignedOriginal: () => false } });
+    expect(await R.recoverOrder({ ...signed.deps, advised })).toEqual({ kind: "none" });
+    expect(count(late.calls, "attempt") + count(signed.calls, "attempt")).toBe(0);
+    expect(R.readRecord("evm", "base-sepolia", w.op)).toBeNull();
+  });
+});
+
+describe("an attempt that was never contacted is never reported as a possible payment", () => {
+  const rootOnly = (why: string) => (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why });
+  it("when the original cannot be marked again the attempt stays unpaid and unowned; once the original may have signed, its own journal is the answer", async () => {
+    const w0 = world({ freeze: rootOnly("busy") });
+    expect(await R.recoverOrder(w0.deps)).toMatchObject({ kind: "none", freezeFailed: { why: "busy" } });
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ freeze: "failed:busy", outcome: "failed_before_payment" });
+    // a rerun meets the original busy again: unknown for now, but the attempt is not made into "may have paid" and the order takes nothing
+    const busy = world({ op: w0.op, freeze: rootOnly("busy") });
+    const out = await R.recoverOrder(busy.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5, fields: { state: "unknown", paid: null, final: false } });
+    // the answer is about the original, which may be in use or paying on its own, never about the uncontacted attempt
+    expect(out.fields.op).toBe(w0.op);
+    expect(out.fields.reason).toContain(`could not mark operation ${w0.op} `);
+    expect(out.fields.recovery.attempts).toEqual([expect.objectContaining({ op: aop(w0.op), outcome: "failed_before_payment" })]);
+    let rec = readRecordFile("evm", "base-sepolia", w0.op);
+    expect(rec.attempts[0].outcome).toBe("failed_before_payment");
+    expect(R.recordOwns(rec)).toBe(false);
+    // the original then signed on its own: every rerun answers from the original's journal, never "may have paid" for the attempt
+    for (let i = 0; i < 2; i++) {
+      const signed = world({ op: w0.op, freeze: rootOnly("may_have_signed") });
+      expect(await R.recoverOrder(signed.deps)).toEqual({ kind: "original" });
+      expect(count(signed.calls, "attempt") + count(signed.calls, "attemptState")).toBe(0);
+    }
+    rec = readRecordFile("evm", "base-sepolia", w0.op);
+    expect(rec.attempts[0].outcome).toBe("failed_before_payment");
+    expect(R.recordOwns(rec)).toBe(false);
+  });
+  it("once any attempt of the order was contacted, an original that cannot be marked is still unknown, never the original's answer", async () => {
+    // attempt 2 was contacted (refused before payment), attempt 3 could not mark the original
+    const w0 = world({ adviceReply: { status: 200, body: advice({}, [goodCandidate(), goodCandidate({ offer_id: "o2", chain: "devnet", asset: SOL_USDC, url: `${ORIGIN}/sol?asset=BTC` })]) }, attempt: (flags: any) => unsignedTerms(flags), freeze: (_t: any, m: any, o: any) => (!o.attempt && m.attempt_no === 3 ? { ok: false, why: "busy" } : { ok: true }) });
+    await R.recoverOrder(w0.deps);
+    const rec = readRecordFile("evm", "base-sepolia", w0.op);
+    expect(rec.attempts.map((a: any) => a.freeze)).toEqual(["done", "failed:busy"]);
+    const w = world({ op: w0.op, freeze: rootOnly("may_have_signed") });
+    const out = await R.recoverOrder(w.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5, fields: { state: "unknown" } });
+  });
+});
+
+describe("a settled latest attempt with an older attempt that cannot be retired", () => {
+  it("is not answered as paid: unknown, and the settlement stays on record", async () => {
+    const firstRun = world({ attempt: () => { throw new Error("process killed"); } });
+    await expect(R.recoverOrder(firstRun.deps)).rejects.toThrow("killed");
+    const record = R.readRecord("evm", "base-sepolia", firstRun.op);
+    const prior = record.attempts[0];
+    const last = { ...prior, attempt_no: 3, op: R.attemptOp(firstRun.op, 3, record.order_ref), state: "journaled", outcome: null };
+    record.attempts.push(last);
+    R.writeRecord(record);
+    const rerun = world({
+      op: firstRun.op,
+      attemptState: (a: any) => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: a.rail, chain: a.chain, op: a.op, state: "settled", paid: true, delivered: true, tx: { settle: "0xseen" } } }),
+      freeze: (target: any) => (target.op === prior.op ? { ok: false, why: "busy" } : { ok: true }),
+    });
+    const result = await R.recoverOrder(rerun.deps);
+    expect(result).toMatchObject({ kind: "result", code: 5, fields: { state: "unknown", final: false, paid: null, tx: { settle: "0xseen" } } });
+    expect(R.readRecord("evm", "base-sepolia", firstRun.op).attempts[1]).toMatchObject({ outcome: "paid", tx: "0xseen" });
+  });
+});
+
+describe("the attempt registration", () => {
+  it("every journaled switch registers its op to the order before anything is contacted, and a rerun registers an older record's attempts", async () => {
+    const w = world({ attempt: (flags: any, calls: any[]) => { expect(R.attemptRegistration(flags.rail, flags.chain, flags.op)).toMatchObject({ order_ref: calls.at(-1).order_ref }); return paid(flags); } });
+    await R.recoverOrder(w.deps);
+    const rec = readRecordFile("evm", "base-sepolia", w.op);
+    expect(R.attemptRegistration("evm", "arc-testnet", rec.attempts[0].op)).toMatchObject({ order_ref: rec.order_ref, root: { op: w.op } });
+    // an order journaled before registrations existed
+    rmSync(R.attemptRegistrationPath("evm", "arc-testnet", rec.attempts[0].op));
+    expect(R.reservedNameProblem("evm", "arc-testnet", rec.attempts[0].op, undefined)).toBe("");
+    await R.recoverOrder(world({ op: w.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(R.reservedNameProblem("evm", "arc-testnet", rec.attempts[0].op, undefined)).toMatch(/reserved/);
   });
 });

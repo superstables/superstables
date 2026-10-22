@@ -41,7 +41,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
-import { RECOVERY_CHAINS, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder, RECOVERY_FEATURE } from "./recovery.mjs";
+import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -1635,10 +1635,6 @@ function evmJournalBase(chain) {
   }
 }
 
-/**
- * Recovery for this buy, or null. `rr` is the first attempt's RESULT when it refused with a termsFailure; null when this is a
- * rerun of an op that has a recovery record. Whatever recoverOrder returns (recovery.mjs).
- */
 /** The site this buy's budget is linked to (set up with --hosted), as an origin, or null. */
 function recoverySite(f) {
   const recorded = hostedSite(f);
@@ -1671,12 +1667,10 @@ const siteFeatures = (f) => (featuresRead ??= (async () => {
  */
 const recoveryCanFollow = (f) => recoverable(f) && f["pay-to"] === undefined && f.body === undefined && (f.method === undefined || String(f.method).toUpperCase() === "GET") && (atomicOf(f.max) ?? 0n) > 0n && recoverySite(f) !== null;
 
-async function recoveryFor(f, ctx, rr) {
-  if (!recoverable(f)) return null;
-  const failure = rr ? railTermsFailure(rr) : null;
-  if (rr && !failure) return null;
-  return recoverOrder({
-    f, failure, log,
+/** What auto recovery needs from this process for buy `f` (recovery.mjs recoverOrder and adviseOrder `deps`). */
+function recoveryDeps(f, ctx) {
+  return {
+    f, log,
     unsignedOriginal: () => provesUnsigned(f.rail, journalState(f)) && !railSending && !interrupted,
     site: () => recoverySite(f),
     // A read that fails, or lacks the feature, is today's behaviour.
@@ -1699,7 +1693,31 @@ async function recoveryFor(f, ctx, rr) {
     freezeOp: (target, mark, o) => freezeOp(target, mark, { ...o, base: target.rail === "evm" ? evmJournalBase(target.chain) : null }),
     attempt: (f2, orderRef) => attemptBuy(f2, ctx, orderRef),
     attemptState: (a, orderRef) => attemptView(a, ctx, orderRef),
-  });
+  };
+}
+
+/**
+ * Recovery for this buy, or null. `rr` is the first attempt's RESULT when it refused with a termsFailure; null when this is a
+ * rerun of an op that has a recovery record. `advised`: the advice asked for before the terms were read again (adviseOrder), if
+ * it was. Whatever recoverOrder returns (recovery.mjs).
+ */
+async function recoveryFor(f, ctx, rr, advised) {
+  if (!recoverable(f)) return null;
+  const failure = rr ? railTermsFailure(rr) : null;
+  if (rr && !failure) return null;
+  return recoverOrder({ ...recoveryDeps(f, ctx), failure, advised });
+}
+
+/**
+ * The answer from the original op's own journal, when auto recovery found that nothing of its order was contacted and the original
+ * may have signed on its own (recovery.mjs { kind: "original" }): what a rerun of that op answers without auto recovery.
+ */
+function originalAnswer(f, ctx) {
+  const said = journalAnswer(f, ctx);
+  if (said) return said();
+  const reason = `operation ${f.op} may have signed on its own; its outcome is unknown`;
+  log(`superstables budget: ${reason}. Not paying again.`);
+  return emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason });
 }
 
 /** The answer when auto recovery could not mark an op of the order: unknown, final: false, never "not paid". */
@@ -1727,6 +1745,7 @@ async function buyRecovered({ f, ctx, record }) {
   }
   const again = await recoveryFor(f, ctx, null);
   if (again?.kind === "result") return emit(again.code, again.fields);
+  if (again?.kind === "original") return originalAnswer(f, ctx);
   if (again?.freezeFailed) return frozeNot(ctx, f, again.freezeFailed);
   if (again?.kind !== "none" || again.closed !== true) {
     return unknown("auto recovery moved this order, and its operations could not all be shown to be unsigned: its outcome is unknown", `run this buy again with --op ${f.op} later; never pay again for this order while its outcome is unknown`);
@@ -1818,17 +1837,20 @@ async function buy({ f, ctx }) {
   // read again under the lock: a buy that ran meanwhile may have written it
   const now = journalAnswer(f, ctx);
   if (now) return now();
-  // A buy that auto recovery can follow reads the terms once first; only when that read failed before anything was signed and the
-  // site offers recovery are they read again (reads 2 and 3), so a buy without the site, or whose site does not offer recovery,
-  // reads them once, exactly as without auto recovery.
+  // A buy that auto recovery can follow reads the terms once first. Only when that read failed before anything was signed, and the
+  // site's advice says the owner's recovery policy is on, are they read again (reads 2 and 3). A buy without the site, whose site
+  // does not offer recovery, or whose advice is refused, off or unavailable, reads them once, exactly as without auto recovery.
   const canFollow = recoveryCanFollow(f);
   let ran = await railBuy(f, ctx, lock, canFollow ? "1" : undefined);
   if (ran.done) return ran.done();
+  let advised;
   if (canFollow && ran.n.fields.state === "refused_precheck" && !railSending && !interrupted) {
     const t = railTermsFailure(ran.rr);
     const raw = ran.rr?.termsFailure;
-    if (t && t.attempts_used === 1 && raw?.final !== true && provesUnsigned(f.rail, journalState(f)) && (await siteFeatures(f))?.has(RECOVERY_FEATURE)) {
-      const wait = nextWait(1, typeof raw?.retry_after === "string" ? raw.retry_after : null);
+    if (t && t.attempts_used === 1 && raw?.final !== true) {
+      // asked once; recovery uses the same answer if reads 2 and 3 fail too
+      advised = await adviseOrder({ ...recoveryDeps(f, ctx), failure: t });
+      const wait = advised.ok ? nextWait(1, typeof raw?.retry_after === "string" ? raw.retry_after : null) : null;
       if (wait !== null && !interrupted) {
         await new Promise((r) => setTimeout(r, wait));
         ran = await railBuy(f, ctx, lock, "2-3");
@@ -1840,8 +1862,9 @@ async function buy({ f, ctx }) {
   // The terms could not be read and nothing was signed: auto recovery may move this order (recovery.mjs). Anything else, or a
   // site that does not offer it, is answered exactly as before.
   if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
-    const moved = await recoveryFor(f, ctx, rr);
+    const moved = await recoveryFor(f, ctx, rr, advised);
     if (moved?.kind === "result") return emit(moved.code, moved.fields);
+    if (moved?.kind === "original") return originalAnswer(f, ctx);
     // an op of the order could not be marked: it may be in use or may have signed. Its own journal decides, later; now it is unknown.
     if (moved?.freezeFailed) return frozeNot(ctx, f, moved.freezeFailed);
     // the order moved and ended unpaid: this op and every op of the order are closed for good
