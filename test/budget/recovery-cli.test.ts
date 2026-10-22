@@ -1027,7 +1027,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("legacy-signed-during-features: an unstamped candidate settles during the signed feature read, which then says the feature is off; the rerun reports the settlement", async () => {
+  it("signed-during-features: the order's own attempt settles during the signed feature read, which then says the feature is off; the rerun never says unpaid, and the next one reports the settlement", async () => {
     const { gate, arcSeller, baseSeller, site } = await frozenOrder("fz-m");
     site.features = [];
     let release!: () => void;
@@ -1040,10 +1040,16 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(ordinary.result.reason).toMatch(/reserved/);
     const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-m"));
     expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    // the explicit signal: the candidate has finished (settled) before the feature answer is released
     release();
     const out = await rerun;
-    expect(out.result, all(out)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
-    expect(out.result.reason ?? "").not.toMatch(/new --op/);
+    // The client gives up on a feature read after 15 s. If the candidate was still running when it did, the rerun met a held op: unknown,
+    // never unpaid. If not, it reports the settlement. Either way the next rerun, with the candidate long done, reports the settlement.
+    expect(out.result.paid, all(out)).not.toBe(false);
+    expect(JSON.stringify(out.result)).not.toMatch(/new --op|nothing was paid/i);
+    if (out.result.state !== "settled") expect(out.result).toMatchObject({ state: "unknown", paid: null });
+    const next = await buy(`${gate}/spot`, { op: "fz-m" });
+    expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 

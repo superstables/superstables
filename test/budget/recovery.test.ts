@@ -1762,3 +1762,71 @@ describe("the order flag is only for an order's own attempt names", () => {
     expect(R.earlierBuild({ unreadable: true })).toBe(false);
   });
 });
+
+describe("replacing a supersede mark, the record-sourced label, and an empty earlier-build record (round 13)", () => {
+  const opsAt = (rail: string, chain: string) => join(home, "budget", "ops", `${rail}-${chain}`);
+  const evmJ = (op: string, extra: Record<string, unknown> = {}) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: `0x${"1".repeat(40)}`, agent: `0x${"2".repeat(40)}`, createdAt: "2026-10-21T00:00:00Z", notes: [], signed: false, url: "http://127.0.0.1:4001/a", ...extra });
+  const put = (rail: string, chain: string, op: string, body: unknown) => { mkdirSync(opsAt(rail, chain), { recursive: true, mode: 0o700 }); writeFileSync(join(opsAt(rail, chain), `${op}.json`), JSON.stringify(body), { mode: 0o600 }); };
+  const mark = (order: string, target: string, extra: Record<string, unknown> = {}) => ({ order_ref: order, root: { rail: "evm", chain: "base-sepolia", op: "r" }, op: target, rail: "evm", chain: "arc-testnet", attempt_no: 2, ...extra });
+
+  it("an existing mark is replaced only after the op it points to is read under its lock: signed, settled, unreadable or held keeps the mark", async () => {
+    const root = (name: string, existing: unknown) => put("evm", "base-sepolia", name, evmJ(name, { supersededBy: existing }));
+    const target = (name: string, extra: Record<string, unknown>) => put("evm", "arc-testnet", name, evmJ(name, extra));
+    const rid = { rail: "evm", chain: "base-sepolia" };
+    // a target outside the record's attempt list, unsigned: the mark is replaced
+    root("m-ok", mark("ord", "t-unsigned")); target("t-unsigned", {});
+    expect(R.freezeOp({ ...rid, op: "m-ok" }, mark("ord", "t-new"), {})).toEqual({ ok: true });
+    expect(JSON.parse(readFileSync(join(opsAt("evm", "base-sepolia"), "m-ok.json"), "utf8")).supersededBy.op).toBe("t-new");
+    // signed, settled, unknown: kept
+    for (const [name, extra] of [["t-signed", { signed: true }], ["t-settled", { state: "settled" }], ["t-unknown", { state: "unknown" }]] as const) {
+      root(`m-${name}`, mark("ord", name)); target(name, extra);
+      expect(R.freezeOp({ ...rid, op: `m-${name}` }, mark("ord", "t-new"), {}), name).toEqual({ ok: false, why: "may_have_signed" });
+      expect(JSON.parse(readFileSync(join(opsAt("evm", "base-sepolia"), `m-${name}.json`), "utf8")).supersededBy.op).toBe(name);
+    }
+    // unreadable: kept
+    root("m-torn", mark("ord", "t-torn")); mkdirSync(opsAt("evm", "arc-testnet"), { recursive: true }); writeFileSync(join(opsAt("evm", "arc-testnet"), "t-torn.json"), "{ torn");
+    expect(R.freezeOp({ ...rid, op: "m-torn" }, mark("ord", "t-new"), {})).toEqual({ ok: false, why: "mark_target_unreadable" });
+    // held: kept
+    const { lockRecord } = await import(new URL("../../budget/op-lock.mjs", import.meta.url).href);
+    root("m-busy", mark("ord", "t-busy")); target("t-busy", {});
+    const held = lockRecord(opsAt("evm", "arc-testnet"), "t-busy");
+    try { expect(R.freezeOp({ ...rid, op: "m-busy" }, mark("ord", "t-new"), {})).toEqual({ ok: false, why: "busy" }); } finally { held.release(); }
+    expect(JSON.parse(readFileSync(join(opsAt("evm", "base-sepolia"), "m-busy.json"), "utf8")).supersededBy.op).toBe("t-busy");
+    // a closed mark points at no op: replaced as before; the same target: idempotent
+    root("m-closed", { order_ref: "ord", root: mark("ord", "x").root, closed: "no_attempt_paid" });
+    expect(R.freezeOp({ ...rid, op: "m-closed" }, mark("ord", "t-new"), {})).toEqual({ ok: true });
+  });
+
+  it("when the mark cannot be replaced the answer is unknown, never unpaid, and the mark stays", async () => {
+    const w = world({ attempt: (flags: any) => paid(flags), freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "may_have_signed" }) });
+    const out = await R.recoverOrder(w.deps);
+    expect(out.kind === "result" ? out.fields.paid : null).toBeNull();
+    expect(out.kind === "result" ? out.fields.state : "unknown").toBe("unknown");
+    const ended = world({ attempt: (flags: any) => unsignedTerms(flags), freeze: (_t: any, m: any, o: any) => (!o.attempt && m.closed ? { ok: false, why: "may_have_signed" } : { ok: true }) });
+    const e = await R.recoverOrder(ended.deps);
+    expect(e).toMatchObject({ kind: "result", code: 5 });
+    expect(e.fields.paid).toBeNull();
+  });
+
+  it("an answer that comes from the record alone says so: evidence 'record'; an answer from a journal does not", async () => {
+    const w0 = world({ attempt: (flags: any) => paid(flags) });
+    await R.recoverOrder(w0.deps);
+    const fromRecord = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) }).deps);
+    expect(fromRecord.fields).toMatchObject({ state: "settled", paid: true, evidence: "record" });
+    const fromJournal = await R.recoverOrder(world({ op: w0.op, attemptState: () => ({ exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xabc" }, next: "none" } }) }).deps);
+    expect(fromJournal.fields.evidence).toBeUndefined();
+  });
+
+  it("a version 1 record with no attempts still freezes the original first and answers 'check the chain yourself'", async () => {
+    const w = world({});
+    R.writeRecord({ version: 1, order_ref: "empty-v1", rail: "evm", chain: "base-sepolia", op: w.op, url: ORIG_URL, attempts: [], skipped: [] });
+    const out = await R.recoverOrder(w.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5 });
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null, evidence: "record" });
+    expect(out.fields.reason).toMatch(/earlier development build; check the chain yourself/);
+    expect(w.events[0]).toMatchObject({ kind: "freeze", root: true });
+    expect(w.calls.filter((c) => ["attempt", "attemptState", "features", "advice"].includes(c.kind))).toEqual([]);
+    const stuck = world({ op: w.op, freeze: { ok: false, why: "busy" } });
+    expect(await R.recoverOrder(stuck.deps)).toMatchObject({ kind: "result", code: 5 });
+  });
+});
