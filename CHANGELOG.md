@@ -7,14 +7,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- **Budget auto recovery:** when a budget `buy` cannot read the seller's payment terms and superstables.com offers recovery, the terms are read up to three times; if they still cannot be read, the agent can switch the purchase to the same seller on another chain. Without recovery, the terms are read once, as before. The client requires the same URL origin and query, checks the chain's allowance and the price limits from your `--max` and the site-supplied price and margin, and blocks superseded operations from paying. The request is never sent to a different seller, and the owner is not asked about each switch. Recovery is limited to eligible EVM and Solana purchases. Testnet only.
-
-### Changed and fixed
-
-- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
-
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
 Testnet only.
@@ -38,6 +30,7 @@ Testnet only.
 - **Seller referrals:** for listings carrying a referral from the Superstables index, `budget buy` and `pay` send `Superstables-Referral` and `Superstables-Purchase-Ref` with the paid request. EVM EIP-3009 authorizations carry the referral in their nonce; Solana devnet and Tempo Moderato payments carry it in their memo. On EVM, Permit2 payments carry no referral and no token is sent. The token is sent only when the signed payment carries the same referral; seller-fixed Solana memos stay unchanged and carry no referral token. Receipts record `discoveredVia` and the referral's id, listing and terms, never the token. `SUPERSTABLES_REFERRALS=off` disables referrals for new payments and budget operations. Retries under an existing `--op` keep its recorded attribution, even when referrals are switched off. See [referral formats and limits](https://github.com/superstables/superstables/blob/v0.5.0/docs/seller-referrals.md#what-the-client-sends).
 - **Seller integration:** `@superstables/client/seller` reads referral headers and verifies tokens against the site's published keys. A valid token alone does not prove a purchase. `demo-service` can publish a listing claim challenge when `SUPERSTABLES_CLAIM_CHALLENGE` is set; it is off by default. See [seller referrals](https://github.com/superstables/superstables/blob/v0.5.0/docs/seller-referrals.md).
 - **Seller credit:** `superstables seller credit` shows prepaid credit, recent top-ups and credit entries, with `--json` for scripts. `seller top-up <amount>` adds 1–1000 USDC on Base Sepolia through the usual signer, spend policy and owner approval. It checks the top-up id, pay link and exact payment terms before signing. Pending or uncertain payments are never treated as unpaid; another top-up is blocked (exit 3, nothing created or paid) while an earlier one remains unresolved. Check `seller credit` and `status <attempt>` before proceeding; a retired top-up can be replaced. `SUPERSTABLES_SELLER_API_KEY` goes only to the trusted Superstables origin and is not printed or saved; responses that echo it are discarded. Other sites, including staging and this machine, must be allowed in the owner's settings. See [credit, top-up recovery and site settings](https://github.com/superstables/superstables/blob/v0.5.0/docs/seller-referrals.md#credit-and-top-ups).
+- **Budget auto recovery:** when a budget `buy` cannot read the seller's payment terms and superstables.com offers recovery, the terms are read up to three times; if they still cannot be read, the agent can switch the purchase to the same seller on another chain. Without recovery, the terms are read once, as before. The client requires the same URL origin and query, checks the chain's allowance and the price limits from your `--max` and the site-supplied price and margin, and blocks superseded operations from paying. The request is never sent to a different seller, and the owner is not asked about each switch. Recovery is limited to eligible EVM and Solana purchases. Testnet only.
 
 ### Changed and fixed
 
@@ -45,6 +38,15 @@ Testnet only.
 - The chain check after a payment retries briefly when an endpoint lags the newest block, without paying again. A differing block hash is reported as removed only once finality reaches that block; inconclusive reads remain unchecked.
 - Spend caps, daily totals and amounts are compared as exact integers in the token's smallest units, including in the local wallet, which rechecks policy when approving. Stopped unsigned payments release their reservations only after the process is proven gone. Discovery explains hidden listings, owner handoffs include expiry and account guidance, and account refusals direct owners to a wallet their account holds.
 - Payment records are flushed before submission; approval pages, seller responses, journals and external text receive stricter checks. The npm package includes `npm-shrinkwrap.json` to lock its production dependency tree, including indirect dependencies. Builds include software bills of materials for installed and bundled dependencies and a way to compare release artifacts with their source. npm provenance is not included. See [build verification](https://github.com/superstables/superstables/blob/v0.5.0/docs/install.md#checking-a-build-against-its-commit).
+- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
+
+## [0.4.1] - Arc Testnet RPC address
+
+Testnet only.
+
+### Fixed
+
+- Arc Testnet checks, approvals and purchases work again. The client's default Arc Testnet RPC address, `rpc.testnet.arc.network`, no longer resolves, so `budget doctor`, grants and purchases on Arc failed. The default is now `rpc.testnet.arc.io`. If you set your own Arc RPC address, nothing changes for you.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
