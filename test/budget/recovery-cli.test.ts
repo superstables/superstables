@@ -218,24 +218,28 @@ const plain = (r: any) => { const { op: _op, rpc: _rpc, ...rest } = r; return re
 // ---- tests --------------------------------------------------------------------------------------------------------------
 
 describe("retry of the seller's terms, as a process", () => {
-  it("reads an unreadable seller three times, 250 ms then 1 s apart, and then refuses as before: nothing signed, no site involved", async () => {
+  // the retries happen only for a buy auto recovery can follow: a budget linked to a site that lists the feature. This site lists it
+  // and has no advice (404), so after the reads the answer is the plain refusal.
+  const offering = async () => (await startSite({ advice: () => ({ status: 404, body: { error: "not_found" } }) })).url;
+
+  it("reads an unreadable seller three times, 250 ms then 1 s apart, and then refuses as before: nothing signed", async () => {
     const gate = await startGate({ base: "503" });
-    setUpEvm(null);
+    setUpEvm(await offering());
     const r = await buy(`${gate.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, rail: "evm", chain: "base-sepolia" });
     expect(r.result.recovery).toBeUndefined();
     expect(gate.hits).toHaveLength(3);
     const gaps = [gate.hits[1]!.at - gate.hits[0]!.at, gate.hits[2]!.at - gate.hits[1]!.at];
+    // read 2 comes at least 250 ms after read 1, once the site's feature list was read; read 3 at least 1 s after read 2
     expect(gaps[0]).toBeGreaterThanOrEqual(240);
     expect(gaps[1]).toBeGreaterThanOrEqual(990);
-    expect(gaps[1]).toBeGreaterThan(gaps[0]!);
     expect(base.sentRaw).toEqual([]);
   }, 60_000);
 
   it("waits for the seller's Retry-After, and reads a garbled 402 three times too", async () => {
     const slow = await startGate({ base: "retry-after" });
-    setUpEvm(null);
+    setUpEvm(await offering());
     const r = await buy(`${slow.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(slow.hits).toHaveLength(3);
@@ -249,8 +253,9 @@ describe("retry of the seller's terms, as a process", () => {
     expect(base.sentRaw).toEqual([]);
   }, 60_000);
 
-  it("a seller that works on the second read is paid once, and the order never reaches the site", async () => {
-    setUpEvm(null);
+  it("a seller that works on the second read is paid once, and the site is asked for no advice", async () => {
+    const site = await startSite({ advice: adviceFor([]) });
+    setUpEvm(site.url);
     const seller = await startSeller(base, 84532);
     cleanups.push(() => seller.close());
     let reads = 0;
@@ -268,6 +273,67 @@ describe("retry of the seller's terms, as a process", () => {
     expect(r.result).toMatchObject({ state: "settled", paid: true });
     expect(reads).toBe(2);
     expect(seller.settled).toHaveLength(1);
+    expect(site.adviceCalls).toEqual([]);
+  }, 120_000);
+});
+
+// What main (before auto recovery) answers for a seller whose unpaid read gets a 503: one read, refused before anything is signed.
+// Captured from the dispatcher at main 4e3794be with these fixtures; `op` and `rpc` differ per run.
+const MAIN_503 = { ok: false, command: "buy", rail: "evm", chain: "base-sepolia", state: "refused_precheck", final: true, chain_final: null, paid: false, delivered: false, amount: "0", remaining: "1", tx: { cancel: null, pull: null, return: null, settle: null }, next: "respect the refusal; nothing was signed; never raise --max to get around it", reason: "seller did not ask for payment (HTTP 503)" };
+
+describe("without auto recovery, a buy is exactly what it was before it (main): one read, then the refusal", () => {
+  /** A seller that answers 503 to its first unpaid read, and is a working x402 seller from then on. */
+  async function flaky() {
+    const seller = await startSeller(base, 84532);
+    cleanups.push(() => seller.close());
+    let reads = 0;
+    const server = createServer(async (req, res) => {
+      if (!req.headers["payment-signature"] && ++reads === 1) return void res.writeHead(503, { "content-type": "text/plain" }).end("warming up");
+      const headers: Record<string, string> = {};
+      if (req.headers["payment-signature"]) headers["payment-signature"] = String(req.headers["payment-signature"]);
+      const r = await fetch(seller.url, { headers });
+      res.writeHead(r.status, relayed(r)).end(Buffer.from(await r.arrayBuffer()));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/x`, seller, reads: () => reads };
+  }
+
+  it.each([
+    ["no site: the budget was not set up with --hosted", async () => null],
+    ["a site that does not list the feature", async () => (await startSite({ features: [] })).url],
+    ["a site whose feature list does not answer", async () => { const s = await startSite(); s.servicesStatus = 500; return s.url; }],
+  ])("%s: a 503 stops the buy unpaid at the first read, as on main", async (_name, siteUrl) => {
+    setUpEvm(await siteUrl());
+    const f = await flaky();
+    const r = await buy(f.url, { op: "main-503" });
+    expect(r.code, all(r)).toBe(3);
+    expect(plain(r.result)).toEqual(MAIN_503);
+    expect(f.reads()).toBe(1);
+    expect(f.seller.creds).toEqual([]);
+    expect(base.sentRaw).toEqual([]);
+    expect(existsSync(recordsDir())).toBe(false);
+  }, 120_000);
+
+  it("a buy recovery cannot follow (--pay-to) reads once too, with a site that offers recovery", async () => {
+    const site = await startSite({ advice: adviceFor([]) });
+    setUpEvm(site.url);
+    const f = await flaky();
+    const r = await buy(f.url, { op: "main-payto", extra: ["--pay-to", "0x0000000000000000000000000000000000000001"] });
+    expect(r.code, all(r)).toBe(3);
+    expect(plain(r.result)).toEqual(MAIN_503);
+    expect(f.reads()).toBe(1);
+    expect(site.serviceReads).toEqual([]);
+    expect(site.adviceCalls).toEqual([]);
+  }, 120_000);
+
+  it("a rail script run by hand reads once and reports no termsFailure, as before", async () => {
+    setUpEvm(null);
+    const f = await flaky();
+    const r = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", f.url, "--max", "0.05", "--op", "main-direct"]);
+    expect(r.code, all(r)).toBe(3);
+    expect(r.result.termsFailure).toBeUndefined();
+    expect(f.reads()).toBe(1);
   }, 120_000);
 });
 
@@ -290,7 +356,11 @@ describe("a site that does not take part: the answer is exactly what it is today
   const without = async () => {
     const gate = await startGate({ base: "503" });
     setUpEvm(null);
-    return plain((await buy(`${gate.url}/spot`)).result);
+    const r = await buy(`${gate.url}/spot`);
+    // the baseline is main's answer, read once
+    expect(gate.hits).toHaveLength(1);
+    expect(plain(r.result)).toEqual(MAIN_503);
+    return plain(r.result);
   };
   it.each([
     ["does not list the feature", { features: [], advice: adviceFor([]) }],
@@ -308,7 +378,8 @@ describe("a site that does not take part: the answer is exactly what it is today
     expect(r.code, all(r)).toBe(3);
     expect(plain(r.result)).toEqual(baseline);
     expect(r.result.recovery).toBeUndefined();
-    expect(gate.hits).toHaveLength(3);
+    // the terms are read again only once the site said it offers recovery; the advice (403, 404, an error) comes after them
+    expect(gate.hits).toHaveLength(over.features.length ? 3 : 1);
     expect(base.sentRaw).toEqual([]);
     expect(arc.sentRaw).toEqual([]);
     expect(site.reportCalls).toEqual([]);
@@ -821,7 +892,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("legacy-r5-payment: a settled journal from before the ownership stamp is still the order's payment, never skipped as foreign", async () => {
+  it("unstamped-payment: a settled journal without this order's stamp is not claimed as the order's payment: unknown, and nothing is paid again", async () => {
     const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-l");
     const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-l"));
     expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
@@ -830,10 +901,13 @@ describe("a freeze is permanent: the order is never paid on both the original an
     delete legacy.recoveryOf;
     writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
     const root = await buy(`${gate}/spot`, { op: "fz-l" });
-    expect(root.result, all(root)).toMatchObject({ op: aop("fz-l"), state: "settled", paid: true });
+    expect(root.code, all(root)).toBe(5);
+    expect(root.result).toMatchObject({ op: aop("fz-l"), state: "unknown", paid: null, final: false });
+    expect(root.result.reason).toMatch(/without this order's stamp/);
     const rec = JSON.parse(readFileSync(file, "utf8"));
-    expect(rec.attempts[0].taken).toBeUndefined();
-    expect(rec.attempts[0]).toMatchObject({ outcome: "paid" });
+    expect(rec.attempts[0].outcome).toBe("unknown");
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-l"]);
+    expect(hand.result.state).toBe("refused_precheck");
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
@@ -1289,7 +1363,7 @@ describe("a seller that never answers: refused no later than without the retry",
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     cleanups.push(() => closeServer(server));
     setUpEvm(null);
-    const r = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", `http://127.0.0.1:${(server.address() as AddressInfo).port}/slow`, "--max", "0.05", "--op", "slow-1", "--http-timeout", "3"]);
+    const r = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", `http://127.0.0.1:${(server.address() as AddressInfo).port}/slow`, "--max", "0.05", "--op", "slow-1", "--http-timeout", "3", "--terms-reads", "1-3"]);
     expect(r.code, all(r)).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck" });
     // one read, cut off at --http-timeout: without the bound it was three reads, 3 s each, with waits between
@@ -1360,4 +1434,224 @@ describe("a rerun answers from the order's record whatever its flags (--pay-to)"
     expect(arcSeller.settled).toHaveLength(1);
     expect(site.adviceCalls).toHaveLength(1);
   }, 300_000);
+});
+
+describe("round 2: the original is never bought again once any attempt may have paid", () => {
+  /** A recovered order paid on Arc; the original's own seller is reachable at `baseSeller` afterwards. */
+  async function paidOrder(op: string, o: { deliver?: boolean } = {}) {
+    const arcSeller = await startSeller(arc, 5042002);
+    cleanups.push(() => arcSeller.close());
+    const baseSeller = await startSeller(base, 84532);
+    cleanups.push(() => baseSeller.close());
+    const server = createServer(async (req, res) => {
+      if (req.url?.startsWith("/arc")) {
+        const headers: Record<string, string> = {};
+        for (const k of ["payment-signature", "x-payment"]) if (req.headers[k]) headers[k] = String(req.headers[k]);
+        const r = await fetch(arcSeller.url, { headers, redirect: "manual" });
+        const body = Buffer.from(await r.arrayBuffer());
+        // a seller that settles and then fails to deliver: the paid answer is an error
+        if (o.deliver === false && headers["payment-signature"]) return void res.writeHead(500, { ...relayed(r), "content-type": "text/plain" }).end("broken after payment");
+        return void res.writeHead(r.status, relayed(r)).end(body);
+      }
+      res.writeHead(503).end("down");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const gate = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
+    setUpEvm(site.url);
+    const first = await buy(`${gate}/spot`, { op });
+    return { first, gate, site, arcSeller, baseSeller };
+  }
+  const opJournal = (op: string, chain = "base-sepolia") => join(home, "budget", "ops", `evm-${chain}`, `${op}.json`);
+
+  it("lost original journal: a completed switch keeps the original, and a buy of it against a working seller is the order's payment, never a second one", async () => {
+    const { first, arcSeller, baseSeller } = await paidOrder("own-lost");
+    expect(first.code, all(first)).toBe(0);
+    renameSync(opJournal("own-lost"), `${opJournal("own-lost")}.away`);
+    const again = await buy(baseSeller.url, { op: "own-lost" });
+    expect(again.result, all(again)).toMatchObject({ op: aop("own-lost"), chain: "arc-testnet", state: "settled", paid: true });
+    expect(baseSeller.creds).toEqual([]);
+    expect(base.sentRaw).toEqual([]);
+    // and the original is marked again: a direct rail run of it is refused
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "own-lost"]);
+    expect(hand.result, all(hand)).toMatchObject({ state: "refused_precheck" });
+    expect(hand.result.reason).toMatch(/superseded by auto recovery/);
+    expect(arcSeller.settled.length + baseSeller.settled.length).toBe(1);
+  }, 300_000);
+
+  it("paid but not delivered, then its journal lost: exit 4, delivered false, never exit 0", async () => {
+    const { first, arcSeller } = await paidOrder("own-undelivered", { deliver: false });
+    expect(first.code, all(first)).toBe(4);
+    expect(first.result).toMatchObject({ state: "settled", paid: true, delivered: false });
+    renameSync(opJournal(aop("own-undelivered"), "arc-testnet"), `${opJournal(aop("own-undelivered"), "arc-testnet")}.away`);
+    const lost = await buy("http://127.0.0.1:9/gone", { op: "own-undelivered" });
+    expect(lost.code, all(lost)).toBe(4);
+    expect(lost.result).toMatchObject({ ok: false, state: "settled", paid: true, delivered: false, tx: { settle: first.result.tx.settle } });
+    expect(arcSeller.settled).toHaveLength(1);
+  }, 300_000);
+
+  it("paid, journal lost, and the record does not hold the delivery: exit 4, delivered null and chain finality null, never exit 0", async () => {
+    const { first, arcSeller } = await paidOrder("own-nodelivery");
+    expect(first.code, all(first)).toBe(0);
+    const file = join(recordsDir(), "evm-base-sepolia-own-nodelivery.json");
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    expect(rec.attempts[0]).toMatchObject({ outcome: "paid", delivered: true });
+    // as a record from before delivery was kept
+    delete rec.attempts[0].delivered; delete rec.attempts[0].chain_final;
+    writeFileSync(file, JSON.stringify(rec));
+    renameSync(opJournal(aop("own-nodelivery"), "arc-testnet"), `${opJournal(aop("own-nodelivery"), "arc-testnet")}.away`);
+    const lost = await buy("http://127.0.0.1:9/gone", { op: "own-nodelivery" });
+    expect(lost.code, all(lost)).toBe(4);
+    expect(lost.result).toMatchObject({ ok: false, state: "settled", paid: true, delivered: null, chain_final: null });
+    expect(lost.result.reason).toMatch(/delivery is not known/);
+    expect(arcSeller.settled).toHaveLength(1);
+  }, 300_000);
+});
+
+describe("round 2: a candidate that signed before the original was marked", () => {
+  /**
+   * The state a crash leaves between writing the switch and marking the original: the record says journaled, the original's
+   * journal is unmarked. Built from an order killed at the candidate's first contact, with the original's mark taken off again.
+   */
+  async function beforeFirstFreeze(op: string) {
+    const arcSeller = await startSeller(arc, 5042002);
+    cleanups.push(() => arcSeller.close());
+    const baseSeller = await startSeller(base, 84532);
+    cleanups.push(() => baseSeller.close());
+    let killer: (() => void) | undefined;
+    let killOnce = true;
+    const server = createServer(async (req, res) => {
+      if (req.url?.startsWith("/arc")) {
+        if (killOnce) { killOnce = false; killer?.(); return; }
+        const headers: Record<string, string> = {};
+        for (const k of ["payment-signature", "x-payment"]) if (req.headers[k]) headers[k] = String(req.headers[k]);
+        const r = await fetch(arcSeller.url, { headers });
+        return void res.writeHead(r.status, relayed(r)).end(Buffer.from(await r.arrayBuffer()));
+      }
+      res.writeHead(503).end("down");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const gate = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
+    setUpEvm(site.url);
+    const first = await buy(`${gate}/spot`, { op, onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
+    expect(first.result).toBeNull();
+    const original = join(home, "budget", "ops", "evm-base-sepolia", `${op}.json`);
+    const j = JSON.parse(readFileSync(original, "utf8"));
+    delete j.supersededBy;
+    writeFileSync(original, JSON.stringify(j, null, 2));
+    const file = join(recordsDir(), `evm-base-sepolia-${op}.json`);
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    delete rec.owns; delete rec.attempts[0].freeze;
+    writeFileSync(file, JSON.stringify(rec, null, 2));
+    return { gate, arcSeller, baseSeller, site, original };
+  }
+
+  it("signed before the first freeze: the rerun answers the payment and marks the original; a later buy with changed flags against a working seller pays nothing", async () => {
+    const { gate, arcSeller, baseSeller, original } = await beforeFirstFreeze("pre-freeze");
+    const candidate = await direct("evm/buy.ts", candidateBuy(gate, "pre-freeze"));
+    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
+    const again = await buy(`${gate}/spot`, { op: "pre-freeze" });
+    expect(again.result, all(again)).toMatchObject({ op: aop("pre-freeze"), state: "settled", paid: true });
+    expect(JSON.parse(readFileSync(original, "utf8")).supersededBy).toMatchObject({ op: aop("pre-freeze") });
+    // another --max, --pay-to and the original seller working again: still the order's payment
+    const changed = await buy(baseSeller.url, { op: "pre-freeze", max: "0.04", extra: ["--pay-to", "0x0000000000000000000000000000000000000001"] });
+    expect(changed.result, all(changed)).toMatchObject({ op: aop("pre-freeze"), state: "settled", paid: true });
+    const plainRerun = await buy(baseSeller.url, { op: "pre-freeze" });
+    expect(plainRerun.result, all(plainRerun)).toMatchObject({ op: aop("pre-freeze"), state: "settled", paid: true });
+    expect(baseSeller.creds).toEqual([]);
+    expect(arcSeller.settled.length + baseSeller.settled.length).toBe(1);
+  }, 400_000);
+
+  it("the candidate is busy (unknown) before the first freeze: the original is marked anyway, and no later buy pays it", async () => {
+    const { gate, arcSeller, baseSeller, original } = await beforeFirstFreeze("pre-busy");
+    const held = await holdRecordLock("evm", "arc-testnet", aop("pre-busy"));
+    const busy = await buy(`${gate}/spot`, { op: "pre-busy" });
+    expect(busy.code, all(busy)).toBe(5);
+    expect(busy.result).toMatchObject({ state: "unknown", paid: null });
+    expect(JSON.parse(readFileSync(original, "utf8")).supersededBy).toMatchObject({ op: aop("pre-busy") });
+    await held.release();
+    // the original journal is lost too: the record alone keeps the original
+    renameSync(original, `${original}.away`);
+    const later = await buy(baseSeller.url, { op: "pre-busy", extra: ["--pay-to", "0x0000000000000000000000000000000000000001"] });
+    expect(later.result, all(later)).not.toBeNull();
+    // whatever the order does next (carry the switch on, or end), the original seller is never paid
+    expect(later.result.chain === "base-sepolia" && later.result.paid === true).toBe(false);
+    expect(baseSeller.creds).toEqual([]);
+    expect(base.sentRaw).toEqual([]);
+    expect(arcSeller.settled.length + baseSeller.settled.length).toBeLessThanOrEqual(1);
+  }, 400_000);
+});
+
+describe("round 2: a journal stamped for another order is never this order's payment", () => {
+  it("another order's settled journal at this order's attempt op (same URL): unknown on every rerun, never claimed, nothing paid again", async () => {
+    const arcSeller = await startSeller(arc, 5042002);
+    cleanups.push(() => arcSeller.close());
+    const baseSeller = await startSeller(base, 84532);
+    cleanups.push(() => baseSeller.close());
+    let killer: (() => void) | undefined;
+    let killOnce = true;
+    const server = createServer(async (req, res) => {
+      if (req.url?.startsWith("/arc")) {
+        if (killOnce) { killOnce = false; killer?.(); return; }
+        const headers: Record<string, string> = {};
+        for (const k of ["payment-signature", "x-payment"]) if (req.headers[k]) headers[k] = String(req.headers[k]);
+        const r = await fetch(arcSeller.url, { headers });
+        return void res.writeHead(r.status, relayed(r)).end(Buffer.from(await r.arrayBuffer()));
+      }
+      res.writeHead(503).end("down");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const gate = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
+    setUpEvm(site.url);
+    const first = await buy(`${gate}/spot`, { op: "foreign-1", onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
+    expect(first.result).toBeNull();
+    // another order whose reference starts with the same 8 characters: its attempt has the same name and the same URL, and settles
+    const otherRef = `${orderRef("foreign-1").slice(0, 8)}-0000-4000-8000-000000000000`;
+    expect(otherRef).not.toBe(orderRef("foreign-1"));
+    const other = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("foreign-1"), "--recovery-order", otherRef]);
+    expect(other.result, all(other)).toMatchObject({ state: "settled", paid: true });
+    for (let i = 0; i < 2; i++) {
+      const again = await buy(`${gate}/spot`, { op: "foreign-1" });
+      expect(again.code, all(again)).toBe(5);
+      expect(again.result).toMatchObject({ state: "unknown", paid: null, final: false });
+      expect(again.result.reason).toMatch(/names another auto-recovered order/);
+    }
+    expect(JSON.parse(readFileSync(join(recordsDir(), "evm-base-sepolia-foreign-1.json"), "utf8")).attempts[0].outcome).not.toBe("paid");
+    // the original stays the order's: a buy of it against a working seller pays nothing
+    const original = await buy(baseSeller.url, { op: "foreign-1" });
+    expect(original.result?.paid, all(original)).not.toBe(true);
+    expect(baseSeller.creds).toEqual([]);
+    expect(arcSeller.settled).toHaveLength(1);
+  }, 400_000);
+
+  it("the rails refuse an attempt (--recovery-order) under an op whose journal names another order, and leave that journal as it was", async () => {
+    setUpEvm(null);
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const seller = await startSeller(arc, 5042002);
+    cleanups.push(() => seller.close());
+    // the same request, stamped for another order
+    const foreign = { op: "taken-1", rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url: seller.url, recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
+    writeFileSync(join(dir, "taken-1.json"), JSON.stringify(foreign), { mode: 0o600 });
+    const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-1", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
+    expect(r.code, all(r)).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck" });
+    expect(all(r)).toMatch(/belongs to another auto-recovered order/);
+    expect(JSON.parse(readFileSync(join(dir, "taken-1.json"), "utf8"))).toEqual(foreign);
+    expect(seller.creds).toEqual([]);
+    setUpSolana("http://127.0.0.1:9");
+    const sdir = join(home, "budget", "ops", "solana-devnet");
+    mkdirSync(sdir, { recursive: true, mode: 0o700 });
+    const sforeign = { op: "taken-2", state: "refused_precheck", history: [], recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
+    writeFileSync(join(sdir, "taken-2.json"), JSON.stringify(sforeign), { mode: 0o600 });
+    const s = await direct("solana/buy.mjs", ["--url", "http://127.0.0.1:9/x", "--max", "0.05", "--op", "taken-2", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
+    expect(s.code, all(s)).toBe(3);
+    expect(s.result.reason).toMatch(/belongs to another auto-recovered order/);
+    expect(JSON.parse(readFileSync(join(sdir, "taken-2.json"), "utf8"))).toEqual(sforeign);
+  }, 120_000);
 });
