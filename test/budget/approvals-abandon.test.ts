@@ -2,7 +2,7 @@
 // record, and frees the chain; a worker's own final, a worker that runs again, and a restart cannot be undone or doubled by it.
 // Small scripts stand in for the worker. No network.
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -154,6 +154,36 @@ describe("abandonApproval", () => {
       expect(JSON.stringify(record)).not.toContain("ssbt_");
     }
   });
+
+  // every read of the record is strict: a file that is gone, or that is not a record wait can answer from, is no approval to decide on
+  // (a stored final that is only `true` included), whenever it is read, and the file is left as found
+  for (const [label, replace] of [
+    ["removed", (_path: string, _base: any) => rmSync(_path)],
+    ["only its id", (path: string, base: any) => writeFileSync(path, JSON.stringify({ id: base.id }))],
+    ["a stored final that is true", (path: string, base: any) => writeFileSync(path, JSON.stringify({ ...base, final: true }))],
+    ["a stored final that is a string", (path: string, base: any) => writeFileSync(path, JSON.stringify({ ...base, final: "yes" }))],
+  ] as [string, (path: string, base: any) => void][]) {
+    it(`a record ${label} while the give-up stops the approval's processes is gone: nothing is stored, the file is as found, the chain stays held`, async () => {
+      const id = await open();
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      const base = JSON.parse(readFileSync(path, "utf8"));
+      const out = await approvals.abandonApproval(id, build, { stop: async () => replace(path, base) });
+      expect(out).toEqual({ kind: "gone", record: null });
+      if (label === "removed") expect(existsSync(path)).toBe(false);
+      else expect(JSON.parse(readFileSync(path, "utf8")).abandoned).toBeUndefined();
+      expect(existsSync(lockFile()), "the chain's lock is not freed by a record nothing was decided from").toBe(true);
+    });
+
+    it(`a record that is ${label} before the give-up first reads it is gone, whatever it holds`, async () => {
+      const id = await open();
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      replace(path, JSON.parse(readFileSync(path, "utf8")));
+      let stopped = false;
+      const out = await approvals.abandonApproval(id, build, { stop: async () => { stopped = true; } });
+      expect(out).toEqual({ kind: "gone", record: null });
+      expect(stopped, "nothing is stopped for a record that cannot be read").toBe(false);
+    });
+  }
 });
 
 describe("spawnRail", () => {
