@@ -1427,3 +1427,30 @@ describe("the original is frozen before an attempt's payment is accepted, and at
     for (const plain of ["my-op", "rb-20261021120000-0123456789abcdef", "b4-20261021120000-0123456789abcdef", "weather-001", "x-abcdefg-r2", "rec-1"]) expect(R.reservedNameProblem(plain, undefined), plain).toBe("");
   });
 });
+
+describe("one gate for every candidate result: the original is superseded first (recorded payment with the journal gone)", () => {
+  it("the recorded-payment fallback freezes the root before it answers; if it cannot, unknown, and the saved evidence stays", async () => {
+    const w0 = world({ attempt: (flags: any) => paid(flags) });
+    await R.recoverOrder(w0.deps);
+    const order: string[] = [];
+    const ok = world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }) });
+    const inner = ok.deps.freezeOp;
+    ok.deps.freezeOp = (t: any, m: any, o: any) => { order.push(`freeze ${t.op === w0.op ? "root" : "attempt"}`); return inner(t, m, o); };
+    const out = await R.recoverOrder(ok.deps);
+    expect(out.fields).toMatchObject({ state: "settled", paid: true, tx: { settle: "0xabc" } });
+    expect(order[0]).toBe("freeze root");
+    const stuck = world({ op: w0.op, attemptState: () => ({ exists: false, unsigned: true }), freeze: () => ({ ok: false, why: "busy" }) });
+    const held = await R.recoverOrder(stuck.deps);
+    expect(held).toMatchObject({ kind: "result", code: 5 });
+    expect(held.fields).toMatchObject({ state: "unknown", paid: null });
+    expect(readRecordFile("evm", "base-sepolia", w0.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xabc" });
+  });
+  it("a collision observed by the dispatcher is never learned as a payment", async () => {
+    const w = world({ attemptState: () => ({ exists: true, unsigned: false, collision: true, code: 5, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "unknown", paid: null, delivered: null, tx: {}, reason: "different request" } }) });
+    const out = await R.recoverOrder(w.deps);
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null });
+    const a = readRecordFile("evm", "base-sepolia", w.op).attempts[0];
+    expect(a.outcome).not.toBe("paid");
+    expect(a.tx ?? null).toBeNull();
+  });
+});

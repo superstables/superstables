@@ -1563,7 +1563,11 @@ async function attemptBuy(f2, ctx, orderRef) {
   const n = normalize("buy", f2, rr, r.code);
   // The rail's refusal describes this invocation, not the order: if the op's journal now shows a signature (a command settled it
   // before the rail got its record lock), that journal's own result, reconciled with the lock held here, is the answer.
-  if (n.fields.state === "refused_precheck" && after.present && !provesUnsigned(f2.rail, after)) return { ...(await reconciledFields(f2, c2, lock)), unsigned: false };
+  if (n.fields.state === "refused_precheck" && after.present && !provesUnsigned(f2.rail, after)) {
+    // a journal for another request is not this order's payment: unknown, never adopted, never learned as a payment
+    if (collides(after.journal, f2.url)) return { ...collisionResult(f2, c2), unsigned: false };
+    return { ...(await reconciledFields(f2, c2, lock)), unsigned: false };
+  }
   const unsigned = n.fields.state === "refused_precheck" && !railSending && provesUnsigned(f2.rail, after);
   return { code: n.code, fields: n.fields, unsigned, termsFailure: unsigned ? railTermsFailure(rr) ?? undefined : undefined };
 }

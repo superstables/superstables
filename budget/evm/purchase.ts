@@ -404,6 +404,13 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // An operation id that already did something is never run again (rule 5).
   const prior = readJournal(o.op);
+  // A journal for another request at an attempt op's name is a collision. It is checked FIRST, under the record lock, before any state
+  // of that journal is looked at: whatever it says (even settled) is not this order's, and it is left exactly as it is.
+  if (o.recoveryOrder !== undefined && prior && collides(prior, url)) {
+    const why = `operation ${o.op} has a journal for a different request than this order's attempt, so its outcome is unknown`;
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
+  }
   if (prior && !REUSABLE.includes(prior.state)) {
     const why = PENDING.includes(prior.state)
       ? `operation ${o.op} is ${prior.state}: run "${cmd("reconcile.ts", `--op ${o.op}`)}" and read the chain before doing anything else`
@@ -421,13 +428,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)
   if (o.recoveryOrder !== undefined) {
-    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now. A
-    // journal for another request is a collision: checked here, under the record lock, and left exactly as it is.
-    if (prior && collides(prior, url)) {
-      const why = `operation ${o.op} has a journal for a different request than this order's attempt, so its outcome is unknown`;
-      log(`REFUSED: ${why}`);
-      return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
-    }
+    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now
     (j as any).recoveryOf = { order_ref: o.recoveryOrder };
   } else if ((prior as any)?.recoveryOf) {
     // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)

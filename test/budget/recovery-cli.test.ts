@@ -957,6 +957,68 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(0);
   }, 400_000);
 
+  it("settled-collision-before-rail-record-lock: a SETTLED journal for another request at the attempt's name is a collision: unknown, nothing learned as this order's payment", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-u");
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    const signal = join(home, "paused-u"), done = join(home, "go-u");
+    const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
+    const rerun = new Promise<Out>((resolveRun, fail) => {
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-u")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-u"], { cwd: ROOT, env });
+      let stdout = "";
+      child.stdout.on("data", (c) => (stdout += String(c)));
+      child.once("error", fail);
+      child.once("close", (code) => { const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT ")); resolveRun({ code: code ?? 0, stdout, stderr: "", result: line ? JSON.parse(line.slice(7)) : null, pid: 0 }); });
+    });
+    for (let i = 0; i < 600 && !existsSync(signal); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(signal), "the recovery rail reached its record lock").toBe(true);
+    // between the dispatcher's snapshot and the rail's lock, the order's flagged run settles ANOTHER request under the attempt's name
+    const other = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc?other=1`, "--max", "0.012", "--op", aop("fz-u"), "--recovery-order", orderRef("fz-u")]);
+    expect(other.result, all(other)).toMatchObject({ state: "settled", paid: true });
+    writeFileSync(done, "go");
+    const out = await rerun;
+    expect(out.code, all(out)).toBe(5);
+    expect(out.result).toMatchObject({ state: "unknown", paid: null });
+    const a = JSON.parse(readFileSync(file, "utf8")).attempts[0];
+    expect(a.outcome).not.toBe("paid");
+    expect(a.tx ?? null).toBeNull();
+    // and every later rerun says the same
+    const again = await buy(`${gate}/spot`, { op: "fz-u" });
+    expect(again.code, all(again)).toBe(5);
+    expect(again.result).toMatchObject({ state: "unknown", paid: null });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("recorded-payment-before-root-freeze: a payment on record with the journal gone freezes the original first; if it cannot, the answer is unknown and the evidence stays", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-w");
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-w"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    const first = await buy(`${gate}/spot`, { op: "fz-w" });
+    expect(first.result).toMatchObject({ state: "settled", paid: true });
+    const tx = first.result.tx.settle;
+    // the crash window: the original's mark is missing and the attempt's journal is gone; only the record knows
+    const rootFile = join(home, "budget", "ops", "evm-base-sepolia", "fz-w.json");
+    const root = JSON.parse(readFileSync(rootFile, "utf8"));
+    delete root.supersededBy;
+    writeFileSync(rootFile, JSON.stringify(root, null, 2));
+    const journal = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-w")}.json`);
+    renameSync(journal, `${journal}.away`);
+    // the original is busy: unknown, and the saved payment stays in the record
+    const lock = await holdRecordLock("evm", "base-sepolia", "fz-w");
+    const busy = await buy(`${gate}/spot`, { op: "fz-w" });
+    await lock.release();
+    expect(busy.code, all(busy)).toBe(5);
+    expect(busy.result).toMatchObject({ state: "unknown", paid: null });
+    expect(JSON.parse(readFileSync(file, "utf8")).attempts[0]).toMatchObject({ outcome: "paid", tx });
+    // free again: the payment is reported, the original is superseded first, and the original cannot be bought
+    const out = await buy(`${gate}/spot`, { op: "fz-w" });
+    expect(out.result, all(out)).toMatchObject({ state: "settled", paid: true, tx: { settle: tx } });
+    expect(JSON.parse(readFileSync(rootFile, "utf8")).supersededBy).toMatchObject({ op: aop("fz-w") });
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-w"]);
+    expect(hand.result.reason).toMatch(/superseded/);
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
   it("legacy-pull-kind: a version 1 record whose bare tx is a pull is reported as recorded, kind unknown, never as the settlement", async () => {
     const { gate, file } = await frozenOrder("fz-p");
     const rec = JSON.parse(readFileSync(file, "utf8"));

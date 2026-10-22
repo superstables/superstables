@@ -756,14 +756,23 @@ function learn(record, attempt, fields) {
  */
 async function decided(deps, record, attempt, probe) {
   if (!probe.busy) {
-    const stuck = deps.freezeOp(rootOf(record), movedTo(record, attempt), { attempt: false });
-    if (!stuck.ok) {
-      learn(record, attempt, { state: "unknown", tx: {} }); // never "paid" here, but the order is no longer free to buy the original
-      return stuckResult(record, { ...rootOf(record), why: stuck.why });
-    }
+    const held = rootFirst(deps, record, attempt);
+    if (held) return held;
     learn(record, attempt, probe.fields);
   }
   return { kind: "result", code: probe.code, fields: switchedFields(record, attempt, probe.fields) };
+}
+
+/**
+ * THE gate for every path that returns a candidate's paid or unknown result (a journal read, a recorded payment whose journal is
+ * gone): the original op is durably superseded under its record lock first. Returns null when it is, else the unknown answer; the
+ * attempt is then recorded as at least unknown (saved evidence is kept, never downgraded), so every rerun goes back to the order.
+ */
+function rootFirst(deps, record, attempt) {
+  const frozen = deps.freezeOp(rootOf(record), movedTo(record, attempt), { attempt: false });
+  if (frozen.ok) return null;
+  learn(record, attempt, { state: "unknown", tx: {} });
+  return stuckResult(record, { ...rootOf(record), why: frozen.why });
 }
 
 /** Runs one journaled attempt through the ordinary buy, reports it, and decides whether the order goes on. */
@@ -862,6 +871,8 @@ async function resume(deps, record) {
     if (probe.exists && !probe.unsigned) return decided(deps, record, a, probe);
     // Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
     if (recordedSigned(a)) {
+      const held = rootFirst(deps, record, a);
+      if (held) return held;
       const paidOnRecord = a.outcome === "paid";
       return {
         kind: "result", code: paidOnRecord ? 0 : 5,
