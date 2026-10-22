@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_WAIT_MS, WORKER_ENV, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -707,6 +707,10 @@ let FOREGROUND = false;
 // rail script takes the site's request over and creates none. It records a result only once it has the request in hand, so a
 // refusal from before that, a signal, or a crash that left no RESULT leaves the approval open for the next `wait`.
 const RESUMING = WORKER_ID !== undefined && process.env[RESUME_ENV] === WORKER_ID;
+// which restart this worker is (NaN without one: such a worker never counts as having taken the request over)
+const RESUME_GENERATION = RESUMING ? resumeGeneration() : undefined;
+// set when the worker's backstop fires: from then on a restarted worker records no result, whatever it had in hand
+let pastBackstop = false;
 
 // One RESULT object, last line of stdout. Written synchronously so the process exits right after it.
 // A worker also stores it (and the exit code) in its approval record, for every later `wait`.
@@ -720,7 +724,7 @@ function resultFacts(fields) {
 function emit(code, fields) {
   // A hosted approval that a later wait can finish stays open when its worker is stopped by a signal, and a restarted worker
   // records a result only once it has the request in hand: the next wait finishes the approval.
-  if (WORKER_ID && ((interrupted && canResume(readApproval(WORKER_ID))) || (RESUMING && !hasTakenOver(WORKER_ID)))) {
+  if (WORKER_ID && ((interrupted && canResume(readApproval(WORKER_ID))) || (RESUMING && (pastBackstop || !hasTakenOver(WORKER_ID, RESUME_GENERATION))))) {
     log(`superstables budget: approval ${WORKER_ID}: ${interrupted ? "this worker was stopped" : "this worker ended before it had the request in hand"} and recorded no result; run budget wait again to check the approval`);
     process.exit(code);
   }
@@ -733,7 +737,11 @@ function emit(code, fields) {
   if (fields.rpc === undefined && fields.rail) { const u = customRpc(fields.rail, fields.chain); fields.rpc = u === undefined ? undefined : shownUrl(u); }
   const out = { ok: code === 0 };
   for (const k of order) if (fields[k] !== undefined) out[k] = k === "reason" ? clean(fields[k]) : fields[k];
-  if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out); // frees the chain
+  // frees the chain. A restarted worker's result is stored only if, under the record's lock, it is still the newest restart and has taken
+  // the request over (the check above is not enough: a worker paused after it may have been replaced since)
+  if (APPROVAL_ID && RESUMING) {
+    if (!recordFinalAsRestart(APPROVAL_ID, RESUME_GENERATION, code, out).stored) log(`superstables budget: approval ${APPROVAL_ID}: this worker is no longer the restart that has the request, or the approval already has a result; it recorded none`);
+  } else if (APPROVAL_ID) recordFinal(APPROVAL_ID, code, out);
   if (APPROVAL_ID && FOREGROUND) forget(APPROVAL_ID); // a blocking command's record served only as the lock's holder
   writeResult(out);
   process.exit(code);
@@ -2334,9 +2342,16 @@ async function abandonOwnerApproval(record, f) {
     };
   });
   } catch (err) {
-    if (err?.code !== "RECORD_BUSY") throw err;
-    // the record is locked by a process that is still running (a worker starting its rail script, another command): nothing was changed
-    return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record is busy, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in a minute` });
+    // The give-up may have been stored before the error (a directory sync after the write, say): the record says. Otherwise nothing was
+    // changed. Busy: the record is locked by a process that is still running (a worker starting its rail script, another command).
+    // Any other error is the file system's (the folder cannot be written, the disk is full).
+    const stored = readApproval(id);
+    if (stored?.final && stored.abandoned) {
+      log(`superstables budget: ${id} (${record.command}) given up without a final result (${clean(err.message)} after it was recorded). The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
+      return emit(5, stored.final.result);
+    }
+    const busy = err?.code === "RECORD_BUSY";
+    return emit(5, { ...base, state: "unknown", final: false, reason: busy ? `the approval's record is busy, so nothing was ended: ${clean(err.message)}` : `the approval's record could not be locked, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in 30 seconds` });
   }
   if (out.kind === "abandoned") {
     log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
@@ -2347,7 +2362,7 @@ async function abandonOwnerApproval(record, f) {
   if (!out.record) return emit(5, { ...base, state: "unknown", final: false, reason: `the approval's record disappeared from ${approvalsDir()} while it was being given up; this command stored no give-up, its processes may have been stopped, and whether the approval sent anything is unknown`, next: `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: record.rail, chain: record.chain })}` });
   // a result stood when the record was read under the lock: that locked record is the answer, whatever happens to the file afterwards
   if (out.kind === "ended") return { ended: out.record };
-  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait a minute, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
+  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait 30 seconds, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
   return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
 }
 
@@ -2564,6 +2579,7 @@ if (WORKER_ID) {
   // script's whole process group (the page's process too) before it records the result that frees the chain.
   const f = parsed.f;
   setTimeout(async () => {
+    pastBackstop = true;
     const pgid = currentChild?.pid;
     const worker = readApproval(WORKER_ID);
     if (pgid && !(await stopGroup(pgid, { start: worker?.railPgidStart, startUtc: worker?.railPgidStartUtc, location: worker ? { ...worker, selfStartedAt: worker.railSelfStartedAt, namespace: 'railNamespace' in worker ? worker.railNamespace : worker.namespace, writtenAt: worker.railWrittenAt, bootElapsedMs: worker.railBootElapsedMs, createdAt: undefined } : {} }))) {
