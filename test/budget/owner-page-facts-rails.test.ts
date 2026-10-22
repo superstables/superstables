@@ -1,7 +1,7 @@
 // The page a real grant opens, read while the command waits: the facts a rail script hands the page. The real dispatcher and the
 // rail script against a fake chain on 127.0.0.1. No network, no real key.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -24,9 +24,28 @@ beforeEach(async () => {
   rpc = await startFakeRpc(84532);
 });
 afterEach(async () => {
+  await stopApprovals(home);
   await rpc.close();
   rmSync(home, { recursive: true, force: true });
 });
+
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const killGroup = (pgid: number) => { try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ } };
+
+/**
+ * Stops what the grants left behind. The test kills the command after it reads the page; the background worker it started
+ * (its own process group, named in the approval record) and the rail script under it keep running until their timeout.
+ * The worker goes first so it cannot start a rail script after the record is read; the rail group is read after that.
+ */
+async function stopApprovals(forHome: string) {
+  const dir = join(forHome, "budget", "approvals");
+  const records = () => { try { return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => { try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; } }); } catch { return []; } };
+  for (const r of records()) if (Number.isInteger(r.pid)) killGroup(r.pid);
+  const groups = new Set<number>();
+  for (const r of records()) for (const g of [r.pid, r.railPgid]) if (Number.isInteger(g)) groups.add(g);
+  for (const g of groups) killGroup(g);
+  for (let i = 0; i < 50 && [...groups].some(alive); i++) await new Promise((x) => setTimeout(x, 100));
+}
 
 const write = (path: string, text: string, mode = 0o600) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, text, { mode }); };
 
