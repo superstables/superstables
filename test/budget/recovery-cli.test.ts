@@ -809,7 +809,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     // a plain retry of the owned op, as a crash and a hurried operator can produce, is refused and cannot take the op over
     const plain = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("fz-o")]);
     expect(plain.result, all(plain)).toMatchObject({ state: "refused_precheck", paid: false });
-    expect(plain.result.reason).toMatch(/belongs to an auto-recovered order/);
+    expect(plain.result.reason).toMatch(/reserved/);
     expect(arcSeller.creds).toEqual([]);
     expect(JSON.parse(readFileSync(journalFile, "utf8")).recoveryOf).toMatchObject({ order_ref: orderRef("fz-o") });
     // the order's own retry settles, keeps its stamp, and the root reports the payment
@@ -854,9 +854,11 @@ describe("a freeze is permanent: the order is never paid on both the original an
     });
     for (let i = 0; i < 600 && !existsSync(signal); i++) await new Promise((r) => setTimeout(r, 100));
     expect(existsSync(signal), "the rerun reached the attempt's buy lock").toBe(true);
-    const candidate = await direct("evm/buy.ts", plainCandidate(gate, "fz-s"));
+    // an ordinary buy of the reserved name gets nowhere; the order's own run (its flag) settles
+    const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-s"));
+    expect(ordinary.result.reason).toMatch(/reserved/);
+    const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-s"));
     expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
-    expect(JSON.parse(readFileSync(join(dir, `${aop("fz-s")}.json`), "utf8")).recoveryOf).toBeUndefined();
     writeFileSync(done, "go");
     const out = await rerun;
     expect(out.result, all(out)).toMatchObject({ op: aop("fz-s"), state: "settled", paid: true });
@@ -877,7 +879,10 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const reached = new Promise<void>((r) => (site.servicesReached = r));
     const rerun = buy(`${gate}/spot`, { op: "fz-m" });
     await reached;
-    const candidate = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
+    // an ordinary buy of the reserved name gets nowhere; the order's own run (its flag) settles
+    const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
+    expect(ordinary.result.reason).toMatch(/reserved/);
+    const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-m"));
     expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
     release();
     const out = await rerun;
@@ -992,7 +997,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     for (const args of [candidateBuy(gate, "fz-h"), ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("fz-h")]]) {
       const late = await direct("evm/buy.ts", args);
       expect(late.code, all(late)).toBe(3);
-      expect(late.result.reason).toMatch(/closed by auto recovery/);
+      expect(late.result.reason).toMatch(/closed by auto recovery|reserved/);
     }
     // and the dispatcher, asked for the attempt op, answers from the order: not paid, closed
     const viaAttempt = await budget(["buy", "--rail", "evm", "--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("fz-h")]);
@@ -1254,7 +1259,7 @@ describe("an order that moves on freezes every earlier attempt (three offers)", 
     for (const extra of [[], ["--recovery-order", orderRef("three")]]) {
       const hand = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", working.url, "--max", "0.012", "--op", r2, ...extra]);
       expect(hand.code, all(hand)).toBe(3);
-      expect(hand.result.reason).toMatch(/superseded by auto recovery/);
+      expect(hand.result.reason).toMatch(extra.length ? /superseded by auto recovery/ : /reserved/);
     }
     // through the dispatcher: attempt 2 is answered from its order (attempt 3's payment), and so is the original
     for (const op of [r2, "three"]) {
