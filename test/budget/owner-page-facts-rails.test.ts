@@ -1,7 +1,7 @@
 // The page a real grant opens, read while the command waits: the facts a rail script hands the page. The real dispatcher and the
 // rail script against a fake chain on 127.0.0.1. No network, no real key.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -24,9 +24,31 @@ beforeEach(async () => {
   rpc = await startFakeRpc(84532);
 });
 afterEach(async () => {
+  await stopApprovals(home);
   await rpc.close();
   rmSync(home, { recursive: true, force: true });
 });
+
+const validGroup = (g: unknown): g is number => Number.isInteger(g) && (g as number) > 1;
+
+/**
+ * Stops what the grants left behind. The test kills the command after it reads the page; the background worker it started
+ * (its own process group, named in the approval record) and the rail script under it keep running until their timeout.
+ * Each group is stopped with the product's stopGroup, which signals it only while its leader still has the start identity the
+ * record names, so a record that is missing it, or whose number another process now holds, signals nothing.
+ * The worker goes first so it cannot start a rail script after the record is read; the rail group is read after that.
+ */
+async function stopApprovals(forHome: string) {
+  const { stopGroup, groupAlive } = await import("../../budget/approvals.mjs");
+  const dir = join(forHome, "budget", "approvals");
+  const records = (): any[] => { try { return readdirSync(dir).filter((f) => f.endsWith(".json")).flatMap((f) => { try { return [JSON.parse(readFileSync(join(dir, f), "utf8"))]; } catch { return []; } }); } catch { return []; } };
+  const worker = (r: any) => ({ start: r.pidStart, startUtc: r.pidStartUtc, location: { ...r, createdAt: r.foreground ? r.createdAt : undefined } });
+  const rail = (r: any) => ({ start: r.railPgidStart, startUtc: r.railPgidStartUtc, location: { ...r, selfStartedAt: r.railSelfStartedAt, namespace: "railNamespace" in r ? r.railNamespace : r.namespace, writtenAt: r.railWrittenAt, bootElapsedMs: r.railBootElapsedMs, createdAt: undefined } });
+  for (const r of records()) if (validGroup(r.pid)) await stopGroup(r.pid, worker(r));
+  for (const r of records()) if (validGroup(r.railPgid)) await stopGroup(r.railPgid, rail(r));
+  // nothing of these may be left in any group the records name
+  for (let i = 0; i < 50 && records().some((r) => (validGroup(r.pid) && groupAlive(r.pid, r.pidStart, r.pidStartUtc, worker(r).location)) || (validGroup(r.railPgid) && groupAlive(r.railPgid, r.railPgidStart, r.railPgidStartUtc, rail(r).location))); i++) await new Promise((x) => setTimeout(x, 100));
+}
 
 const write = (path: string, text: string, mode = 0o600) => { mkdirSync(join(path, ".."), { recursive: true }); writeFileSync(path, text, { mode }); };
 
