@@ -7,10 +7,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed and fixed
-
-- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
-
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
 Testnet only.
@@ -41,6 +37,7 @@ Testnet only.
 - The chain check after a payment retries briefly when an endpoint lags the newest block, without paying again. A differing block hash is reported as removed only once finality reaches that block; inconclusive reads remain unchecked.
 - Spend caps, daily totals and amounts are compared as exact integers in the token's smallest units, including in the local wallet, which rechecks policy when approving. Stopped unsigned payments release their reservations only after the process is proven gone. Discovery explains hidden listings, owner handoffs include expiry and account guidance, and account refusals direct owners to a wallet their account holds.
 - Payment records are flushed before submission; approval pages, seller responses, journals and external text receive stricter checks. The npm package includes `npm-shrinkwrap.json` to lock its production dependency tree, including indirect dependencies. Builds include software bills of materials for installed and bundled dependencies and a way to compare release artifacts with their source. npm provenance is not included. See [build verification](https://github.com/superstables/superstables/blob/v0.5.0/docs/install.md#checking-a-build-against-its-commit).
+- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 
