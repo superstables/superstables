@@ -76,7 +76,7 @@ import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
-import { RECOVERY_ORDER, failureFact, readTerms, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
+import { RECOVERY_ORDER, collides, failureFact, readTerms, reservedNameProblem, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -123,6 +123,15 @@ const opId = flags.op ?? newOpId();
 if (!OP_ID_RE.test(opId)) usageError("--op must be 1-64 characters: letters, digits, '.', '_' or '-'", USAGE);
 const recoveryOrder = flags["recovery-order"];
 if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageError("--recovery-order is an order reference (letters, digits and -, at most 64)", USAGE);
+// Attempt op names are reserved for the order that owns them: refused before any lock, journal or signature, journal or not
+{
+  const reserved = reservedNameProblem(opId, recoveryOrder);
+  if (reserved) {
+    console.error(`Refused (nothing signed): ${reserved}`);
+    console.log("RESULT " + JSON.stringify({ rail: "solana", op: opId, state: "refused_precheck", tx: null, debit: "0", remaining: null, delivered: null, reason: reserved, next: "use another --op" }));
+    process.exit(EXIT.REFUSED);
+  }
+}
 // every write of this op's journal names the order it is an attempt of (recovery.mjs ownedBy)
 const updateOp = (op, patch, event) => writeOpUpdate(op, recoveryOrder === undefined ? patch : { recoveryOf: { order_ref: recoveryOrder }, ...patch }, event);
 
@@ -168,6 +177,12 @@ let lock = { ok: true };
   }
   const existing = readOp(opId);
   if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana --op ${opId}` });
+  // a journal for a different request at an attempt op's name is a collision, checked here under the record lock and left as it is
+  if (recoveryOrder !== undefined && existing && collides(existing, url)) {
+    const why = `operation ${opId} has a journal for a different request than this order's attempt, so its outcome is unknown`;
+    console.error(`Refused (nothing signed): ${why}`);
+    finish("unknown", 5, { debit: null, reason: why, next: `superstables budget reconcile --rail solana --op ${opId} (never pay again for this order)` });
+  }
   // an op that belongs to an auto-recovered order is run only as that order's attempt
   if (recoveryOrder === undefined && existing?.recoveryOf) {
     const why = `operation ${opId} belongs to an auto-recovered order; it is run only by that order. Rerun the original buy of the order, which reads and continues it`;

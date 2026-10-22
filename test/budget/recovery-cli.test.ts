@@ -886,6 +886,72 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
+  it("candidate-before-root-freeze: the order's own attempt settled before the original was marked; the rerun freezes the original first, reports the payment, and the original is never bought", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-q");
+    // as if the crash came before the original's mark was written
+    const rootFile = join(home, "budget", "ops", "evm-base-sepolia", "fz-q.json");
+    const root = JSON.parse(readFileSync(rootFile, "utf8"));
+    delete root.supersededBy;
+    writeFileSync(rootFile, JSON.stringify(root, null, 2));
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-q"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    const out = await buy(`${gate}/spot`, { op: "fz-q" });
+    expect(out.result, all(out)).toMatchObject({ op: aop("fz-q"), state: "settled", paid: true });
+    expect(JSON.parse(readFileSync(rootFile, "utf8")).supersededBy).toMatchObject({ op: aop("fz-q") });
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-q"]);
+    expect(hand.result.reason).toMatch(/superseded/);
+    const again = await buy(baseSeller.url, { op: "fz-q" });
+    expect(again.result).toMatchObject({ op: aop("fz-q"), state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("signed-before-rail-record-lock: the order's attempt settles between the dispatcher's snapshot and the rail's lock; the rail's refusal is not the answer, the settled journal is", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-t");
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    const signal = join(home, "paused-t"), done = join(home, "go-t");
+    const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
+    const rerun = new Promise<Out>((resolveRun, fail) => {
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-t")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-t"], { cwd: ROOT, env });
+      let stdout = "";
+      child.stdout.on("data", (c) => (stdout += String(c)));
+      child.once("error", fail);
+      child.once("close", (code) => { const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT ")); resolveRun({ code: code ?? 0, stdout, stderr: "", result: line ? JSON.parse(line.slice(7)) : null, pid: 0 }); });
+    });
+    for (let i = 0; i < 600 && !existsSync(signal); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(existsSync(signal), "the recovery rail reached its record lock").toBe(true);
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-t"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    // an ordinary buy of the reserved name cannot get in either
+    const ordinary = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("fz-t")]);
+    expect(ordinary.result.reason).toMatch(/reserved|belongs to an auto-recovered order|already ended/);
+    writeFileSync(done, "go");
+    const out = await rerun;
+    expect(out.result, all(out)).toMatchObject({ op: aop("fz-t"), state: "settled", paid: true });
+    expect(out.result.reason ?? "").not.toMatch(/already ended|new --op/);
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("collision-before-rail-record-lock: a journal for another request at the attempt's name is left alone, and the order answers unknown, never paid under it", async () => {
+    const { gate, arcSeller, baseSeller } = await frozenOrder("fz-c2");
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    // the order's own flagged run for ANOTHER request (a different query, and a ceiling below the price): an unsigned journal for a different url
+    const different = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc?other=1`, "--max", "0.001", "--op", aop("fz-c2"), "--recovery-order", orderRef("fz-c2")]);
+    expect(different.result, all(different)).toMatchObject({ state: "refused_precheck" });
+    const before = readFileSync(join(dir, `${aop("fz-c2")}.json`), "utf8");
+    expect(JSON.parse(before).url).toContain("other=1");
+    // the order's real attempt (its own url) meets it at the rail's lock: collision, unknown, exit 5
+    const real = await direct("evm/buy.ts", candidateBuy(gate, "fz-c2"));
+    expect(real.code, all(real)).toBe(5);
+    expect(real.result).toMatchObject({ state: "unknown", paid: null });
+    expect(readFileSync(join(dir, `${aop("fz-c2")}.json`), "utf8")).toBe(before);
+    const root = await buy(`${gate}/spot`, { op: "fz-c2" });
+    expect(root.code, all(root)).toBe(5);
+    expect(root.result).toMatchObject({ state: "unknown", paid: null });
+    expect(readFileSync(join(dir, `${aop("fz-c2")}.json`), "utf8")).toBe(before);
+    expect(settlements(arcSeller, baseSeller)).toBe(0);
+  }, 400_000);
+
   it("legacy-pull-kind: a version 1 record whose bare tx is a pull is reported as recorded, kind unknown, never as the settlement", async () => {
     const { gate, file } = await frozenOrder("fz-p");
     const rec = JSON.parse(readFileSync(file, "utf8"));
@@ -1088,22 +1154,65 @@ describe("two orders never share an attempt op, and an attempt never adopts anot
     for (const op of [opA, opB]) expect(JSON.parse(readFileSync(join(home, "budget", "ops", "evm-arc-testnet", `${aop(op)}.json`), "utf8")).recoveryOf).toEqual({ order_ref: orderRef(op) });
   }, 300_000);
 
-  it("an attempt takes over an unsigned, unstamped journal at its name and stamps it: whatever is at an attempt op's name is the order's", async () => {
+  it("an attempt takes over an unsigned, unstamped journal for the SAME request and stamps it; a journal for another request is a collision that is left as it is", async () => {
     setUpEvm(null);
     const dir = join(home, "budget", "ops", "evm-arc-testnet");
     mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const prior = { op: "taken-1", rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url: "http://127.0.0.1:9/x" };
-    writeFileSync(join(dir, "taken-1.json"), JSON.stringify(prior), { mode: 0o600 });
     const seller = await startSeller(arc, 5042002);
     cleanups.push(() => seller.close());
-    const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-1", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
+    const ref = "11111111-2222-3333-4444-555555555555";
+    const op = attemptOp("taken", 2, ref);
+    const prior = (url: string) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url });
+    // a different request: unknown, exit 5, untouched, nothing paid
+    const other = prior("http://127.0.0.1:9/elsewhere");
+    writeFileSync(join(dir, `${op}.json`), JSON.stringify(other), { mode: 0o600 });
+    const clash = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", op, "--recovery-order", ref]);
+    expect(clash.code, all(clash)).toBe(5);
+    expect(clash.result).toMatchObject({ state: "unknown", paid: null });
+    expect(JSON.parse(readFileSync(join(dir, `${op}.json`), "utf8"))).toEqual(other);
+    expect(seller.creds).toEqual([]);
+    // the same request: taken over, stamped, paid
+    writeFileSync(join(dir, `${op}.json`), JSON.stringify(prior(seller.url)), { mode: 0o600 });
+    const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", op, "--recovery-order", ref]);
     expect(r.result, all(r)).toMatchObject({ state: "settled", paid: true });
-    expect(JSON.parse(readFileSync(join(dir, "taken-1.json"), "utf8")).recoveryOf).toEqual({ order_ref: "11111111-2222-3333-4444-555555555555" });
-    // and an op that already belongs to an order is never run without that order's flag
-    const plain = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-1"]);
+    expect(JSON.parse(readFileSync(join(dir, `${op}.json`), "utf8")).recoveryOf).toEqual({ order_ref: ref });
+    // an op that already belongs to an order is never run without that order's flag
+    const plain = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", op]);
     expect(plain.result.state).toBe("refused_precheck");
     expect(seller.settled).toHaveLength(1);
   }, 120_000);
+
+  it("reserved names: every entrypoint refuses an attempt op without the matching --recovery-order, before it writes or signs anything", async () => {
+    setUpEvm(null);
+    setUpSolana("http://127.0.0.1:9");
+    const seller = await startSeller(arc, 5042002);
+    cleanups.push(() => seller.close());
+    const ref = "11111111-2222-3333-4444-555555555555";
+    const eop = attemptOp("mine", 2, ref);
+    const edir = join(home, "budget", "ops", "evm-arc-testnet"), sdir = join(home, "budget", "ops", "solana-devnet");
+    const evm = ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", eop];
+    for (const extra of [[], ["--recovery-order", "99999999-2222-3333-4444-555555555555"]]) {
+      const r = await direct("evm/buy.ts", [...evm, ...extra]);
+      expect(r.code, all(r)).toBe(3);
+      expect(r.result).toMatchObject({ state: "refused_precheck", paid: false });
+      expect(r.result.reason).toMatch(/reserved/);
+    }
+    const sol = await direct("solana/buy.mjs", ["--url", seller.url, "--max", "0.05", "--op", eop]);
+    expect(sol.code, all(sol)).toBe(3);
+    expect(sol.result.reason).toMatch(/reserved/);
+    const viaCli = await buy(seller.url, { op: eop, chain: "arc-testnet" });
+    expect(viaCli.code, all(viaCli)).toBe(3);
+    expect(JSON.stringify(viaCli.result)).toMatch(/reserved/);
+    const viaSolana = await buy(seller.url, { op: eop, rail: "solana" });
+    expect(viaSolana.code, all(viaSolana)).toBe(3);
+    expect(existsSync(join(edir, `${eop}.json`))).toBe(false);
+    expect(existsSync(join(sdir, `${eop}.json`))).toBe(false);
+    expect(seller.creds).toEqual([]);
+    expect(arc.sentRaw).toEqual([]);
+    // and the order that owns the name may buy it
+    const own = await direct("evm/buy.ts", [...evm, "--recovery-order", ref]);
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+  }, 240_000);
 });
 
 describe("a seller that never answers: refused no later than without the retry", () => {

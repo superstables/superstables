@@ -1561,6 +1561,9 @@ async function attemptBuy(f2, ctx, orderRef) {
   const after = journalState(f2);
   if (!rr && r.code !== 2 && !before.present && !after.present) return refused(`the ${f2.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`, "nothing was signed or paid");
   const n = normalize("buy", f2, rr, r.code);
+  // The rail's refusal describes this invocation, not the order: if the op's journal now shows a signature (a command settled it
+  // before the rail got its record lock), that journal's own result, reconciled with the lock held here, is the answer.
+  if (n.fields.state === "refused_precheck" && after.present && !provesUnsigned(f2.rail, after)) return { ...(await reconciledFields(f2, c2, lock)), unsigned: false };
   const unsigned = n.fields.state === "refused_precheck" && !railSending && provesUnsigned(f2.rail, after);
   return { code: n.code, fields: n.fields, unsigned, termsFailure: unsigned ? railTermsFailure(rr) ?? undefined : undefined };
 }
@@ -1708,7 +1711,9 @@ async function buy({ f, ctx }) {
     // switch is waiting to be carried on. A record that never completed the freeze owns nothing: the op is answered, and bought,
     // as any other, from its own journal.
     const last = record && !record.unreadable ? record.attempts[record.attempts.length - 1] : null;
-    const waiting = Boolean(last) && last.state === "journaled" && !record.closed;
+    // an order goes to recovery whenever its record has an attempt that is waiting, or whose payment (or unknown outcome, or transaction)
+    // is on record: the original must not be bought again, whether or not its mark was written
+    const waiting = Boolean(last) && record.attempts.some((a) => (a.state === "journaled" && !record.closed) || a.outcome === "paid" || a.outcome === "unknown" || a.tx || a.tx_pull || a.tx_unknown_kind);
     if (marked || waiting) return buyRecovered({ f, ctx, record });
   }
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;

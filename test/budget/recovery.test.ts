@@ -1395,3 +1395,35 @@ describe("ownership and transaction kinds (round 6 findings)", () => {
   });
   const aopOf = (op: string) => readRecordFile("evm", "base-sepolia", op).attempts[0].op;
 });
+
+describe("the original is frozen before an attempt's payment is accepted, and attempt names are reserved", () => {
+  it("a settled attempt found before the first freeze: the original is superseded first, then the payment is learned", async () => {
+    const order: string[] = [];
+    const settled = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } };
+    const w = world({ attemptState: () => settled });
+    const inner = w.deps.freezeOp;
+    w.deps.freezeOp = (t: any, m: any, o: any) => { order.push(`freeze ${t.op === w.op ? "root" : "attempt"} ${m.closed ?? "moved"}`); return inner(t, m, o); };
+    const out = await R.recoverOrder(w.deps);
+    expect(out.fields).toMatchObject({ state: "settled", paid: true });
+    expect(order).toEqual(["freeze root moved"]);
+    expect(readRecordFile("evm", "base-sepolia", w.op).attempts[0]).toMatchObject({ outcome: "paid", tx: "0xs" });
+  });
+  it("if the original cannot be frozen the payment is not accepted: unknown, and the order stays with recovery on every rerun", async () => {
+    const settled = { exists: true, unsigned: false, code: 0, fields: { command: "buy", rail: "evm", chain: "arc-testnet", op: "x", state: "settled", paid: true, delivered: true, tx: { settle: "0xs" }, next: "none" } };
+    const w = world({ attemptState: () => settled, freeze: (_t: any, _m: any, o: any) => (o.attempt ? { ok: true } : { ok: false, why: "busy" }) });
+    const out = await R.recoverOrder(w.deps);
+    expect(out).toMatchObject({ kind: "result", code: 5 });
+    expect(out.fields).toMatchObject({ state: "unknown", paid: null });
+    const a = readRecordFile("evm", "base-sepolia", w.op).attempts[0];
+    expect(a.outcome).toBe("unknown");
+    expect(a.tx).toBeFalsy();
+  });
+  it("attempt names are reserved: only the order they belong to may buy them", () => {
+    const ref = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
+    const op = R.attemptOp("my-op", 2, ref);
+    expect(R.reservedNameProblem(op, undefined)).toMatch(/reserved/);
+    expect(R.reservedNameProblem(op, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80")).toMatch(/reserved/);
+    expect(R.reservedNameProblem(op, ref)).toBe("");
+    for (const plain of ["my-op", "rb-20261021120000-0123456789abcdef", "b4-20261021120000-0123456789abcdef", "weather-001", "x-abcdefg-r2", "rec-1"]) expect(R.reservedNameProblem(plain, undefined), plain).toBe("");
+  });
+});

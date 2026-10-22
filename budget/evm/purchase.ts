@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { failureFact, readTerms, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
+import { collides, failureFact, readTerms, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -338,6 +338,13 @@ const gasStop = (g: GasNeed) =>
 export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
+  // Attempt op names are reserved for the order that owns them: refused before any lock, journal or signature, journal or not
+  const reserved = reservedNameProblem(o.op, o.recoveryOrder);
+  if (reserved) {
+    console.log(oneLine(reserved, 2000));
+    const j = newJournal({ op: o.op, url: o.url, owner: o.c.owner, agent: (o.agent ?? o.c.wallet).account.address, token: USDC, max: usdc(o.max), expectPayTo: o.payTo });
+    return { state: "refused_precheck", ok: false, journal: { ...j, state: "refused_precheck", reason: reserved, next: "use another --op" }, pulled: 0n, signedPayment: false, exitCode: 3 };
+  }
   const lock = requireRecordLock(OPS_DIR, o.op);
   const hold: { key: { release(): void } | null } = { key: null };
   try {
@@ -414,7 +421,13 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)
   if (o.recoveryOrder !== undefined) {
-    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now
+    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now. A
+    // journal for another request is a collision: checked here, under the record lock, and left exactly as it is.
+    if (prior && collides(prior, url)) {
+      const why = `operation ${o.op} has a journal for a different request than this order's attempt, so its outcome is unknown`;
+      log(`REFUSED: ${why}`);
+      return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
+    }
     (j as any).recoveryOf = { order_ref: o.recoveryOrder };
   } else if ((prior as any)?.recoveryOf) {
     // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)

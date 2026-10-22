@@ -220,6 +220,18 @@ export function provesUnsigned(rail, read) {
 
 /** An order reference as --recovery-order carries it to a rail (a UUID made by recoverOrder). */
 export const RECOVERY_ORDER = /^[A-Za-z0-9-]{1,64}$/;
+/**
+ * Attempt op names are reserved: `<prefix>-<8 characters of the order reference>-r<n>`. Only a rail invocation that passes the matching
+ * --recovery-order may buy one; any other invocation refuses it before it writes or signs anything, journal or not. Returns the
+ * refusal in words, or "".
+ */
+export function reservedNameProblem(op, recoveryOrder) {
+  const m = /^.+-([A-Za-z0-9]{8})-r\d+$/.exec(String(op));
+  if (!m) return "";
+  if (recoveryOrder !== undefined && String(recoveryOrder).replace(/[^A-Za-z0-9]/g, "").slice(0, 8) === m[1]) return "";
+  return `operation ${op} is reserved for an attempt of an auto-recovered order; it is bought only by that order. Use another --op for a purchase of your own`;
+}
+
 /** Whether an op's journal belongs to this order: the rail stamped it for this order's attempt, or this order marked it. */
 export const ownedBy = (journal, orderRef) => Boolean(journal) && (journal.recoveryOf?.order_ref === orderRef || journal.supersededBy?.order_ref === orderRef);
 
@@ -710,7 +722,7 @@ async function endUnpaid(deps, record, why) {
   if (stuck) {
     if (stuck.attempt && stuck.why === "may_have_signed") {
       const probe = await deps.attemptState(stuck.attempt, record.order_ref);
-      if (probe.exists && !probe.unsigned) return decided(record, stuck.attempt, probe);
+      if (probe.exists && !probe.unsigned) return decided(deps, record, stuck.attempt, probe);
     }
     return stuckResult(record, stuck);
   }
@@ -737,10 +749,20 @@ function learn(record, attempt, fields) {
   if (changed) { try { writeRecord(record); } catch { /* the answer is the same; the rail's journal is the evidence */ } }
 }
 
-/** An attempt whose own journal shows it did something: its answer (reconciled from the chain) is the order's, and is kept. */
-function decided(record, attempt, probe) {
-  // a busy op says nothing about the outcome yet: it is answered as unknown now and read again next time
-  if (!probe.busy) learn(record, attempt, probe.fields);
+/**
+ * An attempt whose own journal shows it did something: its answer (reconciled from the chain) is the order's, and is kept. Before it
+ * is accepted, learned or reported, the original op is durably superseded under its record lock (frozen first, always): if that
+ * cannot be done, the answer is unknown, and the attempt is recorded as at least unknown so every rerun goes back to the order.
+ */
+async function decided(deps, record, attempt, probe) {
+  if (!probe.busy) {
+    const stuck = deps.freezeOp(rootOf(record), movedTo(record, attempt), { attempt: false });
+    if (!stuck.ok) {
+      learn(record, attempt, { state: "unknown", tx: {} }); // never "paid" here, but the order is no longer free to buy the original
+      return stuckResult(record, { ...rootOf(record), why: stuck.why });
+    }
+    learn(record, attempt, probe.fields);
+  }
   return { kind: "result", code: probe.code, fields: switchedFields(record, attempt, probe.fields) };
 }
 
@@ -751,7 +773,7 @@ async function runAttempt(deps, record, attempt) {
   if (adviceRanOut(deps, record)) return closeUncontacted(record, attempt, "advice_expired");
   // an attempt op that another command already used is never this order's: skipped, never adopted, never marked
   const before = await deps.attemptState(attempt, record.order_ref);
-  if (before.exists && !before.unsigned) return decided(record, attempt, before);
+  if (before.exists && !before.unsigned) return decided(deps, record, attempt, before);
   // INVARIANT 1: every earlier op of the order is frozen at the rail boundary before anything of this attempt is contacted
   const stuck = moveOrderTo(deps, record, attempt);
   if (stuck) {
@@ -772,11 +794,11 @@ async function runAttempt(deps, record, attempt) {
   // after that no command can pay it, so no snapshot of it goes stale. If something was signed meanwhile, or a command holds it,
   // that is the answer, never unpaid.
   if (outcome === "failed_before_payment" && got.unsigned === true) {
-    const shut = deps.freezeOp({ rail: attempt.rail, chain: attempt.chain, op: attempt.op }, closedMark(record, "attempt_refused"), { attempt: true });
+    const shut = deps.freezeOp({ rail: attempt.rail, chain: attempt.chain, op: attempt.op }, closedMark(record, "attempt_refused"), { attempt: true, url: attempt.url });
     if (!shut.ok) {
       if (shut.why === "may_have_signed") {
         const probe = await deps.attemptState(attempt, record.order_ref);
-        if (probe.exists && !probe.unsigned) { record.closed = "attempt_decided"; return decided(record, attempt, probe); }
+        if (probe.exists && !probe.unsigned) { record.closed = "attempt_decided"; return decided(deps, record, attempt, probe); }
       }
       record.closed = "attempt_decided";
       return stuckResult(record, { op: attempt.op, rail: attempt.rail, chain: attempt.chain, why: shut.why });
@@ -837,7 +859,7 @@ async function resume(deps, record) {
   for (const a of [...record.attempts].reverse()) {
     const probe = await deps.attemptState(a, record.order_ref);
     // whatever journal is at an attempt op's name is this order's evidence, stamped or not; rechecked on every rerun
-    if (probe.exists && !probe.unsigned) return decided(record, a, probe);
+    if (probe.exists && !probe.unsigned) return decided(deps, record, a, probe);
     // Losing local proof never erases what was recorded: the order stays unknown, with the evidence.
     if (recordedSigned(a)) {
       const paidOnRecord = a.outcome === "paid";
