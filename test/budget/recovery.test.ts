@@ -1614,6 +1614,10 @@ describe("a journal at an attempt op's name is this order's only with this order
     expect(R.notThisOrder({ url, supersededBy: { order_ref: "other" } }, "mine", url, false)).toBe("other_order");
     expect(R.notThisOrder({ url: "http://127.0.0.1:4001/b" }, "mine", url, false)).toBe("another_request");
     expect(R.notThisOrder({ url, state: "settled" }, "mine", url, true)).toBe("not_stamped");
+    // a version 1 record lists the op: the same url and no other order's stamp is its own payment
+    expect(R.notThisOrder({ url, state: "settled" }, "mine", url, true, true)).toBe("");
+    expect(R.notThisOrder({ url: "http://127.0.0.1:4001/b", state: "settled" }, "mine", url, true, true)).toBe("another_request");
+    expect(R.notThisOrder({ url, state: "settled", recoveryOf: { order_ref: "other" } }, "mine", url, true, true)).toBe("other_order");
     expect(R.notThisOrder({ url, state: "refused_precheck" }, "mine", url, false)).toBe("");
     expect(R.notThisOrder({ url, recoveryOf: { order_ref: "mine" }, state: "settled" }, "mine", url, true)).toBe("");
     expect(R.notThisOrder({ url, supersededBy: { order_ref: "mine" } }, "mine", url, true)).toBe("");
@@ -1721,5 +1725,21 @@ describe("every path that touches an attempt freezes the original first", () => 
     const out = await R.recoverOrder(w.deps);
     expect(out).toMatchObject({ kind: "result", code: 5 });
     expect(readRecordFile("evm", "base-sepolia", op).attempts[0].outcome).toBe("unknown");
+  });
+});
+
+describe("the order flag is only for an order's own attempt names", () => {
+  const ref = "1b4e28ba-2fa1-11d2-883f-0016d3cca427";
+  it("is refused on an original or ordinary op, on another order's names, and accepted on its own", () => {
+    expect(R.reservedNameProblem("my-original", ref)).toMatch(/only for an order's own attempt op/);
+    expect(R.reservedNameProblem("my-original", undefined)).toBe("");
+    expect(R.reservedNameProblem(R.attemptOp("o", 2, "9c5b94b1-35ad-49bb-b118-8e8fc24abf80"), ref)).toMatch(/reserved/);
+    expect(R.reservedNameProblem(R.attemptOp("o", 2, ref), ref)).toBe("");
+  });
+  it("a version 1 record is read as legacy, in memory, on every read", () => {
+    const dir = R.recoveryDir();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(R.recordPath("evm", "base-sepolia", "legacy-op"), JSON.stringify({ version: 1, order_ref: "x", rail: "evm", chain: "base-sepolia", op: "legacy-op", attempts: [{ attempt_no: 2, op: "a", tx: "0x1" }] }));
+    expect(R.readRecord("evm", "base-sepolia", "legacy-op")).toMatchObject({ version: 2, legacy: true });
   });
 });

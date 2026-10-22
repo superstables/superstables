@@ -208,6 +208,7 @@ function migrateRecord(r) {
     if (a && typeof a === "object" && a.tx) { a.tx_unknown_kind = a.tx; a.tx = null; }
   }
   r.version = 2;
+  r.legacy = true; // written before attempt journals were stamped: an unstamped signed journal at its attempts' names is its own
   return r;
 }
 
@@ -243,7 +244,8 @@ export const RECOVERY_ORDER = /^[A-Za-z0-9-]{1,64}$/;
  */
 export function reservedNameProblem(op, recoveryOrder) {
   const m = /^.+-([A-Za-z0-9]{8})-r\d+$/.exec(String(op));
-  if (!m) return "";
+  // --recovery-order is accepted only for an op name that is one of that order's own attempt names: never on an original or any other op
+  if (!m) return recoveryOrder === undefined ? "" : `--recovery-order is only for an order's own attempt op, and ${op} is not one: an original or ordinary op is bought without it`;
   if (recoveryOrder !== undefined && String(recoveryOrder).replace(/[^A-Za-z0-9]/g, "").slice(0, 8) === m[1]) return "";
   return `operation ${op} is reserved for an attempt of an auto-recovered order; it is bought only by that order. Use another --op for a purchase of your own`;
 }
@@ -257,11 +259,12 @@ export const otherOrder = (journal, orderRef) => Boolean(journal) && ((journal.r
  * names another order, or (`signed`) a journal that may have signed without this order's stamp. Such a journal is never claimed as
  * this order's payment and never paid again: the order's outcome is unknown.
  */
-export function notThisOrder(journal, orderRef, url, signed) {
+export function notThisOrder(journal, orderRef, url, signed, legacy = false) {
   if (!journal) return "";
   if (collides(journal, url)) return "another_request";
   if (otherOrder(journal, orderRef)) return "other_order";
-  if (signed && !ownedBy(journal, orderRef)) return "not_stamped";
+  // a record from before stamping (version 1) lists this op as its attempt: a signed journal at the same url is that order's payment
+  if (signed && !ownedBy(journal, orderRef) && !legacy) return "not_stamped";
   return "";
 }
 
@@ -763,7 +766,7 @@ async function endUnpaid(deps, record, why) {
   const stuck = closeOrder(deps, record, why);
   if (stuck) {
     if (stuck.attempt && stuck.why === "may_have_signed") {
-      const probe = await deps.attemptState(stuck.attempt, record.order_ref);
+      const probe = await deps.attemptState(stuck.attempt, record.order_ref, { legacy: record.legacy === true });
       if (probe.exists && !probe.unsigned) return decided(deps, record, stuck.attempt, probe);
     }
     return stuckResult(record, stuck);
@@ -906,7 +909,7 @@ async function runAttempt(deps, record, attempt) {
   record.owns = true;
   try { writeRecord(record); } catch { /* the marks are the truth; the record only repeats them */ }
   // an attempt op that already did something is never run again: its own journal is the answer, read only after the original is marked
-  const before = await deps.attemptState(attempt, record.order_ref);
+  const before = await deps.attemptState(attempt, record.order_ref, { legacy: record.legacy === true });
   if (before.exists && !before.unsigned) return decided(deps, record, attempt, before);
 
   // A freeze is permanent: if the advice ran out after it, the order ends here and the original stays superseded
@@ -923,7 +926,7 @@ async function runAttempt(deps, record, attempt) {
     const shut = deps.freezeOp({ rail: attempt.rail, chain: attempt.chain, op: attempt.op }, closedMark(record, "attempt_refused"), { attempt: true, url: attempt.url });
     if (!shut.ok) {
       if (shut.why === "may_have_signed") {
-        const probe = await deps.attemptState(attempt, record.order_ref);
+        const probe = await deps.attemptState(attempt, record.order_ref, { legacy: record.legacy === true });
         if (probe.exists && !probe.unsigned) { record.closed = "attempt_decided"; return decided(deps, record, attempt, probe); }
       }
       record.closed = "attempt_decided";
@@ -1011,7 +1014,7 @@ async function resume(deps, record) {
   if (firstHeld) return firstHeld;
   // INVARIANT 1: every attempt, the newest first; an attempt that may have signed is never run again, and what its journal says stands
   for (const a of [...record.attempts].reverse()) {
-    const probe = await deps.attemptState(a, record.order_ref);
+    const probe = await deps.attemptState(a, record.order_ref, { legacy: record.legacy === true });
     // a journal at an attempt op's name is this order's evidence when it carries this order's stamp, else unknown; rechecked on every rerun
     if (probe.exists && !probe.unsigned) return decided(deps, record, a, probe);
     // Losing local proof never erases what was recorded: the payment, or the unknown, with the evidence that was recorded.

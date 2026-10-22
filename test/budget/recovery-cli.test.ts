@@ -531,6 +531,45 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(site.adviceCalls).toHaveLength(1);
   }, 240_000);
 
+  it("owned-original-recovery-flag: the order flag does not get an owned original past the record, even with its journal gone; one settlement only", async () => {
+    const { r, gate, arcSeller } = await recovered((g) => [arcCandidate(g)]);
+    expect(r.code, all(r)).toBe(0);
+    const baseSeller = await startSeller(base, 84532);
+    cleanups.push(() => baseSeller.close());
+    const rootJournal = join(home, "budget", "ops", "evm-base-sepolia", "rec-1.json");
+    renameSync(rootJournal, `${rootJournal}.away`);
+    const ref = orderRef("rec-1");
+    const args = ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "rec-1"];
+    const plain = await direct("evm/buy.ts", args);
+    expect(plain.code, all(plain)).toBe(3);
+    const flagged = await direct("evm/buy.ts", [...args, "--recovery-order", ref]);
+    expect(flagged.code, all(flagged)).toBe(3);
+    expect(flagged.result).toMatchObject({ state: "refused_precheck", paid: false });
+    expect(baseSeller.creds).toEqual([]);
+    expect(baseSeller.settled).toEqual([]);
+    expect(existsSync(rootJournal)).toBe(false);
+    expect(arcSeller.settled).toHaveLength(1);
+    void gate;
+  }, 300_000);
+
+  it("solana-owned-original-flag: the flag on an original the record owns is refused before the seller is contacted", async () => {
+    setUpSolana("http://127.0.0.1:9");
+    const hits: string[] = [];
+    const server = createServer((req, res) => { hits.push(req.url ?? ""); res.writeHead(503).end("x"); });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/s`;
+    mkdirSync(recordsDir(), { recursive: true, mode: 0o700 });
+    const ref = "11111111-2222-3333-4444-555555555555";
+    writeFileSync(join(recordsDir(), "solana-devnet-sol-root.json"), JSON.stringify({ version: 2, order_ref: ref, rail: "solana", chain: "devnet", op: "sol-root", url, max: "0.05", owns: true, attempts: [{ attempt_no: 2, op: "sol-root-11111111-r2", rail: "evm", chain: "arc-testnet", url, state: "done", outcome: "paid", tx: "0xabc" }] }), { mode: 0o600 });
+    for (const extra of [[], ["--recovery-order", ref], ["--recovery-order", "99999999-2222-3333-4444-555555555555"]]) {
+      const r = await direct("solana/buy.mjs", ["--url", url, "--max", "0.05", "--op", "sol-root", ...extra]);
+      expect(r.code, all(r)).toBe(3);
+      expect(r.result).toMatchObject({ state: "refused_precheck" });
+    }
+    expect(hits).toEqual([]);
+  }, 120_000);
+
   it("malicious advice: a site that lies about the price cannot make the agent pay more than the ceiling", async () => {
     // listed 10000 but the seller really asks 90000, above the caller's --max of 0.05: the ordinary buy refuses before it pulls or signs
     const { r, arcSeller } = await recovered((g) => [arcCandidate(g, { listed_price_atomic: "10000" })], {}, { sellerOpts: { price: "90000" } });
@@ -891,6 +930,30 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(JSON.parse(readFileSync(journalFile, "utf8")).recoveryOf).toMatchObject({ order_ref: orderRef("fz-o") });
     const root = await buy(`${gate}/spot`, { op: "fz-o" });
     expect(root.result).toMatchObject({ op: aop("fz-o"), state: "settled", paid: true });
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("legacy-r5-payment: an unstamped settled journal is the order's payment when its version 1 record lists the op and the url is the same; a version 2 record keeps the rule", async () => {
+    const { gate, arcSeller, baseSeller, file } = await frozenOrder("fz-v1");
+    const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-v1"));
+    expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
+    const journalFile = join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-v1")}.json`);
+    const legacy = JSON.parse(readFileSync(journalFile, "utf8"));
+    delete legacy.recoveryOf;
+    writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    rec.version = 1;
+    writeFileSync(file, JSON.stringify(rec, null, 2));
+    const root = await buy(`${gate}/spot`, { op: "fz-v1" });
+    expect(root.result, all(root)).toMatchObject({ op: aop("fz-v1"), state: "settled", paid: true });
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    expect(after.attempts[0]).toMatchObject({ outcome: "paid" });
+    expect(JSON.parse(readFileSync(join(home, "budget", "ops", "evm-base-sepolia", "fz-v1.json"), "utf8")).supersededBy).toMatchObject({ op: aop("fz-v1") });
+    // a different url in the same legacy record is still a collision
+    legacy.url = `${gate}/arc?other=1`;
+    writeFileSync(journalFile, JSON.stringify(legacy, null, 2));
+    const clash = await buy(`${gate}/spot`, { op: "fz-v1" });
+    expect(clash.code, all(clash)).toBe(5);
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
@@ -1674,22 +1737,22 @@ describe("round 2: a journal stamped for another order is never this order's pay
     const seller = await startSeller(arc, 5042002);
     cleanups.push(() => seller.close());
     // the same request, stamped for another order
-    const foreign = { op: "taken-1", rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url: seller.url, recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
-    writeFileSync(join(dir, "taken-1.json"), JSON.stringify(foreign), { mode: 0o600 });
-    const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-1", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
+    const foreign = { op: "taken-11111111-r2", rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url: seller.url, recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
+    writeFileSync(join(dir, "taken-11111111-r2.json"), JSON.stringify(foreign), { mode: 0o600 });
+    const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-11111111-r2", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
     expect(r.code, all(r)).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck" });
     expect(all(r)).toMatch(/belongs to another auto-recovered order/);
-    expect(JSON.parse(readFileSync(join(dir, "taken-1.json"), "utf8"))).toEqual(foreign);
+    expect(JSON.parse(readFileSync(join(dir, "taken-11111111-r2.json"), "utf8"))).toEqual(foreign);
     expect(seller.creds).toEqual([]);
     setUpSolana("http://127.0.0.1:9");
     const sdir = join(home, "budget", "ops", "solana-devnet");
     mkdirSync(sdir, { recursive: true, mode: 0o700 });
-    const sforeign = { op: "taken-2", state: "refused_precheck", history: [], recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
-    writeFileSync(join(sdir, "taken-2.json"), JSON.stringify(sforeign), { mode: 0o600 });
-    const s = await direct("solana/buy.mjs", ["--url", "http://127.0.0.1:9/x", "--max", "0.05", "--op", "taken-2", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
+    const sforeign = { op: "taken-11111111-r2", state: "refused_precheck", history: [], recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
+    writeFileSync(join(sdir, "taken-11111111-r2.json"), JSON.stringify(sforeign), { mode: 0o600 });
+    const s = await direct("solana/buy.mjs", ["--url", "http://127.0.0.1:9/x", "--max", "0.05", "--op", "taken-11111111-r2", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);
     expect(s.code, all(s)).toBe(3);
     expect(s.result.reason).toMatch(/belongs to another auto-recovered order/);
-    expect(JSON.parse(readFileSync(join(sdir, "taken-2.json"), "utf8"))).toEqual(sforeign);
+    expect(JSON.parse(readFileSync(join(sdir, "taken-11111111-r2.json"), "utf8"))).toEqual(sforeign);
   }, 120_000);
 });

@@ -429,7 +429,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: supersededNext((prior as any).supersededBy), supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
   }
   // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
-  const owned = o.recoveryOrder === undefined ? recordOwnsWords("evm", CFG.key, o.op) : "";
+  const owned = recordOwnsWords("evm", CFG.key, o.op); // whatever the flag says: the record's ownership does not depend on it
   if (owned) {
     log(`REFUSED: ${owned}`);
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: owned, next: "rerun the original buy through superstables budget buy with the same --op" }, exitCode: 3 };

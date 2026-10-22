@@ -202,7 +202,7 @@ let lock = { ok: true };
     finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "nothing was signed or paid" });
   }
   // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
-  const ownedWords = recoveryOrder === undefined && !existing?.supersededBy ? recordOwnsWords("solana", "devnet", opId) : "";
+  const ownedWords = !existing?.supersededBy ? recordOwnsWords("solana", "devnet", opId) : ""; // whatever the flag says
   if (ownedWords) {
     console.error(`Refused (nothing signed): ${ownedWords}`);
     finish("refused_precheck", EXIT.REFUSED, { reason: ownedWords, next: "rerun the original buy through superstables budget buy with the same --op" });

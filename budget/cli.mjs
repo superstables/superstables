@@ -1609,7 +1609,7 @@ async function reconciledFields(f2, c2, held = null) {
  * lock means a command may be signing: unknown (busy).
  * One that may have signed is reconciled from the chain, with the lock let go for the rail.
  */
-async function attemptView(a, ctx, orderRef) {
+async function attemptView(a, ctx, orderRef, { legacy = false } = {}) {
   const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
   const held = lockRecord(opsDir(f2.rail, f2.chain), f2.op);
   if (!held.ok) return { exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: f2.rail, chain: f2.chain, op: f2.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(held, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
@@ -1618,7 +1618,7 @@ async function attemptView(a, ctx, orderRef) {
   // a journal at an attempt op's name is this order's evidence only with this order's stamp or mark: another request's, another
   // order's, or a signed one without the stamp is unknown, never claimed as this order's payment
   const signed = st.present && !provesUnsigned(f2.rail, st);
-  const foreign = notThisOrder(st.journal, orderRef, f2.url, signed);
+  const foreign = notThisOrder(st.journal, orderRef, f2.url, signed, legacy);
   if (st.present && st.journal && foreign) return { exists: true, unsigned: false, collision: true, ...collisionResult(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op }, foreign) };
   if (!signed) return { exists: st.present, unsigned: true };
   return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
@@ -1698,7 +1698,7 @@ async function recoveryFor(f, ctx, rr) {
     siteCall: (path, body) => signedCall(f, "POST", path, body),
     freezeOp: (target, mark, o) => freezeOp(target, mark, { ...o, base: target.rail === "evm" ? evmJournalBase(target.chain) : null }),
     attempt: (f2, orderRef) => attemptBuy(f2, ctx, orderRef),
-    attemptState: (a, orderRef) => attemptView(a, ctx, orderRef),
+    attemptState: (a, orderRef, opts) => attemptView(a, ctx, orderRef, opts),
   });
 }
 
