@@ -28,7 +28,7 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { bindingFacts } from "./page-facts.mjs";
-import { HOLDER_ENV, RESUME_ENV, canResume, readApproval, readRequestFact, recordHosted, recordTakenOver, saveRequestFact } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, canResume, resumeGeneration, readApproval, readRequestFact, recordHosted, recordTakenOver, saveRequestFact } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedApprovals, HostedRefusal, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -122,7 +122,7 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">): Ho
       // from the moment the request is checked and in hand, what this worker ends with (a refusal included) is the approval's result
       ...(hosted ? {
         resume: hosted,
-        onTakeover: () => recordTakenOver(holder!),
+        onTakeover: () => recordTakenOver(holder!, resumeGeneration()),
         // The sink's exit (hosted.ts header): a restarted worker whose outcome rests on nothing the site confirmed (time ran out, the
         // site cannot be read or refuses the token, an exception) leaves with no result. The dispatcher records none, and the next
         // wait reads the request again.

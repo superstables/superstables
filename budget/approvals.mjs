@@ -58,6 +58,8 @@ export const WORKER_ENV = "SUPERSTABLES_BUDGET_APPROVAL_ID";
 export const HOLDER_ENV = "SUPERSTABLES_BUDGET_HOLDER";
 /** Set in a worker that finishes an approval an earlier worker began: the id of that approval. */
 export const RESUME_ENV = "SUPERSTABLES_BUDGET_RESUME";
+/** The restart a worker is: the record's `resumes` as it was when this worker was started. Only the newest restart marks or relies on a takeover. */
+export const RESUME_GENERATION_ENV = "SUPERSTABLES_BUDGET_RESUME_GENERATION";
 /** How long the owner page keeps a link open after the wallet was asked to send (owner-approval-server.ts). */
 const SENDING_GRACE_S = 120;
 /** Reading the chain after the wallet sent: readSent waits up to 180 s, then the allowance reads. */
@@ -248,7 +250,8 @@ async function holdingRecordLock(id, fn) {
     acquireSync(path, me, Date.now() + recordLockOptions.timeoutMs, breakDeadLock);
   } catch (err) {
     // the lock is held by a process that is still running: the caller can say so and ask to be run again
-    if (err && typeof err === "object") err.code = "RECORD_BUSY";
+    // only the deadline's error says "busy" (a file system error already carries its own code, EACCES or ENOSPC for instance)
+    if (err && typeof err === "object" && !err.code) err.code = "RECORD_BUSY";
     throw err;
   }
   heldRecordLocks.add(id);
@@ -596,7 +599,7 @@ export function setRailGroup(id, pgid, selfStartedAt) {
 export function spawnRail(id, spawn) {
   let child = null;
   let ended = false;
-  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for a minute nothing
+  // A worker that dies between starting the rail script and recording it leaves this mark and no group: for 30 seconds nothing
   // ends the approval (startingUp), because a rail script may be running that the record does not name.
   const marked = update(id, (before) => (before.final ? null : { railSpawning: Date.now() }));
   if (marked?.final) return { child: null, ended: true };
@@ -731,15 +734,34 @@ export function readRequestFact(id, key) {
 }
 
 /** The resumed worker took the site's request over: from now on its result may be stored as the approval's final one. */
-export function recordTakenOver(id) {
-  return update(id, (record) => record.final ? null : { resume: { ...record.resume, takenOver: record.resumes ?? 0 } });
+export function recordTakenOver(id, generation) {
+  return update(id, (record) => {
+    if (record.final) return null;
+    // a worker that does not know its restart (no number), or that a newer restart replaced, marks nothing: only the restart that read the
+    // request has taken it over
+    if (!Number.isInteger(generation) || generation !== (record.resumes ?? 0)) return null;
+    return { resume: { ...record.resume, takenOver: generation } };
+  });
 }
 
+/** The restart number a restarted worker was given (RESUME_GENERATION_ENV): a positive whole number as written, else NaN, which matches no restart. */
+export const resumeGeneration = (env = process.env) => (/^[1-9]\d*$/.test(env[RESUME_GENERATION_ENV] ?? "") ? Number(env[RESUME_GENERATION_ENV]) : Number.NaN);
+
 /** Whether the worker that finishes approval `id` has taken the request over (set by recordTakenOver, once per restart). */
-export const hasTakenOver = (id) => {
-  const record = readApproval(id);
-  return Boolean(record && record.resume?.takenOver === (record.resumes ?? 0));
-};
+/** Whether `record` says the restart numbered `generation` is the newest and is the one that took the request over. */
+export const takeoverHolds = (record, generation) => Boolean(record && generation === (record.resumes ?? 0) && record.resume?.takenOver === generation);
+
+// the worker's own restart must still be the newest, and must be the one that took the request over
+export const hasTakenOver = (id, generation) => takeoverHolds(readApproval(id), generation);
+
+/**
+ * End the approval for a restarted worker: stored only if, under the record's lock, no result stands and the worker is still the
+ * newest restart and has taken the request over (takeoverHolds). A worker that was paused after it checked, and replaced by a
+ * newer restart meanwhile, therefore stores nothing. Returns { record, stored } as recordFinalWith does.
+ */
+export function recordFinalAsRestart(id, generation, code, result) {
+  return recordFinalWith(id, (before) => (takeoverHolds(before, generation) ? { code, result } : null));
+}
 
 /**
  * The approval ended, whichever way (approved, rejected, expired, cancelled or replaced, stopped by a timeout, or failed):
@@ -747,9 +769,15 @@ export const hasTakenOver = (id) => {
  * recorded here, and only here.
  */
 export function recordFinal(id, code, result) {
-  // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too)
-  const record = update(id, (before) => ({ state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) }));
-  if (record) release(record.rail, record.chain, id);
+  // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
+  // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
+  let stored = false;
+  const record = update(id, (before) => {
+    if (before.final) return null;
+    stored = true;
+    return { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+  });
+  if (record && stored) release(record.rail, record.chain, id);
   return record;
 }
 
@@ -844,7 +872,7 @@ function restartLocked(id, { cmd, script, cwd, env }, remember) {
     if (!canResume(before) || processesAlive(before)) return null;
     // the site this approval was made on is the one the restarted command asks: a command that took it from its environment
     // (SUPERSTABLES_SITE) must not take another from the environment `wait` runs in
-    const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, SUPERSTABLES_SITE: before.hosted.site } });
+    const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, [RESUME_GENERATION_ENV]: String((before.resumes ?? 0) + 1), SUPERSTABLES_SITE: before.hosted.site } });
     remember(launched);
     // a worker that could not start counts as a restart that never took the request over
     if (!launched.child.pid) return { resumes: (before.resumes ?? 0) + 1 };
