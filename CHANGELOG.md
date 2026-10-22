@@ -7,12 +7,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed and fixed
-
-- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
-- **Mistaken flags and damaged records:** `budget wait` now returns `unknown` (exit 5, not final) when it rejects a flag for an existing approval or cannot read its record. Follow the returned instructions before retrying.
-- **Records lost while waiting:** if an approval or single purchase record disappears or becomes unreadable while `budget wait` (or `budget wait --abandon`) is working on it, including at the moment it would store a result, the command now returns `unknown` (exit 5, not final) instead of failing, crashing or recording a result over the damaged file, and leaves the file as it found it. Check superstables.com and your wallet's activity before retrying. Do not start another purchase for that request.
-
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
 Testnet only.
@@ -43,6 +37,17 @@ Testnet only.
 - The chain check after a payment retries briefly when an endpoint lags the newest block, without paying again. A differing block hash is reported as removed only once finality reaches that block; inconclusive reads remain unchecked.
 - Spend caps, daily totals and amounts are compared as exact integers in the token's smallest units, including in the local wallet, which rechecks policy when approving. Stopped unsigned payments release their reservations only after the process is proven gone. Discovery explains hidden listings, owner handoffs include expiry and account guidance, and account refusals direct owners to a wallet their account holds.
 - Payment records are flushed before submission; approval pages, seller responses, journals and external text receive stricter checks. The npm package includes `npm-shrinkwrap.json` to lock its production dependency tree, including indirect dependencies. Builds include software bills of materials for installed and bundled dependencies and a way to compare release artifacts with their source. npm provenance is not included. See [build verification](https://github.com/superstables/superstables/blob/v0.5.0/docs/install.md#checking-a-build-against-its-commit).
+- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
+- **Mistaken flags and damaged records:** `budget wait` now returns `unknown` (exit 5, not final) when it rejects a flag for an existing approval or cannot read its record. Follow the returned instructions before retrying.
+- **Records lost while waiting:** if an approval or single purchase record disappears or becomes unreadable while `budget wait` (or `budget wait --abandon`) is working on it, including at the moment it would store a result, the command now returns `unknown` (exit 5, not final) instead of failing, crashing or recording a result over the damaged file, and leaves the file as it found it. Check superstables.com and your wallet's activity before retrying. Do not start another purchase for that request.
+
+## [0.4.1] - Arc Testnet RPC address
+
+Testnet only.
+
+### Fixed
+
+- Arc Testnet checks, approvals and purchases work again. The client's default Arc Testnet RPC address, `rpc.testnet.arc.network`, no longer resolves, so `budget doctor`, grants and purchases on Arc failed. The default is now `rpc.testnet.arc.io`. If you set your own Arc RPC address, nothing changes for you.
 
 ## [0.4.0] - Robinhood Chain Testnet and Sign in with Solana
 

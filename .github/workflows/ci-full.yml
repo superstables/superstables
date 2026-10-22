@@ -1,6 +1,6 @@
 # The whole suite, the build, the skill zip, an audit of every package the client ships, a check that two builds of
-# the commit are identical, and the six install routes, on main, every night and on demand. It is not the release
-# gate: superstables-release requires the CI workflow (ci.yml) on the exact commit it releases.
+# the commit are identical, and the six install routes, on main and on maint/ branches, every night and on demand.
+# It gates the release: superstables-release requires this workflow on the exact commit it releases.
 # It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
@@ -22,13 +22,13 @@ permissions:
   contents: read
 
 concurrency:
-  # a newer full run on main supersedes an older one; a dispatch on another ref skips its jobs
-  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || format('ci-full-{0}', github.run_id) }}
+  # a newer full run on main (or on a maint/ branch) supersedes an older one; a dispatch on another ref skips its jobs
+  group: ${{ github.ref == 'refs/heads/main' && 'ci-release' || startsWith(github.ref, 'refs/heads/maint/') && format('ci-release-{0}', github.ref_name) || format('ci-full-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 45
@@ -79,7 +79,7 @@ jobs:
         run: node scripts/bundle-audit.mjs --sbom dist/sbom.cdx.json --sbom build/skill/superstables-payments/scripts/sbom.cdx.json
 
   reproducible:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Two builds are identical, Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 20
@@ -104,7 +104,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}
 
   install:
-    if: github.event.repository.private && github.ref == 'refs/heads/main'
+    if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Install routes, Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
     timeout-minutes: 30
