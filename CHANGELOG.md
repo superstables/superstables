@@ -9,7 +9,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Budget auto recovery:** when a budget `buy` cannot read the seller's payment terms in up to three reads, and superstables.com offers recovery, the agent can switch the purchase to the same seller on another chain. The client requires the same URL origin and query, checks the chain's allowance and the price limits from your `--max` and the site-supplied price and margin, and blocks superseded operations from paying. The request is never sent to a different seller, and the owner is not asked about each switch. Recovery is limited to eligible EVM and Solana purchases. Testnet only.
+- **Budget auto recovery:** when a budget `buy` cannot read the seller's payment terms and superstables.com offers recovery, the terms are read up to three times; if they still cannot be read, the agent can switch the purchase to the same seller on another chain. Without recovery, the terms are read once, as before. The client requires the same URL origin and query, checks the chain's allowance and the price limits from your `--max` and the site-supplied price and margin, and blocks superseded operations from paying. The request is never sent to a different seller, and the owner is not asked about each switch. Recovery is limited to eligible EVM and Solana purchases. Testnet only.
+
+### Changed and fixed
+
+- **Stopped budget approvals:** when `budget wait` restarts an approval, only the newest restart can record its result. An already recorded result is preserved.
 
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 

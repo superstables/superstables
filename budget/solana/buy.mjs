@@ -76,7 +76,7 @@ import { memoReferral } from "../../src/core/referral-memo.mjs";
 import { operationReferral, paidReferralHeaders } from "../../src/core/referral-store.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 import { selectRequirement, checkOffer, checkDelegation } from "./precheck.mjs";
-import { RECOVERY_ORDER, collides, failureFact, readTerms, reservedNameProblem, supersededNext, termsFailureOf, timedOut } from "../recovery.mjs";
+import { RECOVERY_ORDER, collides, failureFact, otherOrder, readTerms, reservedNameProblem, supersededNext, termsFailureOf, termsReadsOf, timedOut } from "../recovery.mjs";
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
@@ -95,7 +95,10 @@ Options:
                      (default: owner address from the public file or solana-agent.env)
   --check            quote only: parse and check the offer, sign and pay nothing
   --recovery-order <ref>  set by superstables budget for an attempt of an auto-recovered order: the
-                     journal names the order, and an op another command already used is refused
+                     journal names the order, and an op of another order is refused
+  --terms-reads <n>|<n>-<m>  set by superstables budget only for a buy auto recovery can follow:
+                     which reads (1 to 3) of the seller's terms this run makes; without it they are
+                     read once
   -h, --help         show this help
 
 Files: opens only the agent key file, solana-agent.env (after the prechecks pass).
@@ -105,7 +108,7 @@ Exit: 0 settled/quoted, 1 failed, 2 bad flags, 3 refused before signing, 4 unkno
 
 const flags = parseStrict(
   process.argv.slice(2),
-  { url: "value", max: "value", "pay-to": "value", op: "value", method: "value", body: "value", owner: "value", check: "bool", "recovery-order": "value" },
+  { url: "value", max: "value", "pay-to": "value", op: "value", method: "value", body: "value", owner: "value", check: "bool", "recovery-order": "value", "terms-reads": "value" },
   { usage: USAGE, required: ["url"] }
 );
 const checkOnly = flags.check === true;
@@ -132,6 +135,9 @@ if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageErr
     process.exit(EXIT.REFUSED);
   }
 }
+// which reads of the seller's terms this run makes, and that a failed read is reported (only for a buy auto recovery can follow)
+const termsReads = flags["terms-reads"] === undefined ? undefined : termsReadsOf(flags["terms-reads"]);
+if (termsReads === null) usageError("--terms-reads is a read number or range from 1 to 3, such as 1, 1-3 or 2-3", USAGE);
 // every write of this op's journal names the order it is an attempt of (recovery.mjs ownedBy)
 const updateOp = (op, patch, event) => writeOpUpdate(op, recoveryOrder === undefined ? patch : { recoveryOf: { order_ref: recoveryOrder }, ...patch }, event);
 
@@ -189,6 +195,12 @@ let lock = { ok: true };
     console.error(`Refused (nothing signed): ${why}`);
     finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "rerun the original buy of the order with its own --op" });
   }
+  // an op whose journal names another order is never run as this order's attempt
+  if (recoveryOrder !== undefined && otherOrder(existing, recoveryOrder)) {
+    const why = `operation ${opId} belongs to another auto-recovered order; this order does not run it`;
+    console.error(`Refused (nothing signed): ${why}`);
+    finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "nothing was signed or paid" });
+  }
   const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);
@@ -197,15 +209,22 @@ let lock = { ok: true };
 }
 
 // --- 2. the unpaid request and the challenge -------------------------------------------------------
-// The unpaid read is tried at most 3 times when it fails before any payment exists (no answer, 5xx, 429, a 402 whose terms
-// cannot be read); a payment is never retried.
+// For a buy auto recovery can follow (--terms-reads), the unpaid read is tried up to 3 times when it fails before any payment
+// exists (no answer, 5xx, 429, a 402 whose terms cannot be read); a payment is never retried. Any other buy reads it once.
 let initial;
 let termsReadError;
+if (!termsReads) {
+  try {
+    initial = await fetchOnce(url, method, bodyText);
+  } catch (e) {
+    refuse(`seller unreachable: ${oneLine(e?.message ?? e, 300)}`);
+  }
+}
 // Only a GET without a body is read again: an application request (POST and the rest) may not be safe to repeat, payment or not.
 const retryable = method === "GET" && bodyText === undefined;
 // A read that runs out of time is not tried again, and all the reads together take no longer than the one read of a buy without
 // retries (60 s).
-const read = await readTerms(async (_attempt, leftMs) => {
+const read = !termsReads ? { ok: true, value: initial } : await readTerms(async (_attempt, leftMs) => {
   termsReadError = undefined;
   let got;
   try {
@@ -215,7 +234,7 @@ const read = await readTerms(async (_attempt, leftMs) => {
     return { failure: termsFailureOf({ error: oneLine(e?.cause?.code ?? e?.message ?? e, 120), timeout: timedOut(e) }) };
   }
   return { failure: termsFailureOf({ status: got.res.status, retryAfter: got.res.headers.get("retry-after"), paymentRequired: got.res.headers.get("payment-required"), bodyText: got.text }), value: got };
-}, { timeoutMs: TERMS_TIMEOUT_MS, ...(retryable ? {} : { maxReads: 1 }) });
+}, { timeoutMs: TERMS_TIMEOUT_MS, firstRead: termsReads.first, maxReads: retryable ? termsReads.last : termsReads.first });
 initial = read.value;
 if (!read.ok && retryable) termsFailure = failureFact(read.failure, read.attemptsUsed);
 if (!initial) refuse(`seller unreachable: ${termsReadError}`);

@@ -231,14 +231,18 @@ describe("a worker that goes between recording its hosted request and showing a 
 describe("a worker that was started again records a result only once it has the request in hand", () => {
   it("taken over is per restart: a new worker has not taken it over until it says so", async () => {
     const id = await openApproval();
-    expect(approvals.hasTakenOver(id)).toBe(false);
-    approvals.recordTakenOver(id);
-    expect(approvals.hasTakenOver(id)).toBe(true);
+    const before = approvals.readApproval(id)?.resumes ?? 0;
+    expect(approvals.hasTakenOver(id, before)).toBe(false);
+    approvals.recordTakenOver(id, before);
+    expect(approvals.hasTakenOver(id, before)).toBe(true);
     const r = approvals.restartWorker(id, { cmd: process.execPath, script: join(home, "worker-none.mjs"), cwd: home });
     expect(r.started).toBe(true);
-    expect(approvals.hasTakenOver(id)).toBe(false);
-    approvals.recordTakenOver(id);
-    expect(approvals.hasTakenOver(id)).toBe(true);
+    // the restarted worker is the next number; the earlier mark is not its own
+    expect(r.record.resumes).toBe(before + 1);
+    expect(approvals.hasTakenOver(id, before + 1)).toBe(false);
+    approvals.recordTakenOver(id, before + 1);
+    expect(approvals.hasTakenOver(id, before + 1)).toBe(true);
+    expect(approvals.hasTakenOver(id, before)).toBe(false);
     killGroup(r.record.pid);
   });
 });

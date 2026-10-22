@@ -25,7 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
-import { collides, failureFact, readTerms, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
+import { collides, failureFact, otherOrder, readTerms, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -108,7 +108,7 @@ export type TermsOutcome = { failure: { stage: string; detail: string; attempts_
  * returned as it came (or its error thrown), so everything after behaves as it did before; `outcome.failure` says the read
  * failed for good. `inner` must honour `init.signal` (purchase's timedFetch does).
  */
-export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number; timeoutMs?: number } = {}): typeof fetch {
+export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number; timeoutMs?: number; firstRead?: number; maxReads?: number } = {}): typeof fetch {
   return async (input: any, init?: any) => {
     const request = new Request(input, init);
     if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) { outcome.failure = null; return inner(request); }
@@ -261,6 +261,9 @@ export type PurchaseOpts = {
   /** an attempt of an auto-recovered order (the dispatcher's --recovery-order): the journal names the order, and an op whose journal
    *  another command wrote is refused before anything is read or signed */
   recoveryOrder?: string;
+  /** the dispatcher's --terms-reads, only for a buy auto recovery can follow: which reads of the seller's terms this run makes
+   *  (recovery.mjs readTerms), and that a failed read is reported as termsFailure. Without it the terms are read once, as before. */
+  termsReads?: { first: number; last: number };
   /** tests: the retry's clock and randomness (recovery.mjs readTerms) */
   retry?: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number };
 };
@@ -428,7 +431,13 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)
   if (o.recoveryOrder !== undefined) {
-    // the op's name is derived from the order: a journal at that name is this order's, stamped or not, and the stamp is written now
+    // an op whose journal names another order is never run as this order's attempt: nothing is read or signed
+    if (otherOrder(prior, o.recoveryOrder)) {
+      const why = `operation ${o.op} belongs to another auto-recovered order; this order does not run it`;
+      log(`REFUSED: ${why}`);
+      return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "nothing was signed or sent" }, exitCode: 3 };
+    }
+    // the stamp is written now and kept on every rewrite: it is what makes this journal the order's evidence
     (j as any).recoveryOf = { order_ref: o.recoveryOrder };
   } else if ((prior as any)?.recoveryOf) {
     // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)
@@ -656,8 +665,12 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
+  // Only a buy that auto recovery can follow (the dispatcher's --terms-reads) reads the terms more than once and reports why they
+  // could not be read; any other buy reads them once, exactly as without auto recovery.
   const terms: TermsOutcome = { failure: null };
-  const timedFetch: typeof fetch = withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, ...o.retry });
+  const timedFetch: typeof fetch = o.termsReads
+    ? withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, firstRead: o.termsReads.first, maxReads: o.termsReads.last, ...o.retry })
+    : capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
   const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {
