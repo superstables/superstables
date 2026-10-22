@@ -1469,6 +1469,11 @@ describe("round 2: the original is never bought again once any attempt may have 
     const { first, arcSeller, baseSeller } = await paidOrder("own-lost");
     expect(first.code, all(first)).toBe(0);
     renameSync(opJournal("own-lost"), `${opJournal("own-lost")}.away`);
+    // a rail script run by hand, with the mark gone with the journal: the recovery record still keeps the original
+    const early = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "own-lost"]);
+    expect(early.code, all(early)).toBe(3);
+    expect(early.result.reason).toMatch(/recovery record says so/);
+    expect(baseSeller.creds).toEqual([]);
     const again = await buy(baseSeller.url, { op: "own-lost" });
     expect(again.result, all(again)).toMatchObject({ op: aop("own-lost"), chain: "arc-testnet", state: "settled", paid: true });
     expect(baseSeller.creds).toEqual([]);
