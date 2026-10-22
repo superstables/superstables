@@ -90,7 +90,7 @@ describe("wait --site that is not the site the approval was made on", () => {
 
   for (const [what, over] of [
     ["a stored pre-send refusal", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
-    // the shapes a reviewer found where a stored refusal is not proof that nothing was sent
+    // shapes where a stored refusal is not proof that nothing was sent
     ["an owner-mismatch refusal that names the site's transaction hashes only in its reason", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "that account's wallet reported grant 0xabc and fund 0xdef" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
     ["a buy-once refusal followed by payment evidence in its record", { command: "buy-once", state: "final", seen: { hashes: ["0xabc"], paid: false }, final: { code: 3, result: { ok: false, command: "buy-once", state: "refused_precheck", paid: false, tx: {}, final: true } }, hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: undefined } }],
   ] as const) {

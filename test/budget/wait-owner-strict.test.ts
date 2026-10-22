@@ -229,3 +229,55 @@ describe("an owner approval's record that is damaged after wait read it", () => 
     expect(JSON.parse(readFileSync(given.path, "utf8")).abandoned).toBeTruthy();
   }, 60_000);
 });
+
+// An owner approval can record a second request: recover asks the owner twice (the rest of the allowance, then gas), and its worker stores
+// the second request's id and link over the first. That record is still the same approval, so wait shows the new link rather than
+// answering unknown. Only a decision about one request compares its id: asking the site to cancel it and a restart that takes it over (both
+// above, "a record of another hosted request").
+describe("an owner approval whose worker recorded a second request after wait read it", () => {
+  const FIRST = "http://127.0.0.1:9/approve/budget/ba_test0001";
+  const SECOND = "http://127.0.0.1:9/approve/budget/ba_second0002";
+  /** A running worker: a process of its own group whose identity the record names. */
+  const worker = () => {
+    const child = spawn("sleep", ["600"], { detached: true, stdio: "ignore" });
+    return { pid: child.pid!, ...createIdentitySource().fields(child.pid!) };
+  };
+  const stop = (pid: number) => { try { process.kill(-pid, "SIGKILL"); } catch { /* stopped */ } };
+  const second = (r: any) => ({ ...r, url: SECOND, earlierUrls: [FIRST], hosted: { ...r.hosted, requestId: "ba_second0002", matchCode: "GHI-JKL" } });
+
+  for (const read of [1, 2]) {
+    it(`wait --shown, the second request recorded right after read ${read}: still waiting for the owner, with the new link`, async () => {
+      const live = worker();
+      try {
+        const { id, path, record } = open({ ...live, url: FIRST, hosted: { ...HOSTED, kind: "revoke" } });
+        const written = JSON.stringify(second(record));
+        const replacement = join(home, "rewrite.json");
+        writeFileSync(replacement, written);
+        const run = await budget(["wait", "--id", id, "--shown", "--timeout", "0"], "x\n", { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: String(read) });
+        sentinel(run);
+        expect(run.code, run.stderr).toBe(0);
+        expect(run.result).toMatchObject({ state: "waiting_owner", final: false, id, url: SECOND });
+        expect(readFileSync(path, "utf8"), "the file is left as found").toBe(written);
+      } finally {
+        stop(live.pid);
+      }
+    }, 60_000);
+  }
+
+  it("wait --abandon, the second request recorded right after the command's first read: the give-up names the second request", async () => {
+    const live = worker();
+    try {
+      const { id, path, record } = open({ ...live, url: FIRST, hosted: { ...HOSTED, kind: "revoke" } });
+      const replacement = join(home, "rewrite.json");
+      writeFileSync(replacement, JSON.stringify(second(record)));
+      const run = await budget(["wait", "--id", id, "--abandon", "--timeout", "0"], `${id} abandon\n`, { REWRITE_RECORD_AFTER_READ: replacement, REWRITE_RECORD_AFTER_READ_N: "1" });
+      sentinel(run);
+      expect(run.code, run.stderr).toBe(5);
+      expect(run.result).toMatchObject({ state: "unknown", final: true, id, url: SECOND });
+      expect(run.result.next).toMatch(/request ba_second0002 /);
+      expect(JSON.parse(readFileSync(path, "utf8")).abandoned).toMatchObject({ requestId: "ba_second0002" });
+    } finally {
+      stop(live.pid);
+    }
+  }, 60_000);
+});
