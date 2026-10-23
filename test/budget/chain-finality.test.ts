@@ -422,7 +422,7 @@ it("keeps budget Tempo receipt inclusion unreadable without a canonical committe
 });
 
 
-describe("round 2: EVM landed results and recovery", () => {
+describe("EVM landed results and recovery", () => {
   it.each(["missing", "reverted"])("keeps earlier paid inclusion unknown when the pull becomes %s", async (later) => {
     const module = await ops();
     rpc.getBlock.mockImplementation(async ({ blockNumber }) => ({ number: blockNumber ?? 110n, timestamp: 2000n, hash: BLOCK_HASH }));
@@ -504,7 +504,7 @@ describe("round 2: EVM landed results and recovery", () => {
   });
 });
 
-describe("round 2: Solana complete history and resumable fallback", () => {
+describe("Solana complete history and resumable fallback", () => {
   it.each(["missing", "failed"])("keeps earlier paid inclusion uncertain when its transaction becomes %s", async (later) => {
     const conn = solRpc("finalized");
     conn.getSignatureStatuses.mockResolvedValue({ context: { slot: 361 }, value: [{ confirmationStatus: "finalized", err: { InstructionError: [1, "Custom"] }, slot: 111 }] });

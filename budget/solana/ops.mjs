@@ -23,6 +23,7 @@ import { OPS_DIR, retryRead, sleep, formatUnits, connectionTo, rpcCall, solanaVe
 import { endpointId } from "../../src/core/rpc-endpoints.mjs";
 import { agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
 import { lockRecord } from "../op-lock.mjs";
+import { supersededWords } from "../recovery.mjs";
 
 export const OP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
@@ -357,6 +358,8 @@ const signersOf = (t) => t.transaction.message.accountKeys.filter((k) => k.signe
 //   {allow:false, reason, state, tx}   refuse; the caller prints it and exits 3
 export function gateExistingOp(rec) {
   if (!rec) return { allow: true };
+  // INVARIANT 1: an op that auto recovery superseded is never paid (the mark is written under this op's record lock)
+  if (rec.supersededBy) return { allow: false, state: "superseded", tx: null, reason: supersededWords(rec.op, rec.supersededBy) };
   const pending = ["submitted", "unknown"].includes(rec.state) || (rec.state === "refused_chain" && !rec.neverBroadcast);
   if (rec.state === "settled") {
     return { allow: false, state: "settled", tx: rec.tx ?? null, reason: `operation ${rec.op} is already settled (${rec.tx ?? "no tx id"}); use a new --op for a new purchase` };

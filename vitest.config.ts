@@ -37,6 +37,7 @@ const SLOW = [
   "test/budget/owner-page-facts-rails.test.ts",
   "test/budget/owner-rpc.test.ts",
   "test/budget/read-caps-cli.test.ts",
+  "test/budget/recovery-cli.test.ts",
   "test/budget/revoke-always.test.ts",
   "test/budget/rotate.test.ts",
   "test/budget/rpc-error-text.test.ts",

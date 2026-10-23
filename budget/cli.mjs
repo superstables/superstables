@@ -41,6 +41,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteText } from "./site.mjs";
+import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -732,7 +733,7 @@ function emit(code, fields) {
     log(`superstables budget: approval ${WORKER_ID}: ${interrupted ? "this worker was stopped" : "this worker ended before it had the request in hand"} and recorded no result; run budget wait again to check the approval`);
     process.exit(code);
   }
-  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "next", "reason"];
+  const order = ["command", "rail", "chain", "op", "state", "final", "chain_final", "proof", "paid", "delivered", "amount", "payTo", "offer", "remaining", "tx", "txUrl", "payer", "expiry", "expired", "refillsAt", "revoked", "atRisk", "agreement", "lastOwnerAction", "ownerRevokeFinal", "revocation", "owner", "agent", "oldAgent", "newAgent", "chains", "retired", "home", "approvals", "site", "rpc", "linked", "steps", "services", "id", "purchase", "service", "action", "url", "matchCode", "expires", "terms", "message_for_owner", "budget_spent", "pending", "abandonedAt", "finalityAbandonedAt", "inputs", "responseFile", "responseType", "responseBytes", "responseTruncated", "recovery", "evidence", "next", "reason"];
   if (WORKER_ID && fields.id === undefined) fields = { ...fields, id: WORKER_ID };
   if (OWNER_COMMANDS_LIST.includes(fields.command) && mayHaveSent(fields)) ({ code, fields } = afterSend(code, fields, checkCommand(fields)));
   fields = resultFacts(fields);
@@ -1067,7 +1068,7 @@ function railCommand(verb, f, extra = {}) {
     // the owner scripts open the owner page, which is TypeScript: they run under tsx
     const O = (s, a) => tsx("solana", `${s}.ts`, [...a, ...ownerOpts(f)]);
     switch (verb) {
-      case "buy": return S("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"]), ...opt("method", f.method), ...opt("body", f.body)]);
+      case "buy": return S("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"]), ...opt("method", f.method), ...opt("body", f.body), ...opt("recovery-order", f["recovery-order"]), ...opt("terms-reads", f["terms-reads"])]);
       // read only: buy's --check stops before it opens a key or signs anything
       case "preflight": return S("buy", ["--url", f.url, "--check", ...opt("method", f.method), ...opt("body", f.body)]);
       case "reconcile": return S("reconcile", ["--op", f.op]);
@@ -1081,6 +1082,8 @@ function railCommand(verb, f, extra = {}) {
       case "rotate-sweep": return S("rotate", ["--sweep"]);
       case "rotate-confirm-sweep": return S("rotate", ["--confirm", extra.signatures]);
       case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
+      // recovery: one request to the site, signed with the agent key (never a payment)
+      case "site-call": return O("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
     }
   }
   return evmCommand(verb, f, extra);
@@ -1090,7 +1093,7 @@ function railCommand(verb, f, extra = {}) {
 function evmCommand(verb, f, extra = {}) {
   const E = (script, args) => tsx("evm", `${script}.ts`, [...args, "--chain", f.chain]);
   switch (verb) {
-    case "buy": return E("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"])]); // GET only
+    case "buy": return E("buy", ["--url", f.url, "--max", f.max, "--op", f.op, ...opt("pay-to", f["pay-to"]), ...opt("recovery-order", f["recovery-order"]), ...opt("terms-reads", f["terms-reads"])]); // GET only
     case "reconcile": return E("reconcile", ["--op", f.op]);
     case "read": return E("read", []);
     case "preflight": return E("preflight", ["--url", f.url]);
@@ -1101,6 +1104,7 @@ function evmCommand(verb, f, extra = {}) {
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
     case "rotate-address": return E("rotate", ["--address"]);
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
+    case "site-call": return E("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
   }
 }
 const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, agent: r.agent ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
@@ -1555,7 +1559,316 @@ function journalAnswer(f, ctx) {
   return () => emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
 }
 
+
+// ---- auto recovery (recovery.mjs): evm and solana only -------------------------------------------------------------------
+// When the seller's terms could not be read (after the rail's bounded retries) and nothing was signed, the site's advice may
+// move the order to another chain or seller. The site advises; this process decides, enforces every limit, and pays through
+// the ordinary buy with the agent key inside that chain's own allowance. See budget/recovery.mjs for the rules.
+const recoverable = (f) => (f.rail === "evm" || f.rail === "solana") && Object.hasOwn(RECOVERY_CHAINS, f.chain) && RECOVERY_CHAINS[f.chain].rail === f.rail;
+/** A journal as the order's rail left it: whether it may exist, and its content when it is this op's journal. */
+const journalState = (f) => ({ present: journalPresent(f), journal: readJournal(f) });
+const TERMS_STAGES = new Set(["terms", "seller_unreachable", "seller_error"]);
+/** The rail's termsFailure as this process will use it: exactly the three fields, or nothing. */
+function railTermsFailure(rr) {
+  const t = rr?.termsFailure;
+  return t && typeof t === "object" && TERMS_STAGES.has(t.stage) && Number.isInteger(t.attempts_used) && t.attempts_used >= 1 && t.attempts_used <= 3
+    ? { stage: t.stage, detail: siteText(String(t.detail ?? ""), 120), attempts_used: t.attempts_used } : null;
+}
+
+const NOT_THIS_ORDER = {
+  another_request: "a journal for a different request than this order's attempt",
+  other_order: "a journal that names another auto-recovered order",
+  not_stamped: "a journal that may have signed without this order's stamp",
+};
+/**
+ * A journal at an attempt op's name that this order cannot claim (recovery.mjs notThisOrder): the order cannot tell what happened,
+ * so it is unknown and exit 5. It is never claimed as this order's payment, and nothing of the order is paid again.
+ */
+function collisionResult(f2, c2, why = "another_request") {
+  return { code: 5, fields: { ...c2, command: "buy", state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f2.rail} --chain ${f2.chain} --op ${f2.op} (never pay again for this order)`, reason: `operation ${f2.op} has ${NOT_THIS_ORDER[why] ?? NOT_THIS_ORDER.another_request}, so this order's outcome is unknown` } };
+}
+
+/** One attempt of a recovered order: the ordinary buy on another rail, chain or seller, under the attempt's op, answered instead of emitted. */
+async function attemptBuy(f2, ctx, orderRef) {
+  const c2 = { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op };
+  const refused = (reason, next) => ({ code: 3, unsigned: true, fields: { ...c2, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, reason, next } });
+  const gaps = setupGaps(f2);
+  if (gaps.problem) return refused(gaps.problem, "nothing was signed or paid");
+  if (gaps.missing.length) return refused(`${noBudgetWords(f2, gaps)}. Nothing was signed or paid`, "nothing was signed or paid");
+  const retired = retiredAgentProblem(f2);
+  if (retired) return refused(retired, "ask the owner: this agent key was replaced");
+  const lock = lockOp(opsDir(f2.rail, f2.chain), f2.op);
+  if (!lock.ok) return { code: 5, unsigned: false, fields: { ...c2, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const before = journalState(f2);
+  // a journal at this op's name is this order's evidence only with this order's stamp; another request's or another order's journal,
+  // or a signed one without the stamp, is unknown: never run, never claimed
+  const signedBefore = before.present && !provesUnsigned(f2.rail, before);
+  const foreign = notThisOrder(before.journal, orderRef, f2.url, signedBefore);
+  if (before.present && before.journal && foreign) return { ...collisionResult(f2, c2, foreign), unsigned: false };
+  // an op that did something before is never run again: what its journal says stands (read with the lock this process holds)
+  if (signedBefore) return { ...(await reconciledFields(f2, c2, lock)), unsigned: false };
+  const running = run(railCommand("buy", { ...f2, "recovery-order": orderRef, "terms-reads": "1-3" }));
+  try { lock.holdAlso(currentChild); } catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
+  const r = await running;
+  if (r.signal || interrupted) {
+    const n = normalize("buy", f2, null, 1);
+    return { code: n.code, unsigned: false, fields: { ...n.fields, reason: `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before its result was final; it may have paid` } };
+  }
+  const rr = railResult(r.stdout, { last: true });
+  const after = journalState(f2);
+  if (!rr && r.code !== 2 && !before.present && !after.present) return refused(`the ${f2.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`, "nothing was signed or paid");
+  const n = normalize("buy", f2, rr, r.code);
+  // The rail's refusal describes this invocation, not the order: if the op's journal now shows a signature (a command settled it
+  // before the rail got its record lock), that journal's own result, reconciled with the lock held here, is the answer.
+  if (n.fields.state === "refused_precheck" && after.present && !provesUnsigned(f2.rail, after)) {
+    // a journal for another request, or one this order cannot claim (another order's, or signed without this order's stamp), is not
+    // this order's payment: unknown, never adopted, never learned as a payment
+    const foreignAfter = notThisOrder(after.journal, orderRef, f2.url, true);
+    if (foreignAfter) return { ...collisionResult(f2, c2, foreignAfter), unsigned: false };
+    return { ...(await reconciledFields(f2, c2, lock)), unsigned: false };
+  }
+  const unsigned = n.fields.state === "refused_precheck" && !railSending && provesUnsigned(f2.rail, after);
+  return { code: n.code, fields: n.fields, unsigned, termsFailure: unsigned ? railTermsFailure(rr) ?? undefined : undefined };
+}
+
+/** What reconcile reads for an op that did something: the answer, without emitting it. `held`: the op's lock this process holds. */
+async function reconciledFields(f2, c2, held = null) {
+  const lock = held ?? lockOp(opsDir(f2.rail, f2.chain), f2.op);
+  if (!lock.ok) return { code: 5, fields: { ...c2, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(lock, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const running = run(railCommand("reconcile", f2));
+  try { lock.holdAlso(currentChild); } catch {}
+  const r = await running;
+  const n = normalize("reconcile", f2, r.signal || interrupted ? null : railResult(r.stdout, { last: true }), r.code);
+  return { code: n.code, fields: { ...n.fields, command: "buy" } };
+}
+
+/**
+ * What an attempt op's own journal says, read while holding its record lock (the lock every rail takes before it signs). A held
+ * lock means a command may be signing: unknown (busy).
+ * One that may have signed is reconciled from the chain, with the lock let go for the rail.
+ */
+async function attemptView(a, ctx, orderRef) {
+  const f2 = { rail: a.rail, chain: a.chain, op: a.op, url: a.url };
+  const held = lockRecord(opsDir(f2.rail, f2.chain), f2.op);
+  if (!held.ok) return { exists: true, unsigned: false, busy: true, code: 5, fields: { command: "buy", rail: f2.rail, chain: f2.chain, op: f2.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(held, f2.op, f2.rail, f2.chain), reason: "op_in_progress" } };
+  const st = journalState(f2); // under the lock
+  held.release();
+  // a journal at an attempt op's name is this order's evidence only with this order's stamp or mark: another request's, another
+  // order's, or a signed one without the stamp is unknown, never claimed as this order's payment
+  const signed = st.present && !provesUnsigned(f2.rail, st);
+  const foreign = notThisOrder(st.journal, orderRef, f2.url, signed);
+  if (st.present && st.journal && foreign) return { exists: true, unsigned: false, collision: true, ...collisionResult(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op }, foreign) };
+  if (!signed) return { exists: st.present, unsigned: true };
+  return { exists: true, unsigned: false, ...(await reconciledFields(f2, { ...ctx, rail: f2.rail, chain: f2.chain, op: f2.op })) };
+}
+
+/** evm: the journal freezeOp creates for an attempt op that was never run (evm journals name the owner and the agent). */
+function evmJournalBase(chain) {
+  try {
+    const t = readFileSync(publicFile("evm", chain), "utf8");
+    const owner = /^B4_OWNER_ADDRESS=(.*)$/m.exec(t)?.[1]?.trim(), agent = /^B4_AGENT_ADDRESS=(.*)$/m.exec(t)?.[1]?.trim();
+    return owner && agent ? { rail: "evm", path: "approve", owner, agent, signed: false, delivered: null, notes: [], reason: "never run: auto recovery marked this operation" } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The site this buy's budget is linked to (set up with --hosted), as an origin, or null. */
+function recoverySite(f) {
+  const recorded = hostedSite(f);
+  if (!recorded) return null;
+  const checked = siteOrigin(recorded, "owner");
+  return checked.error ? null : checked.origin;
+}
+/** One request to the site, signed with the agent key by the rail's site-call script (never a payment). */
+async function signedCall(f, method, path, body) {
+  const origin = recoverySite(f);
+  if (!origin) return { network: "no site" };
+  const r = await run(railCommand("site-call", f, { site: origin, path, method, ...(method === "POST" ? { body: JSON.stringify(body) } : {}) }));
+  const out = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
+  const reply = out?.reply;
+  return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
+}
+/**
+ * What the site lists in GET /api/v1/budget/services, or null when it did not answer. The list is account-scoped, so the read is
+ * signed with the agent key (proof v2, GET, empty body). Read at most once per buy: before the retries and again for the advice.
+ */
+let featuresRead = null;
+const siteFeatures = (f) => (featuresRead ??= (async () => {
+  const reply = await signedCall(f, "GET", "/api/v1/budget/services");
+  return reply && reply.status === 200 && Array.isArray(reply.body?.features) ? new Set(reply.body.features.filter((x) => typeof x === "string").slice(0, 50)) : null;
+})());
+/**
+ * Whether auto recovery could start for this buy if its terms cannot be read, from what this machine knows before the buy: an
+ * evm or solana recovery chain, a budget linked to a site, a GET without a body, no --pay-to and a --max. Only such a buy reads the
+ * terms more than once, and only after the site said it offers recovery; any other buy reads them once, as without auto recovery.
+ */
+const recoveryCanFollow = (f) => recoverable(f) && f["pay-to"] === undefined && f.body === undefined && (f.method === undefined || String(f.method).toUpperCase() === "GET") && (atomicOf(f.max) ?? 0n) > 0n && recoverySite(f) !== null;
+
+/** What auto recovery needs from this process for buy `f` (recovery.mjs recoverOrder and adviseOrder `deps`). */
+function recoveryDeps(f, ctx) {
+  return {
+    f, log,
+    unsignedOriginal: () => provesUnsigned(f.rail, journalState(f)) && !railSending && !interrupted,
+    site: () => recoverySite(f),
+    // A read that fails, or lacks the feature, is today's behaviour.
+    features: () => siteFeatures(f),
+    // INVARIANT 2: a live allowance on each chain, read from the chain by this client (the rails' own read scripts)
+    funded: async () => {
+      const funded = new Map();
+      for (const [chain, info] of Object.entries(RECOVERY_CHAINS)) {
+        const there = { rail: info.rail, chain };
+        const gaps = setupGaps(there);
+        if (gaps.problem || gaps.missing.length) continue;
+        const s = await readBudget(there);
+        if (!s.ok || s.revoked || s.expired || (s.expiry && !(Date.parse(s.expiry) > Date.now()))) continue;
+        const left = atomicOf(s.atRisk ?? s.remaining);
+        if (left !== null && left > 0n) funded.set(chain, left);
+      }
+      return funded;
+    },
+    siteCall: (path, body) => signedCall(f, "POST", path, body),
+    freezeOp: (target, mark, o) => freezeOp(target, mark, { ...o, base: target.rail === "evm" ? evmJournalBase(target.chain) : null }),
+    attempt: (f2, orderRef) => attemptBuy(f2, ctx, orderRef),
+    attemptState: (a, orderRef) => attemptView(a, ctx, orderRef),
+  };
+}
+
+/**
+ * Recovery for this buy, or null. `rr` is the first attempt's RESULT when it refused with a termsFailure; null when this is a
+ * rerun of an op that has a recovery record. `advised`: the advice asked for before the terms were read again (adviseOrder), if
+ * it was. Whatever recoverOrder returns (recovery.mjs).
+ */
+async function recoveryFor(f, ctx, rr, advised) {
+  if (!recoverable(f)) return null;
+  const failure = rr ? railTermsFailure(rr) : null;
+  if (rr && !failure) return null;
+  return recoverOrder({ ...recoveryDeps(f, ctx), failure, advised });
+}
+
+/**
+ * The answer from the original op's own journal, when auto recovery found that nothing of its order was contacted and the original
+ * may have signed on its own (recovery.mjs { kind: "original" }): what a rerun of that op answers without auto recovery.
+ */
+function originalAnswer(f, ctx) {
+  const said = journalAnswer(f, ctx);
+  if (said) return said();
+  const reason = `operation ${f.op} may have signed on its own; its outcome is unknown`;
+  log(`superstables budget: ${reason}. Not paying again.`);
+  return emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason });
+}
+
+/** The answer when auto recovery could not mark an op of the order: unknown, final: false, never "not paid". */
+function frozeNot(ctx, f, stuck) {
+  const op = stuck?.op ?? f.op;
+  const reason = `auto recovery could not take over operation ${op} (${stuck?.why ?? "unknown"}): another command may be using or paying it, so the order's outcome is unknown`;
+  log(`superstables budget: ${reason}. Not paying again.`);
+  return emit(5, { ...ctx, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `wait for any buy of operation ${op} to end, then run this buy again with --op ${f.op} (never pay again for this order while its outcome is unknown)`, reason });
+}
+
+/**
+ * A rerun of an op whose order auto recovery took over. The original is never bought again; the answer is the order's (each op's
+ * own journal, read with reconcile), or, for a switch that signed nothing, carried on while its advice still holds. "Not paid"
+ * only when every op of the order was closed for good after its journal proved nothing signed; anything short of that is unknown.
+ */
+async function buyRecovered({ f, ctx, record }) {
+  ctx.op = f.op;
+  const unknown = (reason, next) => emit(5, { ...ctx, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next, reason });
+  const lock = lockOp(opsDir(f.rail, f.chain), f.op);
+  if (!lock.ok) return unknown("op_in_progress", lockNext(lock, f.op, f.rail, f.chain));
+  if (!record || record.unreadable) {
+    const reason = "auto recovery moved this order, and its record cannot be read: the order may have been paid on another operation, so its outcome is unknown";
+    log(`superstables budget: ${reason}. Not paying again.`);
+    return unknown(reason, `the owner checks ${join(STATE_DIR, "recovery")} and the agent's payments on chain; never pay again for this op`);
+  }
+  const again = await recoveryFor(f, ctx, null);
+  if (again?.kind === "result") return emit(again.code, again.fields);
+  if (again?.kind === "original") return originalAnswer(f, ctx);
+  if (again?.freezeFailed) return frozeNot(ctx, f, again.freezeFailed);
+  if (again?.kind !== "none" || again.closed !== true) {
+    return unknown("auto recovery moved this order, and its operations could not all be shown to be unsigned: its outcome is unknown", `run this buy again with --op ${f.op} later; never pay again for this order while its outcome is unknown`);
+  }
+  // Every op of the order showed nothing signed and is now closed for good: nothing was paid, and nothing of this order can be.
+  const reason = `auto recovery did not go ahead; no signature is recorded for ${f.op} or any operation of its order, and all of them are closed. ${f.op} is never paid: buy again with a new --op`;
+  log(`superstables budget: ${reason}.`);
+  return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, ...(again.recovery ? { recovery: again.recovery } : {}), next: "use a new --op for a new purchase", reason });
+}
+
+/**
+ * One run of the rail's buy for `f` under the op lock this process holds: { done } when its answer is already decided (a signal, a
+ * rail that ended without a RESULT), else { rr, n }, the rail's RESULT and its normalized answer. `reads`: the rail's --terms-reads.
+ */
+async function railBuy(f, ctx, lock, reads) {
+  const journalBefore = journalPresent(f);
+  const running = run(railCommand("buy", { ...f, "terms-reads": reads }));
+  try { lock.holdAlso(currentChild); }
+  catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
+  const r = await running;
+  // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
+  // before it signs or sends anything, the rail has exited, and this process holds the op's lock, so nothing was signed.
+  // A refusal with the op still unused, not an unknown that sends the caller to a reconcile with no journal to read.
+  if (!journalBefore && !journalPresent(f) && (r.signal || interrupted)) {
+    const reason = `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before it recorded a purchase. Nothing was signed or paid`;
+    log(`superstables budget: ${reason}.`);
+    return { done: () => emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: "this --op is still unused and nothing was signed. Buy again only if the purchase is still wanted", reason }) };
+  }
+  // Stopped by a signal (this command or its rail script) after the journal existed: it may have paid, whatever its
+  // stdout says. Always unknown.
+  if (r.signal || interrupted) {
+    const n = normalize("buy", f, null, 1);
+    return { done: () => emit(n.code, { ...n.fields, reason: `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before its result was final; it may have paid` }) };
+  }
+  const rr = railResult(r.stdout, { last: true });
+  // Ended on its own without a RESULT and without ever writing this op's journal: every rail writes the journal before it
+  // signs or sends anything, and this process holds the op's lock, so nothing was signed. A refusal, not an unknown.
+  if (!rr && r.code !== 2 && !journalBefore && !journalPresent(f)) {
+    const reason = `the ${f.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`;
+    log(`superstables budget: refused: ${reason}.`);
+    return { done: () => emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `fix what reason names (superstables budget doctor --rail ${f.rail}${chainFlag(f)} checks keys, RPC and balances), then buy again; this --op is still unused`, reason }) };
+  }
+  return { rr, n: normalize("buy", f, rr, r.code) };
+}
+
+/**
+ * Whether this op's journal still proves nothing signed, read under the op's record lock: rail scripts run by hand do not take this
+ * command's lock, but every rail holds the record lock from before its terms read until its last write. A lock that is held, or
+ * cannot be taken, is { busy }: the command holding it may be paying.
+ */
+function unsignedUnderLock(f) {
+  let held;
+  try { held = lockRecord(opsDir(f.rail, f.chain), f.op); } catch (err) { return { busy: { details: `the lock of operation ${f.op} could not be taken (${err?.message ?? err})` } }; }
+  if (!held.ok) return { busy: held };
+  try { return { unsigned: provesUnsigned(f.rail, journalState(f)) }; } finally { try { held.release(); } catch { /* released with the process */ } }
+}
+
+/** The answer after the site was asked: unknown while a command holds the op, the journal's answer once it may have signed, or null. */
+function signedMeanwhile(f, ctx) {
+  const now = unsignedUnderLock(f);
+  if (now.busy) {
+    log(`superstables budget: another process is working on operation ${f.op}. ${now.busy.details}. This command signed nothing; the other process may have paid.`);
+    return () => emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(now.busy, f.op, f.rail, f.chain), reason: "op_in_progress" });
+  }
+  return now.unsigned ? null : () => originalAnswer(f, ctx);
+}
+
 async function buy({ f, ctx }) {
+  // An order that auto recovery took over belongs to its recovery record, and the answer comes from the candidate's journal. This
+  // runs BEFORE the original's own setup, key and retirement refusals: those must never make a recovered order look unpaid.
+  if (f.op && recoverable(f)) {
+    const marked = readJournal(f)?.supersededBy;
+    // An attempt op of an order carries the order's original (root) in its mark: the order is answered from there, never this op alone.
+    const root = marked?.root;
+    if (root && typeof root === "object" && /^[A-Za-z0-9._-]{1,64}$/.test(String(root.op)) && (root.op !== f.op || root.rail !== f.rail || root.chain !== f.chain) && recoverable(root)) {
+      const fr = { ...f, rail: root.rail, chain: root.chain, op: root.op };
+      return buyRecovered({ f: fr, ctx: { ...ctx, rail: root.rail, chain: root.chain }, record: readRecord(fr.rail, fr.chain, fr.op) });
+    }
+    const record = readRecord(f.rail, f.chain, f.op);
+    // The op belongs to the order once its own journal carries the mark (the rail boundary's truth), and whenever its record owns it
+    // (recovery.mjs recordOwns): a switch waiting to be carried on, an attempt that was answered or may have paid, an original that
+    // was marked, even if its journal is gone. Only a record whose switch never got past the original's mark owns nothing: the op
+    // is answered, and bought, as any other, from its own journal.
+    if (marked || recordOwns(record)) return buyRecovered({ f, ctx, record });
+  }
   const earlier = f.op ? journalAnswer(f, ctx) : undefined;
   if (earlier) return earlier();
   const retired = retiredAgentProblem(f) || await retiredKeyFileProblem(f);
@@ -1584,34 +1897,51 @@ async function buy({ f, ctx }) {
   // read again under the lock: a buy that ran meanwhile may have written it
   const now = journalAnswer(f, ctx);
   if (now) return now();
-  const journalBefore = journalPresent(f);
-  const running = run(railCommand("buy", f));
-  try { lock.holdAlso(currentChild); }
-  catch (err) { log(`superstables budget: could not record the rail child: ${err.message}; keeping the operation lock until it exits`); }
-  const r = await running;
-  // Stopped (by a signal or on its own) before its rail ever wrote this op's journal: every rail writes the journal
-  // before it signs or sends anything, the rail has exited, and this process holds the op's lock, so nothing was signed.
-  // A refusal with the op still unused, not an unknown that sends the caller to a reconcile with no journal to read.
-  if (!journalBefore && !journalPresent(f) && (r.signal || interrupted)) {
-    const reason = `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before it recorded a purchase. Nothing was signed or paid`;
-    log(`superstables budget: ${reason}.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: "this --op is still unused and nothing was signed. Buy again only if the purchase is still wanted", reason });
+  // A buy that auto recovery can follow reads the terms once first. Only when that read failed before anything was signed, and the
+  // site's advice says the owner's recovery policy is on, are they read again (reads 2 and 3). A buy without the site, whose site
+  // does not offer recovery, or whose advice is refused, off or unavailable, reads them once, exactly as without auto recovery.
+  const canFollow = recoveryCanFollow(f);
+  let ran = await railBuy(f, ctx, lock, canFollow ? "1" : undefined);
+  if (ran.done) return ran.done();
+  let advised;
+  if (canFollow && ran.n.fields.state === "refused_precheck" && !railSending && !interrupted) {
+    const t = railTermsFailure(ran.rr);
+    const raw = ran.rr?.termsFailure;
+    if (t && t.attempts_used === 1 && raw?.final !== true) {
+      // asked once; recovery uses the same answer if reads 2 and 3 fail too
+      advised = await adviseOrder({ ...recoveryDeps(f, ctx), failure: t });
+      // the rail scripts do not take this command's lock: one run by hand may be paying, or have paid, this op while the site was asked
+      const meanwhile = signedMeanwhile(f, ctx);
+      if (meanwhile) return meanwhile();
+      const wait = advised.ok ? nextWait(1, typeof raw?.retry_after === "string" ? raw.retry_after : null) : null;
+      if (wait !== null && !interrupted) {
+        await new Promise((r) => setTimeout(r, wait));
+        ran = await railBuy(f, ctx, lock, "2-3");
+        if (ran.done) return ran.done();
+      }
+    }
   }
-  // Stopped by a signal (this command or its rail script) after the journal existed: it may have paid, whatever its
-  // stdout says. Always unknown.
-  if (r.signal || interrupted) {
-    const n = normalize("buy", f, null, 1);
-    return emit(n.code, { ...n.fields, reason: `the buy was stopped by a signal${r.signal ? ` (${r.signal})` : ""} before its result was final; it may have paid` });
+  const { rr, n } = ran;
+  let waited = advised !== undefined;
+  // The terms could not be read and nothing was signed: auto recovery may move this order (recovery.mjs). Anything else, or a
+  // site that does not offer it, is answered exactly as before.
+  if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
+    waited = true;
+    const moved = await recoveryFor(f, ctx, rr, advised);
+    if (moved?.kind === "result") return emit(moved.code, moved.fields);
+    if (moved?.kind === "original") return originalAnswer(f, ctx);
+    // an op of the order could not be marked: it may be in use or may have signed. Its own journal decides, later; now it is unknown.
+    if (moved?.freezeFailed) return frozeNot(ctx, f, moved.freezeFailed);
+    // the order moved and ended unpaid: this op and every op of the order are closed for good
+    if (moved?.closed) n.fields.next = "use a new --op for a new purchase: this --op and every operation of its order are closed and never paid";
+    if (moved?.recovery) n.fields.recovery = moved.recovery;
   }
-  const rr = railResult(r.stdout, { last: true });
-  // Ended on its own without a RESULT and without ever writing this op's journal: every rail writes the journal before it
-  // signs or sends anything, and this process holds the op's lock, so nothing was signed. A refusal, not an unknown.
-  if (!rr && r.code !== 2 && !journalBefore && !journalPresent(f)) {
-    const reason = `the ${f.rail} buy stopped before it recorded a purchase${r.error ? `: ${r.error}` : ` (exit ${r.code})`}. Nothing was signed or paid`;
-    log(`superstables budget: refused: ${reason}.`);
-    return emit(3, { ...ctx, state: "refused_precheck", paid: false, delivered: false, amount: "0", remaining: null, tx: {}, next: `fix what reason names (superstables budget doctor --rail ${f.rail}${chainFlag(f)} checks keys, RPC and balances), then buy again; this --op is still unused`, reason });
+  // after the site was asked, an unpaid refusal stands only while no command holds this op and its journal still shows nothing
+  // signed: a rail script run by hand meanwhile, or the further reads finding it paid, is answered unknown or from the journal
+  if (waited && n.fields.paid === false) {
+    const meanwhile = signedMeanwhile(f, ctx);
+    if (meanwhile) return meanwhile();
   }
-  const n = normalize("buy", f, rr, r.code);
   emit(n.code, n.fields);
 }
 

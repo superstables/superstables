@@ -347,7 +347,7 @@ describe("endpoint sets", () => {
   });
 });
 
-// Probes from the round-1 review, kept as permanent tests.
+// A lying endpoint, probed from every side.
 describe("a liar can delay a verdict but cannot decide one", () => {
   const evm = (fakes: Record<string, Fake>, extra: Record<string, unknown> = {}) =>
     agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), call: transport(fakes).call, chainId: 84532, finality: "finalized", read: read(fakes), ...extra });
@@ -482,7 +482,7 @@ describe("canonical accepts plain data only", () => {
   });
 });
 
-describe("endpoint sets, round 1 fixes", () => {
+describe("endpoint sets: pins, quorum and agreement", () => {
   afterEach(() => noPins());
 
   it("pinning one URL does not lower the quorum: single belongs to the chain's table", () => {

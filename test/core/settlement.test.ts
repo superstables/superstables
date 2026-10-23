@@ -227,7 +227,7 @@ describe("findAuthorization", () => {
   };
 
   it("never takes a cancellation that a reorganisation replaced with the payment as final, whatever the final block says", async () => {
-    // As the round-3 review reproduced it, on Polygon Amoy: the cancellation is read above the finalized block; then a
+    // As seen on Polygon Amoy: the cancellation is read above the finalized block; then a
     // reorganisation replaces it with the facilitator's payment of the same authorization, and finality passes it.
     chain = await startFakeBaseSepolia();
     const token = POLYGON_AMOY.usdc.address;

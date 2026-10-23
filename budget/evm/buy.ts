@@ -10,7 +10,7 @@ import "./cli-guard.mjs";
 //   6. Pull landed but no settlement: the open authorization is cancelled on chain and the price goes back to the owner
 //      (after a fresh chain read). It never pays again.
 //
-// npx tsx budget/evm/buy.ts [--chain <name>] --url <seller url> --max <usdc> [--pay-to <address>] [--op <id>] [--quote-only] [--http-timeout <seconds>]
+// npx tsx budget/evm/buy.ts [--chain <name>] --url <seller url> --max <usdc> [--pay-to <address>] [--op <id>] [--quote-only] [--http-timeout <seconds>] [--recovery-order <ref>] [--terms-reads <n>|<n>-<m>]
 // Exit codes (same on every rail): 0 settled and delivered (or quoted), 1 failed or refused by the chain, 2 bad usage,
 // 3 refused before anything was signed, 4 paid but not delivered, 5 outcome unknown (reconcile; never pay again).
 import { isAddress } from "viem";
@@ -20,6 +20,7 @@ import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBala
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
+import { RECOVERY_ORDER, termsReadsOf } from "../recovery.mjs";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
 
 const url = arg("url")!;
@@ -32,6 +33,14 @@ const payTo = arg("pay-to");
 if (payTo && !isAddress(payTo)) usageError(`--pay-to "${payTo}" is not an address`);
 const op = checkOpId(arg("op") ?? newOpId());
 const httpTimeoutMs = posInt("http-timeout", "60", 600) * 1000;
+// set by the dispatcher for an attempt of an auto-recovered order (recovery.mjs): the journal is stamped with the order
+const recoveryOrder = arg("recovery-order");
+if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageError("--recovery-order is an order reference (letters, digits and -, at most 64)");
+// set by the dispatcher only for a buy that auto recovery can follow: which reads of the seller's terms this run makes (1 to 3).
+// Without it the terms are read once and no termsFailure is reported, exactly as without auto recovery.
+const termsReadsText = arg("terms-reads");
+const termsReads = termsReadsText === undefined ? undefined : termsReadsOf(termsReadsText);
+if (termsReads === null) usageError("--terms-reads is a read number or range from 1 to 3, such as 1, 1-3 or 2-3");
 
 const sym = GAS.symbol;
 const c = await agentCtx();
@@ -41,7 +50,7 @@ await assertReadChain("buy"); // a wrong chain is refused before the first balan
 const before = await bal();
 console.log(`operation: ${op}`);
 console.log(`before: owner ${usdc(before.owner)} ${SYM}, agent ${usdc(before.agent)} ${SYM}, agent native ${GAS.symbol} ${gasFmt(before.agentEth)}`);
-const r = await purchase({ url, c, op, max, payTo, quoteOnly: flag("quote-only"), httpTimeoutMs });
+const r = await purchase({ url, c, op, max, payTo, quoteOnly: flag("quote-only"), httpTimeoutMs, recoveryOrder, termsReads });
 const j = r.journal;
 
 await new Promise((res) => setTimeout(res, 3000)); // let the public RPC catch up before the closing balance read
@@ -61,6 +70,8 @@ if (j.state === "settled" && j.delivered) console.log("PURCHASE OK.");
 else if (j.state === "settled") console.log("PURCHASE SETTLED ON CHAIN BUT THE SELLER DID NOT DELIVER. Not paying again.");
 else if (j.state === "quoted") console.log("QUOTE OK. Nothing was signed or sent.");
 else if (j.state === "refused_chain") console.log(refusedChainWords(j.pullTx).line);
+else if (j.state === "refused_precheck" && (j as any).supersededBy?.closed) console.log("PURCHASE REFUSED. Auto recovery closed this operation: its order ended without a payment, and it is never paid.");
+else if (j.state === "refused_precheck" && (j as any).supersededBy) console.log("PURCHASE REFUSED. This operation was superseded by auto recovery and is never paid; read the operation the order continues as.");
 else if (j.state === "refused_precheck") console.log("PURCHASE REFUSED. Nothing was paid.");
 else if (j.state === "failed" && j.returned) console.log(`PURCHASE DID NOT SETTLE. The pulled ${j.returned} ${SYM} was returned to the owner. Never re-paid.`);
 else console.log(`PURCHASE OUTCOME NOT CONFIRMED (or it failed). Not retrying. Read the RESULT line, then run ${cmd("reconcile.ts", `--op ${j.op}`)}.`);
@@ -84,5 +95,5 @@ if (j.pullTx && r.response && r.status !== undefined && r.status !== 402) {
     console.log(`could not save the response: ${oneLine(e?.message ?? e, 300)}`);
   }
 }
-console.log(await resultLine(j, "buy", saved ?? {}));
+console.log(await resultLine(j, "buy", { ...(saved ?? {}), ...(r.termsFailure ? { termsFailure: r.termsFailure } : {}) }));
 process.exit(r.exitCode);

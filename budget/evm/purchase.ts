@@ -25,6 +25,7 @@ import { wrapFetchWithPayment, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme, authorizationTypes } from "@x402/evm";
 import { ExactEvmSchemeV1 } from "@x402/evm/v1";
 import { refusedChainWords } from "../next-steps.mjs";
+import { collides, failureFact, otherOrder, readTerms, recordOwnsWords, reservedNameProblem, supersededNext, supersededWords, termsFailureOf, timedOut } from "../recovery.mjs";
 import { nonceReferral, referralNonce } from "../../src/core/referral-nonce.ts";
 import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
@@ -92,6 +93,42 @@ export function capChallengeBody(inner: typeof fetch): typeof fetch {
     // the body was decoded by fetch and may have been cut: these no longer describe it
     for (const h of ["content-length", "content-encoding", "transfer-encoding"]) headers.delete(h);
     return new Response(bytes, { status: 402, statusText: r.statusText, headers });
+  };
+}
+
+/** What the unpaid read of the seller's terms came to once the retries ended: set only when the last read failed. */
+export type TermsOutcome = { failure: { stage: string; detail: string; attempts_used: number } | null };
+
+/**
+ * Wraps `fetch` so that the UNPAID read of the seller's terms is tried at most 3 times (250 ms, then 1 s, with jitter, never
+ * before the seller's Retry-After up to 30 s; recovery.mjs readTerms) when it fails before any payment exists: no answer, a
+ * 5xx, a 429, or a 402 whose payment requirements cannot be read. A read that ran out of time is not tried again, and all the
+ * reads together take no longer than `timeoutMs` (--http-timeout), the time one read takes without retries. A request that
+ * carries a payment is passed on as it is, once, whatever it answers: a payment is never retried here. The last answer is
+ * returned as it came (or its error thrown), so everything after behaves as it did before; `outcome.failure` says the read
+ * failed for good. `inner` must honour `init.signal` (purchase's timedFetch does).
+ */
+export function withTermsRetry(inner: typeof fetch, outcome: TermsOutcome, opts: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number; timeoutMs?: number; firstRead?: number; maxReads?: number } = {}): typeof fetch {
+  return async (input: any, init?: any) => {
+    const request = new Request(input, init);
+    if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) { outcome.failure = null; return inner(request); }
+    // only a GET without a body is read again: an application request may not be safe to repeat just because no payment exists yet
+    if (request.method !== "GET" || request.body !== null) { outcome.failure = null; return inner(request); }
+    let last: Response | undefined;
+    let thrown: unknown;
+    const read = await readTerms(async (_attempt: number, leftMs?: number) => {
+      if (last) await last.body?.cancel().catch(() => {});
+      last = undefined; thrown = undefined;
+      let r: Response;
+      try { r = await inner(request.clone(), leftMs === undefined ? undefined : { signal: AbortSignal.timeout(leftMs) }); } catch (e: any) { thrown = e; return { failure: termsFailureOf({ error: String(e?.cause?.code ?? e?.message ?? e), timeout: timedOut(e) }) }; }
+      last = r;
+      // the 402 answer was already cut to 64 KB by capChallengeBody; reading a copy leaves the answer itself whole
+      const bodyText = r.status === 402 ? await r.clone().text().catch(() => "") : "";
+      return { failure: termsFailureOf({ status: r.status, retryAfter: r.headers.get("retry-after"), paymentRequired: r.headers.get("payment-required"), bodyText }) };
+    }, opts);
+    outcome.failure = read.ok ? null : failureFact(read.failure, read.attemptsUsed);
+    if (last) return last;
+    throw thrown;
   };
 }
 
@@ -221,6 +258,14 @@ export type PurchaseOpts = {
   /** give up on the paid request after this many ms (the chain is read after that; the payment is never retried) */
   httpTimeoutMs?: number;
   tag?: string;
+  /** an attempt of an auto-recovered order (the dispatcher's --recovery-order): the journal names the order, and an op whose journal
+   *  another command wrote is refused before anything is read or signed */
+  recoveryOrder?: string;
+  /** the dispatcher's --terms-reads, only for a buy auto recovery can follow: which reads of the seller's terms this run makes
+   *  (recovery.mjs readTerms), and that a failed read is reported as termsFailure. Without it the terms are read once, as before. */
+  termsReads?: { first: number; last: number };
+  /** tests: the retry's clock and randomness (recovery.mjs readTerms) */
+  retry?: { sleep?: (ms: number) => Promise<void>; random?: () => number; now?: () => number };
 };
 
 export type PurchaseResult = {
@@ -242,6 +287,8 @@ export type PurchaseResult = {
   response?: { bytes: Buffer; truncated: boolean; contentType?: string }; // what the seller answered (up to MAX_RESPONSE_BYTES): buy saves it
   error?: string;
   exitCode: number; // ops.ts exitCodeFor: 0 settled and delivered (or quoted); 1 failed / refused by the chain; 3 refused before signing; 4 paid, not delivered; 5 unknown
+  /** The seller's terms could not be read after the bounded retries, before any payment existed (recovery.mjs). */
+  termsFailure?: { stage: string; detail: string; attempts_used: number };
 };
 
 /** Thrown by the signer during the dry run before the pull: carries what it found wrong with the payment, or null. */
@@ -294,6 +341,13 @@ const gasStop = (g: GasNeed) =>
 export { exitCodeFor };
 
 export async function purchase(o: PurchaseOpts): Promise<PurchaseResult> {
+  // An op an order registered as its attempt is reserved for that order: refused before any lock, journal or signature, journal or not
+  const reserved = reservedNameProblem("evm", CFG.key, o.op, o.recoveryOrder);
+  if (reserved) {
+    console.log(oneLine(reserved, 2000));
+    const j = newJournal({ op: o.op, url: o.url, owner: o.c.owner, agent: (o.agent ?? o.c.wallet).account.address, token: USDC, max: usdc(o.max), expectPayTo: o.payTo });
+    return { state: "refused_precheck", ok: false, journal: { ...j, state: "refused_precheck", reason: reserved, next: "use another --op" }, pulled: 0n, signedPayment: false, exitCode: 3 };
+  }
   const lock = requireRecordLock(OPS_DIR, o.op);
   const hold: { key: { release(): void } | null } = { key: null };
   try {
@@ -353,12 +407,49 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // An operation id that already did something is never run again (rule 5).
   const prior = readJournal(o.op);
+  // A journal for another request at an attempt op's name is a collision. It is checked FIRST, under the record lock, before any state
+  // of that journal is looked at: whatever it says (even settled) is not this order's, and it is left exactly as it is.
+  if (o.recoveryOrder !== undefined && prior && collides(prior, url)) {
+    const why = `operation ${o.op} has a journal for a different request than this order's attempt, so its outcome is unknown`;
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
+  }
   if (prior && !REUSABLE.includes(prior.state)) {
     const why = PENDING.includes(prior.state)
       ? `operation ${o.op} is ${prior.state}: run "${cmd("reconcile.ts", `--op ${o.op}`)}" and read the chain before doing anything else`
       : `operation ${o.op} already ended as ${prior.state}: use a new --op for a new purchase`;
     log(`REFUSED: ${why}`);
     return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: PENDING.includes(prior.state) ? `run reconcile --op ${o.op}` : "use a new --op" }, exitCode: 3 };
+  }
+
+  // INVARIANT 1: an op that auto recovery superseded is never paid, whoever starts it (this check runs under the op's record lock)
+  if ((prior as any)?.supersededBy) {
+    const why = supersededWords(o.op, (prior as any).supersededBy);
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: supersededNext((prior as any).supersededBy), supersededBy: (prior as any).supersededBy } as any, exitCode: 3 };
+  }
+  // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
+  const owned = recordOwnsWords("evm", CFG.key, o.op); // whatever the flag says: the record's ownership does not depend on it
+  if (owned) {
+    log(`REFUSED: ${owned}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: owned, next: "rerun the original buy through superstables budget buy with the same --op" }, exitCode: 3 };
+  }
+
+  // An attempt of an auto-recovered order stamps its journal with the order (the stamp is kept on every rewrite)
+  if (o.recoveryOrder !== undefined) {
+    // an op whose journal names another order is never run as this order's attempt: nothing is read or signed
+    if (otherOrder(prior, o.recoveryOrder)) {
+      const why = `operation ${o.op} belongs to another auto-recovered order; this order does not run it`;
+      log(`REFUSED: ${why}`);
+      return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "nothing was signed or sent" }, exitCode: 3 };
+    }
+    // the stamp is written now and kept on every rewrite: it is what makes this journal the order's evidence
+    (j as any).recoveryOf = { order_ref: o.recoveryOrder };
+  } else if ((prior as any)?.recoveryOf) {
+    // an op that belongs to an auto-recovered order is run only as that order's attempt (--recovery-order with its reference)
+    const why = `operation ${o.op} belongs to an auto-recovered order; it is run only by that order. Rerun the original buy of the order, which reads and continues it`;
+    log(`REFUSED: ${why}`);
+    return { ...res, state: "refused_precheck", journal: { ...j, state: "refused_precheck", reason: why, next: "rerun the original buy of the order with its own --op" }, exitCode: 3 };
   }
 
   // Frozen for this operation before anything is signed: a later run under the same --op pays under the same referral.
@@ -580,7 +671,12 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // one deadline per request: a seller that never answers must not hang the purchase. No redirects: the paid retry
   // carries PAYMENT-SIGNATURE, which fetch would take to whatever host a redirect names.
-  const timedFetch: typeof fetch = capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
+  // Only a buy that auto recovery can follow (the dispatcher's --terms-reads) reads the terms more than once and reports why they
+  // could not be read; any other buy reads them once, exactly as without auto recovery.
+  const terms: TermsOutcome = { failure: null };
+  const timedFetch: typeof fetch = o.termsReads
+    ? withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, firstRead: o.termsReads.first, maxReads: o.termsReads.last, ...o.retry })
+    : capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
   const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
   let r: Response;
   try {
@@ -597,6 +693,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       return settleFromChain(`error after the pull was sent (${st?.reason ?? res.error}); reading the chain, never re-paying`);
     }
     log(res.error);
+    if (terms.failure && !j.pullTx && !j.signed) res.termsFailure = terms.failure;
     return finish("refused_precheck", `seller unreachable or no usable challenge: ${res.error}`, "nothing was signed or sent");
   }
 
@@ -618,6 +715,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   if (!j.pullTx) {
     // the seller never asked for payment: nothing was pulled or signed
+    if (terms.failure && !j.signed) res.termsFailure = terms.failure;
     return finish("refused_precheck", `seller did not ask for payment (HTTP ${r.status})`, "nothing was signed or sent");
   }
 

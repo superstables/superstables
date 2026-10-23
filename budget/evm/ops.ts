@@ -158,7 +158,7 @@ export function exitCodeFor(state: OpState, delivered: boolean | null): number {
 /** The seller's saved answer to a paid request (buy.ts): the file, its content type, its size, and whether it was cut. */
 export type ResponseInfo = { responseFile: string; responseType: string | null; responseBytes: number; responseTruncated: boolean };
 
-export async function resultLine(j: Journal, command: "buy" | "reconcile", extra: { remaining?: string } & Partial<ResponseInfo> = {}): Promise<string> {
+export async function resultLine(j: Journal, command: "buy" | "reconcile", extra: { remaining?: string; termsFailure?: { stage: string; detail: string; attempts_used: number } } & Partial<ResponseInfo> = {}): Promise<string> {
   let rem = extra.remaining;
   if (rem === undefined) {
     try { rem = usdc(await allowanceOf(j.owner, j.agent)); } catch {}
@@ -188,6 +188,8 @@ export async function resultLine(j: Journal, command: "buy" | "reconcile", extra
   };
   if (j.agentFeeWei) line.agentFeeWei = j.agentFeeWei;
   if (j.reason) line.reason = j.reason;
+  if ((j as any).supersededBy) line.supersededBy = (j as any).supersededBy;
+  if (extra.termsFailure) line.termsFailure = extra.termsFailure;
   return `RESULT ${JSON.stringify(line)}`;
 }
 

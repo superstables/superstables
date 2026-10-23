@@ -56,12 +56,12 @@ describe("Robinhood Chain in the budget", () => {
       const env = script([], { B4_CHAIN: chain });
       expect(env.code, `B4_CHAIN=${chain}`).toBe(3);
     }
-  });
+  }, 60_000); // one process per EVM script and per mainnet name, twice: every new script adds spawns
 
   it("every EVM script takes --chain robinhood-testnet past the guard", () => {
     const r = script(["--chain", "robinhood-testnet"]);
     expect(r.code).not.toBe(3);
     expect(r.stderr).not.toMatch(/REFUSED/);
     expect(script(["--help"]).stdout).toContain("robinhood-testnet");
-  });
+  }, 60_000);
 });
