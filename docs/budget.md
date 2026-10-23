@@ -237,8 +237,8 @@ Use approval on superstables.com when the owner wants to approve from a device o
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
 SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
 The owner needs a compatible wallet on that device and a superstables.com account. They sign in with an
-Ethereum or Solana wallet or an email address. The account holds the wallets that approve: an Ethereum wallet for
-the EVM chains and Tempo, a Solana wallet for Solana. An account admin adds wallets on the account page. Signing in and adding an agent do
+Ethereum or Solana wallet or an email address. An account admin links the wallets that approve on the account page:
+an Ethereum wallet for the EVM chains and Tempo, or a Solana wallet for Solana. Signing in and adding an agent do
 not grant a budget; funding and grant are separate wallet transactions.
 
 The [owner guide](https://www.superstables.com/docs/owner) covers the approval handoff, sign-in
@@ -256,7 +256,7 @@ account. From then on, `fund-agent`, `grant` and `revoke` on that chain ask thro
 with its own approval link and code, and the owner approves the transaction in their wallet there. `recover`
 still uses the page on this machine. The CLI, agent key and purchase journals stay on your own runtime; the owner's key stays in their wallet. Purchases need no approval from
 the site: the client pays the seller directly. On Solana the owner signs on the site's page with a Solana
-wallet their account holds; that address is the owner on record, and it signs each transaction the site builds.
+wallet linked to their account; that address is the owner on record, and it signs each transaction the site builds.
 
 The [site account](https://www.superstables.com/account) lets the owner inspect linked agents and
 revoke budgets. It shows Single purchase requests made on superstables.com, not a complete history of budget purchases;
@@ -265,8 +265,9 @@ read [local budget records](records.md#budget-records) for those. After requesti
 
 This is optional. Approvals on this machine remain the default and need no account. Approvals on superstables.com
 need a superstables.com account, or a compatible deployment the owner names with `--site`
-or `SUPERSTABLES_SITE`. An origin outside superstables.com and its subdomains also needs the owner to
-allow it with `superstables owner settings` in their own terminal; an agent never does.
+or `SUPERSTABLES_SITE`. Approvals on a site other than `https://www.superstables.com` or `https://superstables.com`,
+including staging and other subdomains, need the owner's permission in `superstables owner settings`.
+The owner changes these settings in their own terminal; an agent never does.
 After picking the match code, the owner signs the owner-proof message in their wallet, and the command checks that
 signature before it records anyone as the owner. Approval on superstables.com does not host your agent runtime.
 Choosing a compatible site is an advanced API option; `--hosted` does not deploy a site. The contract is in

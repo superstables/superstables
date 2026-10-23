@@ -920,9 +920,10 @@ Commands:
   settings [options] [action] [args...]  show or change the approval site and the RPCs owner actions trust
   help [command]                         display help for command
 
-The settings are a file in the account's own home (~/.superstables/owner/settings.json). Only the
-commands below, run in the owner's own terminal, write it. SUPERSTABLES_SITE, --site and the RPC
-variables count for owner actions only when they name what the settings allow.
+The settings live in the operating-system account's home (~/.superstables/owner/settings.json). Use
+the commands below in your own terminal to change them. Other code running as your user can also
+edit the file. SUPERSTABLES_SITE, --site and the RPC variables count for owner actions only when
+they name what the settings allow.
 
 Moves money: no.
 Run by: the owner. An agent may run `owner settings show`, and never a change.
@@ -957,12 +958,19 @@ Options:
   --no-open      sign: print the link and do not open the browser
   -h, --help     display help for command
 
-Actions: show the settings in force (read only; the default) site <origin> | site --clear the
-approval site (default https://www.superstables.com) allow-staging on|off allow
-https://staging.superstables.com allow-loopback site|rpc|sellers on|off development only: a site, an
-RPC variable or a seller on this computer rpc <chain> <url...> [--own-node] [--quorum N] | rpc
-<chain> --clear the RPCs owner actions and verdicts use sign [--rail evm|solana] your wallet signs
-these settings, your spend policy, your retired agent keys and the enabled chains
+Actions:
+  show
+    Show the settings in force (read only; the default).
+  site <origin> | site --clear
+    Set the approval site, or restore https://www.superstables.com.
+  allow-staging on|off
+    Allow or disallow https://staging.superstables.com.
+  allow-loopback site|rpc|sellers on|off
+    Allow or disallow a site, RPC variable or seller on this machine, for development.
+  rpc <chain> <url...> [--own-node] [--quorum N] | rpc <chain> --clear
+    Set the RPCs owner actions and verdicts use, or restore the built-in RPC.
+  sign [--rail evm|solana]
+    Sign these settings, your spend policy, retired agent keys and enabled chains with your wallet.
 
 A change asks for a typed yes and runs only when stdin is a terminal. RPC URLs are never printed
 whole: they can carry an access key. `sign` opens a page on 127.0.0.1 where your own wallet signs:

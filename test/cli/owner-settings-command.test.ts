@@ -122,6 +122,42 @@ describe("changes", () => {
   }, 60_000);
 });
 
+describe("help", () => {
+  it("lists each action on its own line, with its description indented beneath", async () => {
+    const r = await cli(["--help"], account(null));
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain([
+      "Actions:",
+      "  show",
+      "    Show the settings in force (read only; the default).",
+      "  site <origin> | site --clear",
+      "    Set the approval site, or restore https://www.superstables.com.",
+      "  allow-staging on|off",
+      "    Allow or disallow https://staging.superstables.com.",
+      "  allow-loopback site|rpc|sellers on|off",
+      "    Allow or disallow a site, RPC variable or seller on this machine, for development.",
+      "  rpc <chain> <url...> [--own-node] [--quorum N] | rpc <chain> --clear",
+      "    Set the RPCs owner actions and verdicts use, or restore the built-in RPC.",
+      "  sign [--rail evm|solana]",
+      "    Sign these settings, your spend policy, retired agent keys and enabled chains with your wallet.",
+    ].join("\n"));
+  }, 60_000);
+
+  it("says other code running as the user can edit the settings file, and that the account is the operating-system one", async () => {
+    const h = account(null);
+    const out = await new Promise<string>((done, fail) => {
+      const child = spawn(process.execPath, ["--import", "tsx", MAIN, "owner", "--help"], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_TEST_ACCOUNT_HOME: h } });
+      let text = "";
+      child.stdout.on("data", (c) => (text += String(c)));
+      child.once("error", fail);
+      child.once("close", () => done(text));
+    });
+    const flat = out.replace(/\s+/g, " ");
+    expect(flat).toContain("The settings live in the operating-system account's home (~/.superstables/owner/settings.json).");
+    expect(flat).toContain("Use the commands below in your own terminal to change them. Other code running as your user can also edit the file.");
+  }, 60_000);
+});
+
 describe("applyChange", () => {
   const base = () => defaultOwnerSettings();
   const next = (action: string, args: string[], opts: any = {}) => { const r: any = applyChange(base(), action, args, opts); expect(r.error, `${action} ${args}`).toBeUndefined(); return r; };

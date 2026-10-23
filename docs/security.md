@@ -188,8 +188,10 @@ So that port is not a well-known one. Each install picks its own at random in 20
 time `pay` runs, and keeps it in `approve-port` in the home folder (mode 0600); when another payment
 is waiting on it, the page takes a free port instead. Another account cannot know the port in
 advance, but one that watches the machine's open ports while a payment page is open can learn it,
-and bind it between payments. `SUPERSTABLES_APPROVE_PORT=0` gives every payment a free port of its
-own, which closes that too, at the cost of a connection prompt in the wallet each time.
+and bind it between payments. `SUPERSTABLES_APPROVE_PORT=0` asks the operating system to choose a free
+port for each payment. This avoids a fixed approval port, but ports can be reused and another local
+process can bind one after the page closes. Your wallet may ask you to connect again when the origin
+changes.
 
 
 
@@ -387,8 +389,9 @@ The same search decides a payment the seller reported without a transaction the 
 
 ### Which RPC is believed
 
-A payment is read through one RPC, but one RPC's word is never enough to call a payment unpaid, because
-that frees the daily cap and lets an agent pay again. Every endpoint is first asked which chain it is on
+Before calling a payment unpaid, the client checks the configured RPC agreement rule. This normally
+requires independent operators, but the single-endpoint exceptions below also apply. An unpaid result
+frees the daily cap and lets an agent pay again. Every endpoint is first asked which chain it is on
 (`eth_chainId`, or the genesis hash on Solana) before anything is read from it, once per process, and an
 endpoint on another chain is not read at all. Then `unpaid` is decided only when the verdict set agrees:
 
@@ -589,7 +592,8 @@ undo an owner signature or a transaction already sent through setup on superstab
   is here, and that the address was not retired. An edited public file is refused before any page
   opens. A public file from before this check has no signature: on testnet the command warns and
   goes on, and running `setup` again where the agent key is records one. Deleting the signature
-  lines makes a file look that old, which is why mainnet will refuse such files. The check proves
+  lines makes a file look that old. On a chain that is not a testnet the command refuses such a file;
+  mainnet signing is off in this build, so that does not apply yet. The check proves
   who the owner on record signed for, not who that owner is. `revoke` is never blocked by it.
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
@@ -781,10 +785,10 @@ owner's setting, not the agent's (see "Which site" below).
   checks the chain id its RPC answers before it reads anything (`read` and `reconcile` included), and
   `B4_RPC_<CHAIN>` sets one chain's RPC without touching the others. An allowance of 0 shown as a
   revoke, a pull that reverted, a purchase that never happened (another transaction took the pull's
-  nonce) and an authorization that can no longer settle are believed only when the configured RPC
-  endpoints, run by different operators, show the same final block and the same value there, each read
-  bound to that block. If they disagree, or a second endpoint is not available, the answer stays
-  unknown, with the reason in words: do not pay again.
+  nonce) and an authorization that can no longer settle are checked at a final block using the
+  configured RPC agreement rule. This requires independent operators, except when the owner's own
+  node is sufficient or the testnet's configured verdict set has one operator. If the required
+  agreement cannot be reached, the answer stays unknown, with the reason in words: do not pay again.
 
 What a compatible site must serve, with both proofs spelled out:
 [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do).
@@ -911,8 +915,6 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 - **Evidence from real runs.** What the client assumes about a chain, such as when its blocks are final, which network fees
   count against an access key's limit and what the token's signing domain is, was checked on the testnets it supports. It has
   not been checked on any mainnet chain, and each one needs the same checks before it is added.
-- **Refusing public files from before the agent address was signed.** On testnet the client warns and goes on (see
-  [Budgets](#budgets)). A mainnet chain would have to refuse them, and that refusal is not written.
 - **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
   rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
 - **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.

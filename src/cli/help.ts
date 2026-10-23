@@ -27,7 +27,7 @@ export interface Explanation {
 export function explain(command: Command, e: Explanation): Command {
   const lines = [
     "",
-    ...(e.notes ?? []).flatMap((note) => [...wrap(note, ""), ""]),
+    ...(e.notes ?? []).flatMap((note) => [...wrapKeepingLines(note), ""]),
     ...wrap(`Moves money: ${e.money}`, "  "),
     ...wrap(`Run by: ${e.who}`, "  "),
     "Example:",
@@ -37,6 +37,15 @@ export function explain(command: Command, e: Explanation): Command {
   ];
   command.addHelpText("after", lines.join("\n"));
   return command;
+}
+
+/** Wrap each line of `text` on its own, so its line breaks and indentation stay; a wrapped line continues at its own indent. */
+function wrapKeepingLines(text: string): string[] {
+  return text.split("\n").flatMap((line) => {
+    const indent = /^\s*/.exec(line)![0];
+    const out = wrap(line, indent, WIDTH);
+    return out.length ? [indent + out[0]!, ...out.slice(1)] : [""];
+  });
 }
 
 /** Greedy word wrap; continuation lines take `indent`. */
