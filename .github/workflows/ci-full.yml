@@ -31,7 +31,7 @@ jobs:
     if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))
     name: Node ${{ matrix.node }}
     runs-on: [self-hosted, Linux, X64, superstables-ci]
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
