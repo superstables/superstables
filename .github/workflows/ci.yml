@@ -1,6 +1,7 @@
-# Every push to main is type-checked, tested without the slow suites, and built, and the skill zip
-# is built and run on its own. The slow suites (the files listed in vitest.config.ts) and the
-# install routes run in ci-full.yml, which gates every release.
+# A quick check of main, started by hand: type-check, the tests without the slow suites, the build,
+# and the skill zip built and run on its own. Pushes to main start nothing. Every test, the slow
+# suites (the files listed in vitest.config.ts) and the install routes run in ci-full.yml, nightly
+# and on demand, and it gates every release.
 # It runs only in the private repo; the public copy of this file never starts a job.
 #
 # The tests never reach the network (they stand up their own servers on loopback), so CI needs
@@ -9,15 +10,13 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  # a newer push supersedes the older run; a dispatch on another ref skips its jobs, so it gets its own group
+  # a newer run on main supersedes the older one; a dispatch on another ref skips its jobs, so it gets its own group
   group: ${{ github.ref == 'refs/heads/main' && 'ci-main' || format('ci-{0}', github.run_id) }}
   cancel-in-progress: true
 
