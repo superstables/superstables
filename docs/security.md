@@ -915,9 +915,6 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 - **Evidence from real runs.** What the client assumes about a chain, such as when its blocks are final, which network fees
   count against an access key's limit and what the token's signing domain is, was checked on the testnets it supports. It has
   not been checked on any mainnet chain, and each one needs the same checks before it is added.
-- **Public files from before the agent address was signed.** On testnet the client warns and goes on (see
-  [Budgets](#budgets)). On a chain that is not a testnet it already refuses them; mainnet signing is off in this
-  build, so that does not apply yet.
 - **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
   rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
 - **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.
