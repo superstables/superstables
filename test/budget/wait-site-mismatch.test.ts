@@ -4,6 +4,7 @@
 // never failed, because no field of the record proves nothing was sent. It writes nothing and touches no lock. An --id that names no
 // record, or is malformed, keeps the bad-input answer. No network: the refusal happens before anything is read from a site.
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const MADE_ON = "http://127.0.0.1:41111";
 const OTHER = "http://127.0.0.1:41112";
+const PURCHASE = "11111111-2222-4333-8444-555555555555";
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ss-wait-site-")); });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
@@ -88,7 +90,7 @@ describe("wait --site that is not the site the approval was made on", () => {
 
   for (const [what, over] of [
     ["a stored pre-send refusal", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "the link expired; nothing was sent" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
-    // the shapes a reviewer found where a stored refusal is not proof that nothing was sent
+    // shapes where a stored refusal is not proof that nothing was sent
     ["an owner-mismatch refusal that names the site's transaction hashes only in its reason", { state: "final", final: { code: 3, result: { ok: false, state: "refused_precheck", reason: "that account's wallet reported grant 0xabc and fund 0xdef" } }, hosted: { site: MADE_ON, requestId: "ba_test0001", kind: "link", token: undefined } }],
     ["a buy-once refusal followed by payment evidence in its record", { command: "buy-once", state: "final", seen: { hashes: ["0xabc"], paid: false }, final: { code: 3, result: { ok: false, command: "buy-once", state: "refused_precheck", paid: false, tx: {}, final: true } }, hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: undefined } }],
   ] as const) {
@@ -302,6 +304,85 @@ describe("wait --site that is not the site the approval was made on", () => {
     expect(existsSync(path)).toBe(false);
     expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
   }, 60_000);
+
+  // wait looks at the record once: every answer after that rests on that first look, so a file that goes after it was seen is an approval
+  // that exists, never "no approval" (failed, final)
+  const hookEnv = (extra: Record<string, string>) => ({ NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import ${resolve(ROOT, "test/helpers/remove-record-after-lock.mjs")}`].filter(Boolean).join(" "), ...extra });
+  it("a record that disappears after wait saw it, in a refusal of wait's input, is still an approval that exists: unknown, never failed", async () => {
+    const forms: [string, (id: string) => string[]][] = [
+      ["--mainnet", (id) => ["wait", "--id", id, "--shown", "--mainnet"]],
+      ["--mainnet with --abandon", (id) => ["wait", "--id", id, "--abandon", "--mainnet"]],
+      ["a --site that is not the approval's", (id) => waitArgs(id, OTHER)],
+      ["--abandon with a --site that is not the approval's", (id) => abandonArgs(id, OTHER)],
+    ];
+    for (const [label, args] of forms) {
+      const { id, path } = record();
+      const run = await budget(args(id), "x\n", hookEnv({ REMOVE_RECORD_AFTER_READ: "1" }));
+      expect(run.code, `${label}: ${run.stderr}`).toBe(5);
+      expect(run.result, label).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+      expect(run.result.state).not.toBe("failed");
+      expect(existsSync(path), label).toBe(false);
+      expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-")), label).toEqual([]);
+    }
+  }, 120_000);
+
+  // a buy-once purchase is read through the strict reader after wait's first read: a record that goes, or turns into a file wait cannot
+  // answer from, makes the payment outcome unknown, with no record lock taken for it and nothing stored
+  const purchase = () => record({ command: "buy-once", state: "waiting_owner", hosted: { site: MADE_ON, requestId: "bp_test0001", kind: "purchase", token: "ssbt_test_bp_test0001secret" }, expires: new Date(Date.now() + 600_000).toISOString(), service: { id: "svc" } });
+  for (const [label, rewrite] of [["removed", null], ["a buy-once record with no hosted request", JSON.stringify({ id: "X", command: "buy-once", rail: "evm", chain: "base-sepolia", state: "waiting_owner" })], ["null", "null"], ["a final that is true", JSON.stringify({ id: "X", command: "buy-once", rail: "evm", chain: "base-sepolia", final: true })]] as [string, string | null][]) {
+    for (const flag of ["--shown", "--abandon"]) {
+      it(`a purchase's record ${label} after wait read it, wait ${flag}: unknown (exit 5), no record lock, nothing stored`, async () => {
+        const { id, path } = purchase();
+        const locks = join(home, "locks.log");
+        let env: Record<string, string> = { LOG_RECORD_LOCKS: locks };
+        let written: string | null = null;
+        if (rewrite === null) env.REMOVE_RECORD_AFTER_READ = "1";
+        else { written = rewrite.replace('"X"', JSON.stringify(id)); const f = join(home, "rewrite.json"); writeFileSync(f, written); env.REWRITE_RECORD_AFTER_READ = f; }
+        const run = await budget(["wait", "--id", id, flag, "--timeout", "0"], "x\n", hookEnv(env));
+        expect(run.stderr, "no crash").not.toMatch(/TypeError|\bat .*\.mjs:\d+/);
+        expect(run.code, run.stderr).toBe(5);
+        expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+        expect(run.result.next).toMatch(/superstables\.com/);
+        expect(run.result.next).toMatch(/do not start another purchase/);
+        expect(existsSync(locks) ? readFileSync(locks, "utf8") : "", "no record lock was taken").toBe("");
+        if (written === null) expect(existsSync(path)).toBe(false);
+        else expect(readFileSync(path, "utf8")).toBe(written);
+      }, 60_000);
+    }
+  }
+
+  // the strict reader is also the one under the record's lock: wait reads the purchase, checks it, then changes it under the lock, and a
+  // file that goes or turns bad between the check and the change must not be taken for the record that was read. The site here answers, so
+  // wait reads the record again after the answer: reads 2 and 4 are the checks that come right before a change (the hook counts every read
+  // of the record file), the first before the answer's evidence is added and the second before the answer is judged.
+  for (const [label, rewrite] of [["removed", null], ["a buy-once record with no hosted request", JSON.stringify({ id: "X", command: "buy-once", rail: "evm", chain: "base-sepolia", state: "waiting_owner" })], ["null", "null"]] as [string, string | null][]) {
+    for (const flag of ["--shown", "--abandon"]) {
+      for (const read of [2, 4]) {
+        it(`a purchase's record ${label} right after wait's read ${read} of it, wait ${flag}: unknown (exit 5, not final), no crash, nothing written`, async () => {
+          const server = createServer((req, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ id: PURCHASE, state: "awaiting_approval", final: false })); });
+          await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
+          try {
+            const site = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+            const { id, path } = record({ command: "buy-once", state: "waiting_owner", hosted: { site, requestId: PURCHASE, kind: "purchase", token: "sspt_test_aaaaaaaaaaaaaaaa" }, expires: new Date(Date.now() + 600_000).toISOString(), service: { id: "svc" } });
+            let env: Record<string, string> = {};
+            let written: string | null = null;
+            if (rewrite === null) env.REMOVE_RECORD_AFTER_READ = String(read);
+            else { written = rewrite.replace('"X"', JSON.stringify(id)); const f = join(home, "rewrite.json"); writeFileSync(f, written); env.REWRITE_RECORD_AFTER_READ = f; env.REWRITE_RECORD_AFTER_READ_N = String(read); }
+            const run = await budget(["wait", "--id", id, flag, "--timeout", "0"], "x\n", hookEnv(env));
+            expect(run.stderr, "no crash").not.toMatch(/TypeError|\bat .*\.mjs:\d+/);
+            expect(run.code, run.stderr).toBe(5);
+            expect(run.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+            expect(run.result.next).toMatch(/do not start another purchase/);
+            // the hook acted, and nothing wait did put the file back or stored an answer over it
+            expect(existsSync(path) ? readFileSync(path, "utf8") : null).toBe(written);
+            expect(readdirSync(join(home, "budget", "approvals")).filter((f) => f.endsWith(".lock") || f.startsWith("active-"))).toEqual([]);
+          } finally {
+            server.close();
+          }
+        }, 60_000);
+      }
+    }
+  }
 
   it("a worker's variable naming a finished approval (set by hand) does not silence wait: refusals answer, and a correct rerun returns the stored result", async () => {
     const stored = { ok: true, command: "setup", rail: "evm", chain: "base-sepolia", state: "ok", final: true, tx: { grant: `0x${"b2".repeat(32)}` }, next: "the budget is set" };

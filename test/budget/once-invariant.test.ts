@@ -297,6 +297,23 @@ describe("buy-once: once payment evidence appears, no outcome says nothing was p
     expect(seen.moved).toBe(true);
   }, 60_000);
 
+  it("an owner's give-up that another command's final beats under the lock answers that final, not the give-up it could not store", async () => {
+    const record = await fresh();
+    const id = record.hosted.requestId;
+    queue.read.push(async () => ({ status: 200, body: { id, state: "awaiting_approval", final: false } }));
+    const other = { ok: false, command: "buy-once", rail: record.rail, chain: record.chain, id: record.id, state: "refused_precheck", paid: false, delivered: false, amount: "0", tx: {}, final: true, reason: "the site's reason: expired" };
+    // after the give-up was decided and before it is stored, another command stores the purchase's own end
+    once.onceTestHook.beforeAbandon = (rid: string) => {
+      once.onceTestHook.beforeAbandon = null;
+      approvals.recordFinal(rid, 3, other);
+    };
+    const s = await once.abandonOnce(record, { fetchImpl, strict: record });
+    expect(s).toMatchObject({ final: true, code: 3 });
+    expect(s.result).toMatchObject({ state: "refused_precheck", reason: other.reason });
+    expect(s.result.abandonedAt).toBeUndefined();
+    expect(approvals.readApproval(record.id).final).toMatchObject({ code: 3, result: { state: "refused_precheck" } });
+  }, 30_000);
+
   it("a final unpaid answer is not stored when another command added evidence while it was being decided", async () => {
     const record = await fresh();
     const id = record.hosted.requestId;

@@ -28,7 +28,7 @@ import { join } from "node:path";
 import { approvalsDir, onceDir, publicFile } from "./paths.mjs";
 import { readRegularFile } from "./secret-file.mjs";
 import { keccak256 } from "./keccak.mjs";
-import { claim, isApprovalId, newApprovalId, readApproval, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
+import { RECORD_GONE, claim, isApprovalId, newApprovalId, readApproval, readStrict, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -240,18 +240,28 @@ const evidenceWords = (s) =>
  */
 export const mayBeUnpaid = (seen) => !anyEvidence(seen);
 
+/** The code of the error a strict read or change throws when the purchase's record file is gone, or is not a usable record, after the command read it. */
+export { RECORD_GONE };
+
 /**
  * The one evidence accumulator per purchase: every answer the client receives for it (a read or a cancel, success or
  * error) goes through here. Under the record's lock, its evidence is unioned with the record as stored at that moment and
  * written (mode 600): another process's evidence is never overwritten, and the union only grows. The record returned is
  * the one every later step of the same command uses; it is never an older copy. Exported for the tests.
  */
-export function accumulate(record, answer) {
+export function accumulate(record, answer, { strict = false } = {}) {
+  // strict (wait's reads, after its first: true, or the record wait read first): a record that went, is no longer one wait can answer from,
+  // or is another purchase ends the command; no answer is made of what is left. It is looked at here (readStrict), so that no lock is taken
+  // for a file that is already gone, and again under the record's lock, where the change is made: a file that goes between the two is not
+  // read as the record it was
+  if (strict && isApprovalId(record?.id) && !readStrict(record.id, strict)) {
+    throw Object.assign(new Error(`the record of purchase ${record.id} is gone or is not a record any more`), { code: RECORD_GONE });
+  }
   const ev = evidenceOf(answer, networkOfChain(record?.chain));
   const merge = (now) => unionSeen(unionSeen(now.seen, record.seen ?? {}), ev);
   // final or not: the evidence is the source of truth, and a stored final answer only a decision over it (checkedFinal)
   const stored = isApprovalId(record?.id)
-    ? updateApproval(record.id, (now) => (JSON.stringify(merge(now)) === JSON.stringify(now.seen ?? null) ? null : { seen: merge(now) }))
+    ? updateApproval(record.id, (now) => (JSON.stringify(merge(now)) === JSON.stringify(now.seen ?? null) ? null : { seen: merge(now) }), { strict })
     : null;
   const base = stored ?? record;
   return { ...base, seen: merge(base) };
@@ -274,10 +284,11 @@ function verdictHolds(seen, result) {
 }
 
 /**
- * Tests only: called after an answer is decided and before it is stored (to force another command in between).
- * @type {{ beforeFinal: null | ((id: string) => void) }}
+ * Tests only: called after an answer is decided and before it is stored (beforeFinal), and before an owner's give-up is stored
+ * (beforeAbandon), to force another command in between.
+ * @type {{ beforeFinal: null | ((id: string) => void), beforeAbandon: null | ((id: string) => void) }}
  */
-export const onceTestHook = { beforeFinal: null };
+export const onceTestHook = { beforeFinal: null, beforeAbandon: null };
 
 /**
  * A stored final answer as it may be repeated: a cache of a decision over the evidence. It is checked again against the
@@ -285,7 +296,7 @@ export const onceTestHook = { beforeFinal: null };
  * evidence no longer supports, paid or not, is stored again as unknown, with the transaction the evidence names. The
  * access token is gone from a final record, so that unknown is final.
  */
-function checkedFinal(record) {
+function checkedFinal(record, { strict = false } = {}) {
   const { code, result } = record.final;
   // Older paid records cannot regain their discarded access token. Preserve the recorded proof under I21 and mark
   // its limit, rather than applying a new attribution requirement retroactively. Explicit payer conflicts still overrule it.
@@ -296,12 +307,12 @@ function checkedFinal(record) {
     const attribution = "verification not recorded (older version)";
     const kept = { ...result, attribution };
     updateApproval(record.id, (now) => now.final?.result?.paid === true && now.attributionVersion === undefined && !now.final.attribution
-      ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null);
+      ? { final: { ...now.final, result: { ...now.final.result, attribution } } } : null, { strict });
     return { code, result: kept };
   }
   if (cachedVerdictHolds(record)) return { code, result };
   const fixed = overruled(record, result);
-  updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null));
+  updateApproval(record.id, (now) => (now.final && !cachedVerdictHolds(now) ? { final: { code: 5, result: fixed } } : null), { strict });
   return { code: 5, result: fixed };
 }
 
@@ -761,12 +772,12 @@ const ABANDON = (id) => `if the site never ends it, only the owner may give it u
  * a purchase that ended there is recorded as usual. Otherwise the record is kept, marked abandoned with the time, and its
  * final answer is unknown (exit 5): it no longer holds up buy-once, and nothing says whether a payment left.
  */
-export async function abandonOnce(record, { fetchImpl } = {}) {
-  const s = await settleOnce(record, { waitS: 0, fetchImpl });
+export async function abandonOnce(record, { fetchImpl, strict = false } = {}) {
+  const s = await settleOnce(record, { waitS: 0, fetchImpl, strict });
   const at = new Date().toISOString();
   // paid on chain, but not final: the owner stops waiting for finality. The payment was read, so the answer stays paid
   if (s.result?.paid === true && !(s.record ?? record).final) {
-    const fresh = updateApproval(record.id, (now) => (now.final ? null : { finalityAbandonedAt: at }));
+    const fresh = updateApproval(record.id, (now) => (now.final ? null : { finalityAbandonedAt: at }), { strict });
     return { final: true, code: s.code, result: { ...s.result, finalityAbandonedAt: at, next: FINALITY_ABANDONED }, record: fresh };
   }
   // ended on the site and recorded: that is the answer (a payment the chain does not show yet is not recorded: give it up)
@@ -777,8 +788,12 @@ export async function abandonOnce(record, { fetchImpl } = {}) {
     next: "never buy this again. Whether a payment left is unknown: the owner checks their wallet activity and their account on the site",
     reason: scrub(`given up by the owner at ${at} without a final answer from ${siteName(record.hosted?.site ?? "")}${s.unreachable ? ` (${s.unreachable})` : s.words ? ` (${s.words})` : ""}`),
   };
-  recordFinal(record.id, 5, result);
-  return { final: true, code: 5, result, record: readApproval(record.id) };
+  onceTestHook.beforeAbandon?.(record.id);
+  const kept = recordFinal(record.id, 5, result, { strict });
+  // another command ended it first (its final stood under the lock): that final is the answer, checked against the evidence as every wait
+  // checks a stored one, not this give-up, which was not stored
+  if (kept?.final && kept.final.result?.abandonedAt !== at) return { final: true, ...checkedFinal(kept, { strict }), record: kept };
+  return { final: true, code: 5, result, record: kept ?? readApproval(record.id) };
 }
 
 function saveResponse(id, delivery) {
@@ -1033,10 +1048,17 @@ function openUnknown(record, view) {
  * @param {any} record
  * @param {{ waitS?: number, fetchImpl?: typeof fetch }} [options]
  */
-export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, fetchImpl } = {}) {
+export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, fetchImpl, strict = false } = {}) {
+  // the record as stored now, read again for the answer: strict, as every other read here, when the caller is wait
+  const again = (r) => {
+    if (!strict) return readApproval(r.id) ?? r;
+    const now = readStrict(r.id, strict);
+    if (!now) throw Object.assign(new Error(`the record of purchase ${r.id} is gone or is not a record any more`), { code: RECORD_GONE });
+    return now;
+  };
   // the record as stored now, with every answer's evidence so far: never an older copy
-  record = accumulate(record, null);
-  if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+  record = accumulate(record, null, { strict });
+  if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
   const h = record.hosted;
   // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow now is not read
   const allowed = siteOrigin(h.site, "verdict");
@@ -1044,9 +1066,9 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
   const r = await readPurchase({ site: h.site, id: h.requestId, token: h.token, wait: waitS, timeoutMs: readTimeoutMs, fetchImpl });
   // every answer's payment evidence is kept in the record, an error envelope's money_moved included
   if (!r.ok) {
-    if (r.body && typeof r.body === "object") record = accumulate(record, r.body);
+    if (r.body && typeof r.body === "object") record = accumulate(record, r.body, { strict });
     // another command finished it meanwhile: its answer, checked against the evidence this read added
-    if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+    if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
     if (r.status >= 400 && r.status < 500 && ![408, 429].includes(r.status)) {
       const next = accountRefusalNext(r.code);
       const possible = !mayBeUnpaid(record.seen);
@@ -1065,8 +1087,8 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
     if (!mayBeUnpaid(record.seen)) return { final: false, code: 5, result: openUnknown(record, { unreadable: r.reason }), record, status: r.status, errorCode: r.code, unreachable: r.reason };
     return { final: false, record, status: r.status, errorCode: r.code, unreachable: r.reason };
   }
-  record = accumulate(record, r.view);
-  if (record.final) return { final: true, ...checkedFinal(record), record: readApproval(record.id) ?? record };
+  record = accumulate(record, r.view, { strict });
+  if (record.final) return { final: true, ...checkedFinal(record, { strict }), record: again(record) };
   // the owner's step is over, or an answer carried payment evidence, and the outcome is not established: unknown, not
   // stored, never "waiting for the owner"
   const reportedPaid = evidenceOf(r.view, networkOfChain(record.chain)).paid;
@@ -1090,8 +1112,8 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
         if (current.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || seen.payer !== record.seen?.payer || seen.order !== record.seen?.order || !claimAttribution(current, result.tx.settle)) return { included: null };
         stored = true;
         return { included: { code, result } };
-      }) ?? readApproval(record.id) ?? record;
-      if (fresh.final) return { final: true, ...checkedFinal(fresh), record: fresh };
+      }, { strict }) ?? readApproval(record.id) ?? record;
+      if (fresh.final) return { final: true, ...checkedFinal(fresh, { strict }), record: fresh };
       if (!stored) return { final: true, code: 5, result: { ...overruled(fresh, result), final: false }, record: fresh };
       return { final: true, code, result, record: fresh };
     }
@@ -1109,17 +1131,17 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
       if (now.final || !verdictHolds(seen, result) || !seen.nonce || seen.nonce !== record.seen?.nonce || seen.payer !== record.seen?.payer || seen.order !== record.seen?.order || !claimAttribution(now, result.tx.settle)) return null;
       stored = true;
       return { state: "final", endedAt: new Date().toISOString(), final: { code, result, attribution: { nonce: seen.nonce, ...(seen.payer ? { payer: seen.payer } : {}), ...(seen.order ? { order: seen.order } : {}), ...(seen.validBefore ? { validBefore: seen.validBefore } : {}) } }, hosted: { ...now.hosted, token: undefined } };
-    });
+    }, { strict });
     if (stored) release(record.rail, record.chain, record.id);
     done = { record: committed, stored };
   } else {
-    done = recordFinalWith(record.id, (now) => (verdictHolds(unionSeen(now.seen, record.seen ?? {}), result) ? { code, result } : null));
+    done = recordFinalWith(record.id, (now) => (verdictHolds(unionSeen(now.seen, record.seen ?? {}), result) ? { code, result } : null), { strict });
   }
   const now = done.record ?? readApproval(record.id) ?? record;
   if (done.stored) return { final: true, code, result, record: now };
   // another command finished it first: its answer, checked the same way
-  if (now.final) return { final: true, ...checkedFinal(now), record: readApproval(record.id) ?? now };
-  const fresh = accumulate(now, null);
+  if (now.final) return { final: true, ...checkedFinal(now, { strict }), record: again(now) };
+  const fresh = accumulate(now, null, { strict });
   return { final: true, code: 5, result: { ...overruled(fresh, result), final: false }, record: fresh };
 }
 
@@ -1128,7 +1150,7 @@ export async function settleOnce(record, { waitS = 0, readTimeoutMs, deadline, f
  * passes. Never signs or sends anything. Past the link's expiry plus 20 minutes without an answer from the site: unknown
  * (exit 5), but nothing is recorded, so a later `wait` can still read it.
  */
-export async function waitOnce(record, timeoutMs, { fetchImpl, unknownGraceMs = UNKNOWN_GRACE_MS } = {}) {
+export async function waitOnce(record, timeoutMs, { fetchImpl, unknownGraceMs = UNKNOWN_GRACE_MS, strict = false } = {}) {
   const until = Date.now() + timeoutMs;
   let unknownSince = null;
   for (;;) {
@@ -1141,6 +1163,7 @@ export async function waitOnce(record, timeoutMs, { fetchImpl, unknownGraceMs = 
       // and the chain check of a final answer read then, too
       deadline: unknownSince === null ? undefined : unknownSince + unknownGraceMs,
       fetchImpl,
+      strict,
     });
     // the next read starts from the record this one updated, with its evidence
     record = s.record ?? record;

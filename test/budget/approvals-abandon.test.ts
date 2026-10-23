@@ -367,6 +367,38 @@ describe("waitFor when the record file goes", () => {
     killGroup(base.pid);
   });
 
+  it("readApproval, which lock recovery reads, still returns an object filed under another id: such a record can keep the chain", async () => {
+    const id = await open();
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    // the approval holds its chain through its hosted request's token: its worker is gone, the lock is old
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
+    const other = "oa-20261021999999-ffffffff";
+    writeFileSync(path, JSON.stringify({ ...base, id: other }));
+    expect(approvals.readApprovalFile(id).kind, "wait does not take it for this approval's record").toBe("undecodable");
+    expect(approvals.readApproval(id)?.id, "lock recovery still sees what it holds").toBe(other);
+    expect(approvals.findPending("evm", "base-sepolia"), "and the chain stays held").not.toBeNull();
+    // anything that is not an object stays null
+    for (const content of ["[]", "5", '"x"', "null", "false", "{ broken", ""]) {
+      writeFileSync(path, content);
+      expect(approvals.readApproval(id), JSON.stringify(content)).toBeNull();
+    }
+    writeFileSync(path, JSON.stringify(base));
+  });
+
+  it("a record filed under another id takes no result: recordFinal and recordFinalWith say nothing was stored and the chain stays held", async () => {
+    const id = await open();
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    const misfiled = JSON.stringify({ ...base, id: "oa-20261021999999-ffffffff" });
+    writeFileSync(path, misfiled);
+    expect(approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true } })).stored).toBe(false);
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true });
+    expect(readFileSync(path, "utf8"), "the file is as found").toBe(misfiled);
+    expect(approvals.findPending("evm", "base-sepolia"), "the chain stays held").not.toBeNull();
+    killGroup(base.pid);
+  });
+
   it("readApprovalFile tells a missing file, a file that is not a record, and a record apart", async () => {
     const id = await open({}, liveWorker());
     const path = join(home, "budget", "approvals", `${id}.json`);
@@ -374,7 +406,8 @@ describe("waitFor when the record file goes", () => {
     for (const content of ["false", "0", '""', "null", "[]", "7", "42", '"x"', "{}", "{ broken", "", JSON.stringify({ id: "oa-20261021999999-ffffffff" })]) {
       writeFileSync(path, content);
       expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("undecodable");
-      expect(approvals.readApproval(id)).toBeNull();
+      // lock recovery's lenient reading: an object filed under another id is still returned (below); every other shape is null
+      expect(approvals.readApproval(id)?.id ?? null, JSON.stringify(content)).toBe(content.includes('"id":"oa-20261021999999-ffffffff"') ? "oa-20261021999999-ffffffff" : null);
     }
     rmSync(path, { force: true });
     expect(approvals.readApprovalFile(id).kind).toBe("none");

@@ -151,7 +151,11 @@ export function readApprovalFile(id) {
   try {
     const value = JSON.parse(text);
     // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
-    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) return { kind: "undecodable" };
+    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) {
+      // an object that carries another id (a record filed under the wrong name) is not this approval's record; readApproval, which lock
+      // recovery reads, still returns what it holds, as it always has: it may name a live process or a token that holds the chain
+      return value && typeof value === "object" && !Array.isArray(value) ? { kind: "undecodable", value } : { kind: "undecodable" };
+    }
     return { kind: usableRecord(value) ? "record" : "damaged", record: value };
   } catch {
     return { kind: "undecodable" };
@@ -159,7 +163,8 @@ export function readApprovalFile(id) {
 }
 
 export function readApproval(id) {
-  return readApprovalFile(id).record ?? null;
+  const file = readApprovalFile(id);
+  return file.record ?? file.value ?? null;
 }
 
 /** The code of the error a strict change throws when the record's file is gone, or is not a record `wait` can answer from, once the command has read it. */
@@ -176,6 +181,8 @@ export function sameApproval(seen, now) {
   if (!isObject(seen) || !isObject(now)) return false;
   for (const k of ["id", "command", "rail", "chain", "createdAt"]) if (seen[k] !== undefined && now[k] !== seen[k]) return false;
   if (isObject(seen.hosted) && !(isObject(now.hosted) && now.hosted.site === seen.hosted.site)) return false;
+  // a buy-once purchase is one request on the site from start to end: a record of another request is another purchase
+  if (seen.command === "buy-once" && isObject(seen.hosted) && now.hosted.requestId !== seen.hosted.requestId) return false;
   return true;
 }
 
@@ -886,7 +893,7 @@ export function recordFinalAsRestart(id, generation, code, result) {
  * store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. Every final result is
  * recorded here, and only here.
  */
-export function recordFinal(id, code, result) {
+export function recordFinal(id, code, result, { strict = false } = {}) {
   // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
   // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
   const endedAt = new Date().toISOString();
@@ -895,7 +902,7 @@ export function recordFinal(id, code, result) {
     if (before.final) return null;
     decided = true;
     return { state: "final", endedAt, final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
-  });
+  }, { strict });
   // stored only when the write was accepted (see recordFinalWith)
   if (decided && record?.final && record.endedAt === endedAt) release(record.rail, record.chain, id);
   return record;
