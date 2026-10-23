@@ -203,7 +203,10 @@ async function holdRecordLock(rail: string, chain: string, op: string) {
   return { release: () => new Promise<void>((done) => { child.once("close", () => done()); child.stdin.end(); }) };
 }
 const recordsDir = () => join(home, "budget", "recovery");
-const { attemptOp } = await import(new URL("../../budget/recovery.mjs", import.meta.url).href);
+const { attemptOp, recordOwns } = await import(new URL("../../budget/recovery.mjs", import.meta.url).href);
+/** The registration an order writes for an attempt op before it journals the switch (recovery.mjs registerAttempt), in this test's home. */
+const registerName = (orderRef: string, root: { rail: string; chain: string; op: string }, at: { rail: string; chain: string; op: string }) =>
+  write(join(recordsDir(), "attempts", `${at.rail}-${at.chain}-${at.op}.json`), `${JSON.stringify({ version: 1, order_ref: orderRef, root, ...at })}\n`);
 /** The order reference recorded for an original op. */
 const orderRef = (op: string, rail = "evm", chain = "base-sepolia") => JSON.parse(readFileSync(join(recordsDir(), `${rail}-${chain}-${op}.json`), "utf8")).order_ref;
 /** The op of attempt `n` of the order recorded for `op`: the op, part of the order's reference, the number. */
@@ -218,9 +221,9 @@ const plain = (r: any) => { const { op: _op, rpc: _rpc, ...rest } = r; return re
 // ---- tests --------------------------------------------------------------------------------------------------------------
 
 describe("retry of the seller's terms, as a process", () => {
-  // the retries happen only for a buy auto recovery can follow: a budget linked to a site that lists the feature. This site lists it
-  // and has no advice (404), so after the reads the answer is the plain refusal.
-  const offering = async () => (await startSite({ advice: () => ({ status: 404, body: { error: "not_found" } }) })).url;
+  // the retries happen only for a buy auto recovery can follow: a budget linked to a site that lists the feature and whose advice
+  // says the owner's recovery policy is on. This advice has no candidate, so after the reads the answer is the plain refusal.
+  const offering = async () => (await startSite({ advice: adviceFor([]) })).url;
 
   it("reads an unreadable seller three times, 250 ms then 1 s apart, and then refuses as before: nothing signed", async () => {
     const gate = await startGate({ base: "503" });
@@ -228,10 +231,10 @@ describe("retry of the seller's terms, as a process", () => {
     const r = await buy(`${gate.url}/spot`);
     expect(r.code, all(r)).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, rail: "evm", chain: "base-sepolia" });
-    expect(r.result.recovery).toBeUndefined();
+    expect(r.result.recovery).toMatchObject({ switched: false });
     expect(gate.hits).toHaveLength(3);
     const gaps = [gate.hits[1]!.at - gate.hits[0]!.at, gate.hits[2]!.at - gate.hits[1]!.at];
-    // read 2 comes at least 250 ms after read 1, once the site's feature list was read; read 3 at least 1 s after read 2
+    // read 2 comes at least 250 ms after read 1, once the site's feature list and advice were read; read 3 at least 1 s after read 2
     expect(gaps[0]).toBeGreaterThanOrEqual(240);
     expect(gaps[1]).toBeGreaterThanOrEqual(990);
     expect(base.sentRaw).toEqual([]);
@@ -253,7 +256,7 @@ describe("retry of the seller's terms, as a process", () => {
     expect(base.sentRaw).toEqual([]);
   }, 60_000);
 
-  it("a seller that works on the second read is paid once, and the site is asked for no advice", async () => {
+  it("a seller that works on the second read is paid once; the advice was asked once, before that read, and nothing is reported", async () => {
     const site = await startSite({ advice: adviceFor([]) });
     setUpEvm(site.url);
     const seller = await startSeller(base, 84532);
@@ -273,13 +276,19 @@ describe("retry of the seller's terms, as a process", () => {
     expect(r.result).toMatchObject({ state: "settled", paid: true });
     expect(reads).toBe(2);
     expect(seller.settled).toHaveLength(1);
-    expect(site.adviceCalls).toEqual([]);
+    expect(site.adviceCalls).toHaveLength(1);
+    expect(site.adviceCalls[0]!.body.failure).toMatchObject({ attempts_used: 1 });
+    expect(site.reportCalls).toEqual([]);
+    expect(existsSync(recordsDir())).toBe(false);
   }, 120_000);
 });
 
 // What main (before auto recovery) answers for a seller whose unpaid read gets a 503: one read, refused before anything is signed.
 // Captured from the dispatcher at main 4e3794be with these fixtures; `op` and `rpc` differ per run.
 const MAIN_503 = { ok: false, command: "buy", rail: "evm", chain: "base-sepolia", state: "refused_precheck", final: true, chain_final: null, paid: false, delivered: false, amount: "0", remaining: "1", tx: { cancel: null, pull: null, return: null, settle: null }, next: "respect the refusal; nothing was signed; never raise --max to get around it", reason: "seller did not ask for payment (HTTP 503)" };
+
+// What main answers for a working seller of 0.01 on a budget of 1, apart from tx, rpc, op and the response file.
+const MAIN_PAID = { ok: true, command: "buy", rail: "evm", chain: "base-sepolia", state: "settled", final: true, chain_final: true, paid: true, delivered: true, amount: "0.01", remaining: "0.99", responseType: "application/json", responseBytes: 85, responseTruncated: false, next: "none" };
 
 describe("without auto recovery, a buy is exactly what it was before it (main): one read, then the refusal", () => {
   /** A seller that answers 503 to its first unpaid read, and is a working x402 seller from then on. */
@@ -314,6 +323,105 @@ describe("without auto recovery, a buy is exactly what it was before it (main): 
     expect(base.sentRaw).toEqual([]);
     expect(existsSync(recordsDir())).toBe(false);
   }, 120_000);
+
+  it.each([
+    ["answers 403 recovery_off", () => ({ status: 403, body: { error: "recovery_off" } })],
+    ["answers 404", () => ({ status: 404, body: { error: "not_found" } })],
+    ["fails (500)", () => ({ status: 500, body: "oops" })],
+    ["says the policy is off", (req: unknown) => adviceFor([], { enabled: false })(req)],
+    ["gives advice that has already expired", (req: unknown) => adviceFor([], {}, { expires_at: new Date(Date.now() - 1000).toISOString() })(req)],
+  ])("a site that lists the feature but whose advice %s: the flaky seller stops the buy unpaid at the first read, as on main", async (_name, advice) => {
+    const site = await startSite({ advice: advice as any });
+    setUpEvm(site.url);
+    const f = await flaky();
+    const r = await buy(f.url, { op: "main-off" });
+    expect(r.code, all(r)).toBe(3);
+    expect(plain(r.result)).toEqual(MAIN_503);
+    expect(f.reads()).toBe(1);
+    expect(f.seller.creds).toEqual([]);
+    expect(f.seller.settled).toEqual([]);
+    expect(base.sentRaw).toEqual([]);
+    expect(site.adviceCalls).toHaveLength(1);
+    expect(site.reportCalls).toEqual([]);
+    expect(existsSync(recordsDir())).toBe(false);
+  }, 120_000);
+
+  it("no site: an op named like an attempt of an order (order-20261022-r2) that no order registered is bought as on main", async () => {
+    setUpEvm(null);
+    const seller = await startSeller(base, 84532);
+    cleanups.push(() => seller.close());
+    for (const [i, op] of ["order-20261022-r2", attemptOp("mine", 2, "5f0e0a52-1d3c-4a3c-9c1e-0a2b3c4d5e6f")].entries()) {
+      const r = await buy(seller.url, { op });
+      expect(r.code, all(r)).toBe(0);
+      // main's answer for a working seller, captured with these fixtures; tx, rpc and the response file differ per run
+      const { tx, responseFile, ...rest } = plain(r.result);
+      expect(rest).toEqual({ ...MAIN_PAID, remaining: i === 0 ? "0.99" : "0.98" });
+      expect(tx.settle).toMatch(/^0x[0-9a-f]{64}$/);
+      expect(responseFile).toContain(op);
+    }
+    expect(seller.settled).toHaveLength(2);
+  }, 120_000);
+
+  it.each([
+    ["refuses the advice (403)", () => ({ status: 403, body: { error: "recovery_off" } })],
+    ["has the policy on", (req: unknown) => adviceFor([])(req)],
+  ])("a rail script run by hand pays the op while the site, which %s, is asked: the answer is that payment, never unpaid", async (_name, answer) => {
+    const f = await flaky();
+    const hand: Out[] = [];
+    const site = await startSite({ advice: async (req: unknown) => {
+      hand.push(await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", f.url, "--max", "0.05", "--op", "race-1"]));
+      return (answer as (r: unknown) => { status: number; body: unknown })(req);
+    } });
+    setUpEvm(site.url);
+    const r = await buy(f.url, { op: "race-1" });
+    expect(hand[0]!.result, all(hand[0]!)).toMatchObject({ state: "settled" });
+    expect(r.result.paid, all(r)).toBe(true);
+    expect(r.result.tx.settle).toBe(hand[0]!.result.tx.settle);
+    expect(f.seller.settled).toHaveLength(1);
+  }, 180_000);
+
+  it.each([
+    ["refuses the advice (403)", () => ({ status: 403, body: { error: "recovery_off" } })],
+    ["has the policy on", (req: unknown) => adviceFor([])(req)],
+  ])("a rail script run by hand is still in its terms read, holding the op, while the site, which %s, is asked: unknown, never unpaid, and the rerun reports its payment", async (_name, answer) => {
+    const seller = await startSeller(base, 84532);
+    cleanups.push(() => seller.close());
+    let reads = 0;
+    let inSecondRead: () => void = () => {};
+    const secondRead = new Promise<void>((r) => (inSecondRead = r));
+    const server = createServer(async (req, res) => {
+      if (!req.headers["payment-signature"]) {
+        const n = ++reads;
+        if (n === 1) return void res.writeHead(503, { "content-type": "text/plain" }).end("warming up");
+        // the hand-run's unpaid read: held open while the dispatcher decides what to answer
+        if (n === 2) { inSecondRead(); await new Promise((r) => setTimeout(r, 4000)); }
+      }
+      const headers: Record<string, string> = {};
+      if (req.headers["payment-signature"]) headers["payment-signature"] = String(req.headers["payment-signature"]);
+      const r = await fetch(seller.url, { headers });
+      res.writeHead(r.status, relayed(r)).end(Buffer.from(await r.arrayBuffer()));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    cleanups.push(() => closeServer(server));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/x`;
+    let hand: Promise<Out> | null = null;
+    const site = await startSite({ advice: async (req: unknown) => {
+      hand = direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", url, "--max", "0.05", "--op", "race-2"]);
+      await secondRead; // the hand-run holds the op's record lock and has not written its journal yet
+      return (answer as (r: unknown) => { status: number; body: unknown })(req);
+    } });
+    setUpEvm(site.url);
+    const r = await buy(url, { op: "race-2" });
+    expect(r.code, all(r)).toBe(5);
+    expect(r.result).toMatchObject({ state: "unknown", paid: null, reason: "op_in_progress" });
+    const h = await hand!;
+    expect(h.result, all(h)).toMatchObject({ state: "settled" });
+    expect(seller.settled).toHaveLength(1);
+    const again = await buy(url, { op: "race-2" });
+    expect(again.result.paid, all(again)).toBe(true);
+    expect(again.result.tx.settle).toBe(h.result.tx.settle);
+    expect(seller.settled).toHaveLength(1);
+  }, 180_000);
 
   it("a buy recovery cannot follow (--pay-to) reads once too, with a site that offers recovery", async () => {
     const site = await startSite({ advice: adviceFor([]) });
@@ -378,8 +486,8 @@ describe("a site that does not take part: the answer is exactly what it is today
     expect(r.code, all(r)).toBe(3);
     expect(plain(r.result)).toEqual(baseline);
     expect(r.result.recovery).toBeUndefined();
-    // the terms are read again only once the site said it offers recovery; the advice (403, 404, an error) comes after them
-    expect(gate.hits).toHaveLength(over.features.length ? 3 : 1);
+    // the terms are read again only when the advice says the owner's policy is on: a refused, missing or failed advice keeps the one read
+    expect(gate.hits).toHaveLength(1);
     expect(base.sentRaw).toEqual([]);
     expect(arc.sentRaw).toEqual([]);
     expect(site.reportCalls).toEqual([]);
@@ -451,7 +559,8 @@ describe("rail recovery: the same seller on another chain, paid by the agent ins
     expect(ask.signed).toBe(true);
     expect(ask.body).toMatchObject({
       version: 1, original: { url: `${gate.url}/spot`, chain: "base-sepolia", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", amount_atomic: "50000" },
-      failure: { stage: "seller_error", attempts_used: 3 }, tried: [{ url: `${gate.url}/spot`, chain: "base-sepolia" }],
+      // asked after the first read, before the terms were read again; the order's own record says all three reads
+      failure: { stage: "seller_error", attempts_used: 1 }, tried: [{ url: `${gate.url}/spot`, chain: "base-sepolia" }],
     });
     expect(ask.body.funded_chains.sort()).toEqual(["arc-testnet", "base-sepolia"]);
     // reported after the fact, signed, with the same order and attempt
@@ -939,7 +1048,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("legacy-r5-payment: an order recorded by an earlier build (version 1) answers unknown: no payment claimed, nothing contacted, the evidence kept", async () => {
+  it("earlier-build-payment: an order recorded by an earlier build (version 1) answers unknown: no payment claimed, nothing contacted, the evidence kept", async () => {
     const { gate, arcSeller, baseSeller, file, hits } = await frozenOrder("fz-v1");
     const own = await direct("evm/buy.ts", candidateBuy(gate, "fz-v1"));
     expect(own.result, all(own)).toMatchObject({ state: "settled", paid: true });
@@ -1033,29 +1142,92 @@ describe("a freeze is permanent: the order is never paid on both the original an
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
-  it("signed-during-features: the order's own attempt settles during the signed feature read, which then says the feature is off; the rerun never says unpaid, and the next one reports the settlement", async () => {
+  it("signed-during-features: the order's candidate settles during the signed feature read, which then says the feature is off; that rerun is unknown, never unpaid, and the next one reports the settlement", async () => {
     const { gate, arcSeller, baseSeller, site } = await frozenOrder("fz-m");
     site.features = [];
     let release!: () => void;
     site.servicesGate = new Promise<void>((r) => (release = r));
     const reached = new Promise<void>((r) => (site.servicesReached = r));
+    // the order's own run of its candidate is started first and waits just before it takes the attempt's record lock, so only its
+    // purchase falls inside the feature read (whose client timeout is 15 s), not the start of a process
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    const paused = join(home, "paused-m"), go = join(home, "go-m");
+    const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
+    const candidate = new Promise<Out>((done, fail) => {
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-m")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), "buy.ts", ...candidateBuy(gate, "fz-m")], { cwd: join(ROOT, "budget", "evm"), env });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", (c) => (stdout += String(c)));
+      child.stderr.on("data", (c) => (stderr += String(c)));
+      child.once("error", fail);
+      child.once("close", (code) => { const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT ")); done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null, pid: 0 }); });
+    });
+    for (const until = Date.now() + 120_000; !existsSync(paused); await new Promise((r) => setTimeout(r, 20))) if (Date.now() > until) throw new Error("the candidate never reached its record lock");
     const rerun = buy(`${gate}/spot`, { op: "fz-m" });
     await reached;
-    // an ordinary buy of the reserved name gets nowhere; the order's own run (its flag) settles
-    const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
-    expect(ordinary.result.reason).toMatch(/reserved/);
-    const candidate = await direct("evm/buy.ts", candidateBuy(gate, "fz-m"));
-    expect(candidate.result, all(candidate)).toMatchObject({ state: "settled", paid: true });
-    // the explicit signal: the candidate has finished (settled) before the feature answer is released
+    writeFileSync(go, "go");
+    const settled = await candidate;
+    expect(settled.result, all(settled)).toMatchObject({ state: "settled", paid: true });
     release();
     const out = await rerun;
-    // The client gives up on a feature read after 15 s. If the candidate was still running when it did, the rerun met a held op: unknown,
-    // never unpaid. If not, it reports the settlement. Either way the next rerun, with the candidate long done, reports the settlement.
-    expect(out.result.paid, all(out)).not.toBe(false);
+    // the order then ends unpaid only if the original's mark can be closed, and that mark points at the settled candidate: it stays,
+    // and this rerun is unknown, never unpaid
+    expect(out.result, all(out)).toMatchObject({ state: "unknown", paid: null, final: false });
     expect(JSON.stringify(out.result)).not.toMatch(/new --op|nothing was paid/i);
-    if (out.result.state !== "settled") expect(out.result).toMatchObject({ state: "unknown", paid: null });
-    const next = await buy(`${gate}/spot`, { op: "fz-m" });
-    expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
+    // an ordinary buy of the order's attempt name gets nowhere
+    const ordinary = await direct("evm/buy.ts", plainCandidate(gate, "fz-m"));
+    expect(ordinary.result.reason).toMatch(/reserved/);
+    // the next rerun, and every later one, reports the settlement
+    for (let i = 0; i < 2; i++) {
+      const next = await buy(`${gate}/spot`, { op: "fz-m" });
+      expect(next.result, all(next)).toMatchObject({ op: aop("fz-m"), state: "settled", paid: true });
+    }
+    expect(settlements(arcSeller, baseSeller)).toBe(1);
+  }, 400_000);
+
+  it("a crash after the original was marked, before the attempt's freeze was recorded; the candidate settles during the feature read: the record owns the original, so a hand-run of it against a working seller is refused even with its journal gone", async () => {
+    const { gate, arcSeller, baseSeller, site, file } = await frozenOrder("fz-x");
+    // the crash state: the original carries the order's mark (moveOrderTo), but runAttempt never recorded the freeze or ownership,
+    // and nothing of the attempt was contacted
+    const rec = JSON.parse(readFileSync(file, "utf8"));
+    delete rec.owns; delete rec.attempts[0].freeze;
+    writeFileSync(file, JSON.stringify(rec, null, 2) + "\n");
+    rmSync(join(home, "budget", "ops", "evm-arc-testnet", `${aop("fz-x")}.json`), { force: true });
+    site.features = [];
+    let release!: () => void;
+    site.servicesGate = new Promise<void>((r) => (release = r));
+    const reached = new Promise<void>((r) => (site.servicesReached = r));
+    const dir = join(home, "budget", "ops", "evm-arc-testnet");
+    const paused = join(home, "paused-x"), go = join(home, "go-x");
+    const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
+    const candidate = new Promise<Out>((done, fail) => {
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-x")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), "buy.ts", ...candidateBuy(gate, "fz-x")], { cwd: join(ROOT, "budget", "evm"), env });
+      let stdout = "", stderr = "";
+      child.stdout.on("data", (c) => (stdout += String(c)));
+      child.stderr.on("data", (c) => (stderr += String(c)));
+      child.once("error", fail);
+      child.once("close", (code) => { const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT ")); done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null, pid: 0 }); });
+    });
+    for (const until = Date.now() + 120_000; !existsSync(paused); await new Promise((r) => setTimeout(r, 20))) if (Date.now() > until) throw new Error("the candidate never reached its record lock");
+    const rerun = buy(`${gate}/spot`, { op: "fz-x" });
+    await reached;
+    writeFileSync(go, "go");
+    const settled = await candidate;
+    expect(settled.result, all(settled)).toMatchObject({ state: "settled", paid: true });
+    release();
+    const out = await rerun;
+    expect(out.result, all(out)).toMatchObject({ state: "unknown", paid: null });
+    // the attempt is not recorded as failed before payment: its op was never closed, and it settled
+    const after = JSON.parse(readFileSync(file, "utf8"));
+    expect(after.attempts[0].outcome).not.toBe("failed_before_payment");
+    expect(recordOwns(after)).toBe(true);
+    // the original's journal is lost: the record alone keeps a hand-run of it away from a seller that works
+    rmSync(join(home, "budget", "ops", "evm-base-sepolia", "fz-x.json"));
+    const hand = await direct("evm/buy.ts", ["--chain", "base-sepolia", "--url", baseSeller.url, "--max", "0.05", "--op", "fz-x"]);
+    expect(hand.result.reason ?? "", all(hand)).toMatch(/belongs to an auto-recovered order/);
+    const again = await buy(`${gate}/spot`, { op: "fz-x" });
+    expect(again.result, all(again)).toMatchObject({ op: aop("fz-x"), state: "settled", paid: true });
     expect(settlements(arcSeller, baseSeller)).toBe(1);
   }, 400_000);
 
@@ -1365,7 +1537,8 @@ describe("solana: the same retry, and a payment on another chain of the same sel
     expect(r.result.recovery).toMatchObject({ switched: true, kind: "rail", disclosed: false, original: { rail: "solana", chain: "devnet", op: "rec-sol" } });
     // the advice request was signed with the Solana agent key (ed25519), for this site
     expect(site.adviceCalls[0]!.signed).toBe(true);
-    expect(site.adviceCalls[0]!.body).toMatchObject({ original: { chain: "devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" }, failure: { attempts_used: 3 } });
+    // asked after the first read, before the terms were read again
+    expect(site.adviceCalls[0]!.body).toMatchObject({ original: { chain: "devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" }, failure: { attempts_used: 1 } });
     expect(site.reportCalls[0]!.body).toMatchObject({ outcome: "paid", disclosed: false, offer_id: "arc-1" });
   }, 240_000);
 
@@ -1394,7 +1567,7 @@ describe("solana: the same retry, and a payment on another chain of the same sel
   }, 240_000);
 });
 
-// ---- review round 1: regressions ------------------------------------------------------------------------------------------
+// ---- two orders, attempt ops and the original's ownership -----------------------------------------------------------------
 
 describe("two orders never share an attempt op, and an attempt never adopts another command's op", () => {
   it("two ops that share their first 58 characters recover as two orders, each paid once under its own attempt op", async () => {
@@ -1428,6 +1601,8 @@ describe("two orders never share an attempt op, and an attempt never adopts anot
     cleanups.push(() => seller.close());
     const ref = "11111111-2222-3333-4444-555555555555";
     const op = attemptOp("taken", 2, ref);
+    // the order registered this attempt op before it journaled the switch
+    registerName(ref, { rail: "evm", chain: "base-sepolia", op: "taken" }, { rail: "evm", chain: "arc-testnet", op });
     const prior = (url: string) => ({ op, rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url });
     // a different request: unknown, exit 5, untouched, nothing paid
     const other = prior("http://127.0.0.1:9/elsewhere");
@@ -1448,13 +1623,15 @@ describe("two orders never share an attempt op, and an attempt never adopts anot
     expect(seller.settled).toHaveLength(1);
   }, 120_000);
 
-  it("reserved names: every entrypoint refuses an attempt op without the matching --recovery-order, before it writes or signs anything", async () => {
+  it("reserved names: every entrypoint refuses an op an order registered as its attempt without that order's --recovery-order, before it writes or signs anything, with no journal left", async () => {
     setUpEvm(null);
     setUpSolana("http://127.0.0.1:9");
     const seller = await startSeller(arc, 5042002);
     cleanups.push(() => seller.close());
     const ref = "11111111-2222-3333-4444-555555555555";
     const eop = attemptOp("mine", 2, ref);
+    // the order registered this name on both rails; its journals and its record are gone, or were never written
+    for (const [rail, chain] of [["evm", "arc-testnet"], ["solana", "devnet"]]) registerName(ref, { rail: "evm", chain: "base-sepolia", op: "mine" }, { rail: rail!, chain: chain!, op: eop });
     const edir = join(home, "budget", "ops", "evm-arc-testnet"), sdir = join(home, "budget", "ops", "solana-devnet");
     const evm = ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", eop];
     for (const extra of [[], ["--recovery-order", "99999999-2222-3333-4444-555555555555"]]) {
@@ -1561,7 +1738,7 @@ describe("a rerun answers from the order's record whatever its flags (--pay-to)"
   }, 300_000);
 });
 
-describe("round 2: the original is never bought again once any attempt may have paid", () => {
+describe("the original is never bought again once any attempt may have paid", () => {
   /** A recovered order paid on Arc; the original's own seller is reachable at `baseSeller` afterwards. */
   async function paidOrder(op: string, o: { deliver?: boolean } = {}) {
     const arcSeller = await startSeller(arc, 5042002);
@@ -1639,7 +1816,7 @@ describe("round 2: the original is never bought again once any attempt may have 
   }, 300_000);
 });
 
-describe("round 2: a candidate that signed before the original was marked", () => {
+describe("a candidate that signed before the original was marked", () => {
   /**
    * The state a crash leaves between writing the switch and marking the original: the record says journaled, the original's
    * journal is unmarked. Built from an order killed at the candidate's first contact, with the original's mark taken off again.
@@ -1715,7 +1892,7 @@ describe("round 2: a candidate that signed before the original was marked", () =
   }, 400_000);
 });
 
-describe("round 2: a journal stamped for another order is never this order's payment", () => {
+describe("a journal stamped for another order is never this order's payment", () => {
   it("another order's settled journal at this order's attempt op (same URL): unknown on every rerun, never claimed, nothing paid again", async () => {
     const arcSeller = await startSeller(arc, 5042002);
     cleanups.push(() => arcSeller.close());
@@ -1743,8 +1920,14 @@ describe("round 2: a journal stamped for another order is never this order's pay
     // another order whose reference starts with the same 8 characters: its attempt has the same name and the same URL, and settles
     const otherRef = `${orderRef("foreign-1").slice(0, 8)}-0000-4000-8000-000000000000`;
     expect(otherRef).not.toBe(orderRef("foreign-1"));
-    const other = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("foreign-1"), "--recovery-order", otherRef]);
+    // the name is registered to this order, so the other order's run is refused; a build without registrations could have run it
+    const at = { rail: "evm", chain: "arc-testnet", op: aop("foreign-1") }, root = { rail: "evm", chain: "base-sepolia", op: "foreign-1" };
+    const otherArgs = ["--chain", "arc-testnet", "--url", `${gate}/arc`, "--max", "0.012", "--op", aop("foreign-1"), "--recovery-order", otherRef];
+    expect((await direct("evm/buy.ts", otherArgs)).result.reason).toMatch(/reserved/);
+    registerName(otherRef, root, at);
+    const other = await direct("evm/buy.ts", otherArgs);
     expect(other.result, all(other)).toMatchObject({ state: "settled", paid: true });
+    registerName(orderRef("foreign-1"), root, at);
     for (let i = 0; i < 2; i++) {
       const again = await buy(`${gate}/spot`, { op: "foreign-1" });
       expect(again.code, all(again)).toBe(5);
@@ -1765,7 +1948,8 @@ describe("round 2: a journal stamped for another order is never this order's pay
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const seller = await startSeller(arc, 5042002);
     cleanups.push(() => seller.close());
-    // the same request, stamped for another order
+    // registered to this order, but its journal is the same request stamped for another order
+    for (const [rail, chain] of [["evm", "arc-testnet"], ["solana", "devnet"]]) registerName("11111111-2222-3333-4444-555555555555", { rail: "evm", chain: "base-sepolia", op: "taken" }, { rail: rail!, chain: chain!, op: "taken-11111111-r2" });
     const foreign = { op: "taken-11111111-r2", rail: "evm", path: "approve", state: "refused_precheck", owner: owner.address, agent: agent.address, createdAt: new Date().toISOString(), notes: [], signed: false, url: seller.url, recoveryOf: { order_ref: "aaaaaaaa-1111-4111-8111-111111111111" } };
     writeFileSync(join(dir, "taken-11111111-r2.json"), JSON.stringify(foreign), { mode: 0o600 });
     const r = await direct("evm/buy.ts", ["--chain", "arc-testnet", "--url", seller.url, "--max", "0.05", "--op", "taken-11111111-r2", "--recovery-order", "11111111-2222-3333-4444-555555555555"]);

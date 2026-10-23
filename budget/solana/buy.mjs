@@ -126,9 +126,9 @@ const opId = flags.op ?? newOpId();
 if (!OP_ID_RE.test(opId)) usageError("--op must be 1-64 characters: letters, digits, '.', '_' or '-'", USAGE);
 const recoveryOrder = flags["recovery-order"];
 if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageError("--recovery-order is an order reference (letters, digits and -, at most 64)", USAGE);
-// Attempt op names are reserved for the order that owns them: refused before any lock, journal or signature, journal or not
+// An op an order registered as its attempt is reserved for that order: refused before any lock, journal or signature, journal or not
 {
-  const reserved = reservedNameProblem(opId, recoveryOrder);
+  const reserved = reservedNameProblem("solana", "devnet", opId, recoveryOrder);
   if (reserved) {
     console.error(`Refused (nothing signed): ${reserved}`);
     console.log("RESULT " + JSON.stringify({ rail: "solana", op: opId, state: "refused_precheck", tx: null, debit: "0", remaining: null, delivered: null, reason: reserved, next: "use another --op" }));

@@ -229,16 +229,45 @@ export function provesUnsigned(rail, read) {
 
 /** An order reference as --recovery-order carries it to a rail (a UUID made by recoverOrder). */
 export const RECOVERY_ORDER = /^[A-Za-z0-9-]{1,64}$/;
+
+/** Where an order registers the op of each attempt it journals, apart from every purchase journal. */
+export function attemptRegistrationPath(rail, chain, op) {
+  recordPath(rail, chain, op); // the same names an order's record accepts
+  return join(recoveryDir(), "attempts", `${rail}-${chain}-${op}.json`);
+}
 /**
- * Attempt op names are reserved: `<prefix>-<8 characters of the order reference>-r<n>`. Only a rail invocation that passes the matching
- * --recovery-order may buy one; any other invocation refuses it before it writes or signs anything, journal or not. Returns the
+ * Registers `attempt.op` as an attempt of this order, durably, before the attempt is journaled as a switch and long before it is
+ * contacted. The registration is never removed, so the name stays the order's even when its purchase journal and the order's record
+ * are gone. Throws when it cannot be written: then the switch is not journaled and nothing is contacted.
+ */
+export function registerAttempt(record, attempt) {
+  const path = attemptRegistrationPath(attempt.rail, attempt.chain, attempt.op);
+  const held = attemptRegistration(attempt.rail, attempt.chain, attempt.op);
+  if (held && held.order_ref === record.order_ref) return;
+  if (held) throw new Error(`operation ${attempt.op} is registered to another order`);
+  writeJournalFile(path, `${JSON.stringify({ version: 1, order_ref: record.order_ref, root: rootOf(record), op: attempt.op, rail: attempt.rail, chain: attempt.chain }, null, 2)}\n`);
+}
+/** The registration of an attempt op: { order_ref, ... }, null when the op was never registered, or { unreadable: true }. */
+export function attemptRegistration(rail, chain, op) {
+  let path;
+  try { path = attemptRegistrationPath(rail, chain, op); } catch { return null; } // not an op an order can use
+  let text;
+  try { text = readFileSync(path, "utf8"); } catch (err) { return err?.code === "ENOENT" ? null : { unreadable: true }; }
+  try {
+    const r = JSON.parse(text);
+    return r && typeof r === "object" && typeof r.order_ref === "string" && r.op === op ? r : { unreadable: true };
+  } catch { return { unreadable: true }; }
+}
+/**
+ * An op that an order registered as one of its attempts (registerAttempt) is reserved: only a rail invocation that passes that
+ * order's --recovery-order may buy it; any other invocation refuses it before it writes or signs anything, journal or not. Any other
+ * name is an ordinary op, whatever it looks like. --recovery-order is accepted only for an op registered to that order. Returns the
  * refusal in words, or "".
  */
-export function reservedNameProblem(op, recoveryOrder) {
-  const m = /^.+-([A-Za-z0-9]{8})-r\d+$/.exec(String(op));
-  // --recovery-order is accepted only for an op name that is one of that order's own attempt names: never on an original or any other op
-  if (!m) return recoveryOrder === undefined ? "" : `--recovery-order is only for an order's own attempt op, and ${op} is not one: an original or ordinary op is bought without it`;
-  if (recoveryOrder !== undefined && String(recoveryOrder).replace(/[^A-Za-z0-9]/g, "").slice(0, 8) === m[1]) return "";
+export function reservedNameProblem(rail, chain, op, recoveryOrder) {
+  const held = attemptRegistration(rail, chain, op);
+  if (!held) return recoveryOrder === undefined ? "" : `--recovery-order is only for an order's own attempt op, and ${op} is not one: an original or ordinary op is bought without it`;
+  if (!held.unreadable && recoveryOrder !== undefined && held.order_ref === recoveryOrder) return "";
   return `operation ${op} is reserved for an attempt of an auto-recovered order; it is bought only by that order. Use another --op for a purchase of your own`;
 }
 
@@ -270,9 +299,9 @@ function markTargetProblem(existing, replacement) {
   try { dir = opsDir(existing.rail, existing.chain); lock = lockRecord(dir, existing.op); } catch { return "mark_target_unreadable"; }
   if (!lock.ok) return "busy";
   try {
-    let j = null;
-    try { j = JSON.parse(readFileSync(join(dir, `${existing.op}.json`), "utf8")); } catch (err) { if (err?.code !== "ENOENT") return "mark_target_unreadable"; }
-    if (j === null) return "";
+    // only a missing file means the target never journaled; any present content that is not a journal (null included) is unreadable
+    let j;
+    try { j = JSON.parse(readFileSync(join(dir, `${existing.op}.json`), "utf8")); } catch (err) { return err?.code === "ENOENT" ? "" : "mark_target_unreadable"; }
     if (!j || typeof j !== "object" || journalProblem(existing.rail, j, existing.op)) return "mark_target_unreadable";
     return provesUnsigned(existing.rail, { present: true, journal: j }) ? "" : "may_have_signed";
   } finally { try { lock.release(); } catch { /* released with the process */ } }
@@ -301,11 +330,12 @@ export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = nu
   if (!lock.ok) return { ok: false, why: "busy" };
   try {
     const file = join(dir, `${op}.json`);
-    let cur = null;
-    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch (err) { if (err?.code !== "ENOENT") return { ok: false, why: "unreadable" }; }
+    // only a missing file is absent: present content that is not a journal (null included) is never replaced
+    let cur, absent = false;
+    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch (err) { if (err?.code !== "ENOENT") return { ok: false, why: "unreadable" }; absent = true; }
     const now = new Date().toISOString();
     let start;
-    if (cur !== null) {
+    if (!absent) {
       if (!cur || typeof cur !== "object" || journalProblem(rail, cur, op)) return { ok: false, why: "unreadable" };
       // an attempt op's name is derived from the order: whatever journal is at that name is this order's evidence. The one case that is
       // not is a request that clearly differs (another url): a collision, never marked and never skipped
@@ -576,14 +606,72 @@ function recoveryFact(record, attempt, extra = {}) {
 }
 
 /**
+ * Asks the site for recovery advice for a new order whose terms read failed, once, and checks it. The dispatcher asks before it reads
+ * the terms again, so that only an owner whose recovery policy is on gets reads 2 and 3; recoverOrder uses the same answer (deps.advised)
+ * when they fail too. Returns { ok: true, orderRef, body, receivedAt, funded, maxAtomic, hasBody }, or { ok: false, why } when recovery
+ * cannot follow (no site, the feature not listed, nothing funded, the advice refused, unavailable, expired or with the policy off): then
+ * the buy is answered as without auto recovery. `deps` as for recoverOrder; nothing is written.
+ */
+export async function adviseOrder(deps) {
+  const { f, failure } = deps;
+  const log = deps.log ?? (() => {});
+  const now = deps.now ?? Date.now;
+  const no = (why) => ({ ok: false, why });
+  if (f.rail !== "evm" && f.rail !== "solana") return no("rail");
+  if (!failure) return no("no_failure");
+  if (f["pay-to"] !== undefined) return no("pay_to"); // the caller pinned a recipient: another seller or chain is not what they asked for
+  const originalChain = recoveryChain(f.rail, f.chain);
+  const maxAtomic = atomicOf(f.max);
+  if (!originalChain || maxAtomic === null || maxAtomic === 0n) return no("chain_or_max");
+  const hasBody = (f.method !== undefined && String(f.method).toUpperCase() !== "GET") || f.body !== undefined;
+
+  // INVARIANT 1: nothing for this order was signed or handed to anything
+  if (!deps.unsignedOriginal()) return no("may_have_signed");
+  const site = deps.site();
+  if (!site) return no("no_site");
+  const features = await deps.features();
+  if (!features || !features.has(RECOVERY_FEATURE)) return no("feature_off");
+  const funded = await deps.funded();
+  if (!(funded instanceof Map) || funded.size === 0) return no("not_funded");
+
+  const orderRef = randomUUID();
+  const request = {
+    version: CONTRACT_VERSION, order_ref: orderRef,
+    original: { url: f.url, chain: f.chain, asset: originalChain.asset, amount_atomic: maxAtomic.toString(), pay_to: null },
+    failure: { stage: failure.stage, detail: failure.detail, attempts_used: failure.attempts_used },
+    tried: [{ url: f.url, chain: f.chain }],
+    funded_chains: [...funded.keys()],
+  };
+  // The original's terms could not be read, so its price and recipient are unknown to this client: amount_atomic is the caller's
+  // --max, an UPPER BOUND on what this order may cost and never the margin base (the site's curated original.listed_price_atomic
+  // is), and pay_to is null, rather than a guess.
+  const answer = await deps.siteCall(ADVICE_PATH, request);
+  const receivedAt = now();
+  // 403 (agent not linked, policy off) and 404 (feature off) and any other non-answer: exactly as without auto recovery
+  if (!answer || answer.status !== 200) return no("advice_refused");
+  const checked = validateAdvice(answer.body, {
+    now: receivedAt, receivedAt,
+    original: { rail: f.rail, chain: f.chain, url: f.url, maxAtomic },
+    funded, tried: [{ url: f.url, chain: f.chain }], alreadyOffered: 1, hasBody, otherSellers: deps.otherSellers === true,
+  });
+  if (!checked.ok) {
+    log(`superstables budget: the site's recovery advice was not used (${checked.problem}); nothing was paid`);
+    return no(checked.problem);
+  }
+  return { ok: true, orderRef, body: answer.body, receivedAt, funded, maxAtomic, hasBody };
+}
+
+/**
  * Recovery for one order whose terms read failed after the retries, or a rerun of an order that has a record. Returns
- * { kind: "none" } (behave as today: the caller emits the first attempt's own answer), { kind: "none", closed: true } (the order
+ * { kind: "none" } (behave as today: the caller emits the first attempt's own answer), { kind: "original" } (nothing of the order
+ * was contacted and the original may have signed on its own: the caller answers from the original's journal), { kind: "none", closed: true } (the order
  * moved and ended without a payment, and every op it used is closed for good), { kind: "none", freezeFailed } (an op of the order
  * could not be marked: the order's outcome is unknown) or { kind: "result", code, fields } (the answer to give instead).
  *
  * `deps`:
  *   f                    the buy's flags { rail, chain, url, max, op, method?, body?, "pay-to"? }
  *   failure              the first attempt's termsFailure { stage, detail, attempts_used }; null on a rerun
+ *   advised              what adviseOrder answered, when the dispatcher asked before it read the terms again; undefined: ask now
  *   unsignedOriginal()   -> boolean   INVARIANT 1: the journal evidence for the original op (provesUnsigned)
  *   site()               -> origin | null   the site this agent's budget is linked to
  *   features()           -> Set | null      what the site lists; null: it did not answer
@@ -609,44 +697,22 @@ export async function recoverOrder(deps) {
   if (earlier) return resume(deps, earlier);
 
   if (!failure) return none;
-  if (f["pay-to"] !== undefined) return none; // the caller pinned a recipient: another seller or chain is not what they asked for
-  const originalChain = recoveryChain(f.rail, f.chain);
-  const maxAtomic = atomicOf(f.max);
-  if (!originalChain || maxAtomic === null || maxAtomic === 0n) return none;
-  const hasBody = (f.method !== undefined && String(f.method).toUpperCase() !== "GET") || f.body !== undefined;
-
-  // INVARIANT 1: nothing for this order was signed or handed to anything
+  // the advice the dispatcher asked for before it read the terms again (deps.advised), or asked now
+  const advised = deps.advised !== undefined ? deps.advised : await adviseOrder(deps);
+  if (!advised?.ok) return none;
+  // INVARIANT 1 again: the terms may have been read again since the advice came
   if (!deps.unsignedOriginal()) return none;
-  const site = deps.site();
-  if (!site) return none;
-  const features = await deps.features();
-  if (!features || !features.has(RECOVERY_FEATURE)) return none;
-  const funded = await deps.funded();
-  if (!(funded instanceof Map) || funded.size === 0) return none;
+  const { funded, maxAtomic, hasBody } = advised;
 
-  // The order's reference is made here and written with the first switch, not before: until a switch is journaled nothing
-  // for this order has happened anywhere, so a crash before it leaves nothing to resume and the next run asks again.
+  // The order's reference was made with the advice request and is written with the first switch, not before: until a switch is
+  // journaled nothing for this order has happened anywhere, so a crash before it leaves nothing to resume and the next run asks again.
   const record = {
-    version: 2, order_ref: randomUUID(), rail: f.rail, chain: f.chain, op: f.op, url: f.url, max: f.max,
+    version: 2, order_ref: advised.orderRef, rail: f.rail, chain: f.chain, op: f.op, url: f.url, max: f.max,
     failure, createdAt: new Date(now()).toISOString(), advice: null, attempts: [], skipped: [],
   };
-
-  const request = {
-    version: CONTRACT_VERSION, order_ref: record.order_ref,
-    original: { url: f.url, chain: f.chain, asset: originalChain.asset, amount_atomic: maxAtomic.toString(), pay_to: null },
-    failure: { stage: failure.stage, detail: failure.detail, attempts_used: failure.attempts_used },
-    tried: [{ url: f.url, chain: f.chain }],
-    funded_chains: [...funded.keys()],
-  };
-  // The original's terms could not be read, so its price and recipient are unknown to this client: amount_atomic is the caller's
-  // --max, an UPPER BOUND on what this order may cost and never the margin base (the site's curated original.listed_price_atomic
-  // is), and pay_to is null, rather than a guess.
-  const answer = await deps.siteCall(ADVICE_PATH, request);
-  const receivedAt = now();
-  // 403 (agent not linked, policy off) and 404 (feature off) and any other non-answer: exactly as today
-  if (!answer || answer.status !== 200) return none;
-  const checked = validateAdvice(answer.body, {
-    now: receivedAt, receivedAt,
+  // checked again now: the advice may have run out while the terms were read again
+  const checked = validateAdvice(advised.body, {
+    now: now(), receivedAt: advised.receivedAt,
     original: { rail: f.rail, chain: f.chain, url: f.url, maxAtomic },
     funded, tried: [{ url: f.url, chain: f.chain }], alreadyOffered: 1, hasBody, otherSellers: deps.otherSellers === true,
   });
@@ -672,9 +738,11 @@ export async function recoverOrder(deps) {
       disclosed: candidate.disclosed, consent_id: candidate.consentId, params: candidate.params, fixed_params: candidate.fixedParams, why: candidate.why,
       journaledAt: new Date(now()).toISOString(), state: "journaled", outcome: null,
     };
-    // INVARIANT 7: the switch is journaled, durably, BEFORE the new seller is contacted
+    // INVARIANT 7: the switch is journaled, durably, BEFORE the new seller is contacted. Its op is registered to the order first, so
+    // no buy without the order's reference can take that name, whatever happens to the journals later (reservedNameProblem).
     record.attempts.push(attempt);
     try {
+      registerAttempt(record, attempt);
       writeRecord(record);
     } catch (err) {
       // not journaled, so not contacted: the switch is dropped. Nothing was frozen for it; an earlier attempt's freeze stands.
@@ -714,11 +782,6 @@ const movedTo = (record, attempt) => ({ order_ref: record.order_ref, root: rootO
 /** The mark that says the order ended without a payment. */
 const closedMark = (record, why) => ({ order_ref: record.order_ref, root: rootOf(record), closed: why });
 
-/**
- * INVARIANT 1, before `attempt` is contacted: every earlier attempt of the order, and then the original, is marked as superseded by
- * it, permanently and under each op's record lock, so none of them can be paid by anything once the order moves on. Returns null,
- * or the op that could not be marked { op, rail, chain, why }: then nothing of `attempt` is contacted and the outcome is unknown.
- */
 /** One durable mark of the original per run and mark: the same mark is not written again by the next path that wants it. */
 function markRoot(deps, record, mark) {
   const key = JSON.stringify(mark);
@@ -729,6 +792,11 @@ function markRoot(deps, record, mark) {
   return r;
 }
 
+/**
+ * INVARIANT 1, before `attempt` is contacted: the original, and then every earlier attempt of the order, is marked as superseded by
+ * it, permanently and under each op's record lock, so none of them can be paid by anything once the order moves on. Returns null,
+ * or the op that could not be marked { op, rail, chain, why }: then nothing of `attempt` is contacted and the outcome is unknown.
+ */
 function moveOrderTo(deps, record, attempt) {
   const mark = movedTo(record, attempt);
   // the original FIRST: before any attempt op is touched, the original is durably superseded under its own record lock
@@ -763,14 +831,16 @@ function closeOrder(deps, record, why) {
 }
 
 /** The answer when an op of the order could not be marked: unknown, never "not paid". */
-function stuckResult(record, stuck) {
+function stuckResult(record, stuck, { marking = false } = {}) {
   return {
     kind: "result", code: 5,
     fields: {
       command: "buy", rail: stuck.rail, chain: stuck.chain, op: stuck.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {},
       recovery: recoveryFact(record, null, { switched: record.attempts.length > 0, skipped: record.skipped ?? [] }),
       next: `wait for any command on operation ${stuck.op} to end, then run this buy again with the same --op; never pay again for this order while its outcome is unknown`,
-      reason: `auto recovery could not close operation ${stuck.op} of this order (${stuck.why}): a command may be using it or it may have paid, so the order's outcome is unknown`,
+      reason: marking
+        ? `auto recovery could not mark operation ${stuck.op} as superseded (${stuck.why}); the order's outcome is unknown`
+        : `auto recovery could not close operation ${stuck.op} of this order (${stuck.why}): a command may be using it or it may have paid, so the order's outcome is unknown`,
     },
   };
 }
@@ -883,8 +953,8 @@ async function decided(deps, record, attempt, probe) {
   const held = rootFirst(deps, record, attempt);
   if (held) return held;
   // a busy candidate says nothing about the outcome yet, but the order has met it: at least unknown on record, so reruns return here
-  if (probe.busy) learn(record, attempt, { state: "unknown", tx: {} }, true);
-  else learn(record, attempt, probe.fields, true);
+  if (probe.busy) learn(record, attempt, { state: "unknown", tx: {} });
+  else learn(record, attempt, probe.fields);
   const stuck = retireOthers(deps, record, attempt);
   if (stuck) return heldResult(record, attempt, probe.fields, stuck);
   return { kind: "result", code: probe.code, fields: switchedFields(record, attempt, probe.fields) };
@@ -897,12 +967,35 @@ async function decided(deps, record, attempt, probe) {
  */
 function rootFirst(deps, record, attempt) {
   const frozen = markRoot(deps, record, record.sealed ? closedMark(record, record.closed) : movedTo(record, attempt));
-  if (frozen.ok) return null;
+  if (frozen.ok) return ownOriginal(record);
   // the order has met this attempt: it owns the original from now on, and the attempt is at least unknown, so every rerun returns here
   record.owns = true;
-  learn(record, attempt, { state: "unknown", tx: {} }, true);
+  learn(record, attempt, { state: "unknown", tx: {} });
   const quiet = { command: "buy", rail: attempt.rail, chain: attempt.chain, op: attempt.op, state: "unknown", paid: null, delivered: null, amount: null, tx: { ...(attempt.tx ? { settle: attempt.tx } : {}), ...(attempt.tx_pull ? { pull: attempt.tx_pull } : {}), ...(attempt.tx_unknown_kind ? { recorded: attempt.tx_unknown_kind } : {}) } };
   return heldResult(record, attempt, quiet, { ...rootOf(record), why: frozen.why });
+}
+
+/** The original carries this order's mark: the record owns it from now on, durably, whatever happens to its journal (recordOwns). */
+function ownOriginal(record) {
+  if (record.owns !== true) { record.owns = true; try { writeRecord(record); } catch { /* the mark is the truth; the record only repeats it */ } }
+  return null;
+}
+
+/** Whether an attempt was never contacted because the original could not be marked before it (runAttempt). */
+const neverContacted = (a) => typeof a.freeze === "string" && a.freeze.startsWith("failed:");
+
+/**
+ * The gate of a rerun whose last attempt was never contacted: the original is marked first, as rootFirst does, but when it cannot
+ * be, that attempt is not made into "may have paid" and the order does not take the original. Every contact needs the original
+ * marked first, so an original that may have signed was never marked and nothing of the order was contacted: the original's own
+ * journal is the answer ({ kind: "original" }). Any other failure is unknown for now, and the next rerun asks again.
+ */
+function rootFirstUncontacted(deps, record, attempt) {
+  const frozen = markRoot(deps, record, record.sealed ? closedMark(record, record.closed) : movedTo(record, attempt));
+  if (frozen.ok) return ownOriginal(record);
+  const contacted = record.attempts.some((a) => !neverContacted(a) && (a.freeze === "done" || recordedSigned(a)));
+  if (frozen.why === "may_have_signed" && !contacted) return { kind: "original" };
+  return stuckResult(record, { ...rootOf(record), why: frozen.why }, { marking: true });
 }
 
 /** Runs one journaled attempt through the ordinary buy, reports it, and decides whether the order goes on. */
@@ -1021,6 +1114,8 @@ const recordedSigned = (a) => (a.state === "done" && (a.outcome === "paid" || a.
  */
 async function resume(deps, record) {
   const last = record.attempts[record.attempts.length - 1];
+  // an order journaled before attempts were registered registers them now, so their names stay reserved without their journals
+  for (const a of record.attempts) { try { registerAttempt(record, a); } catch { /* reserved by its journal's stamp or mark, if any */ } }
   // A record from an earlier development build is never trusted to claim, adopt, start or resume anything: unknown, with its evidence.
   // Checked before the empty-list shortcut: such a record with no attempts still freezes the original first and answers the same.
   if (earlierBuild(record)) {
@@ -1041,7 +1136,7 @@ async function resume(deps, record) {
   if (!last) return { kind: "none" }; // advice was never acted on
   // The original is durably superseded FIRST, before any attempt journal is read or any attempt lock is tried. If it cannot be, the
   // answer is unknown (the attempt recorded as at least unknown, so every rerun returns here) and no attempt is touched.
-  const firstHeld = rootFirst(deps, record, last);
+  const firstHeld = neverContacted(last) ? rootFirstUncontacted(deps, record, last) : rootFirst(deps, record, last);
   if (firstHeld) return firstHeld;
   // INVARIANT 1: every attempt, the newest first; an attempt that may have signed is never run again, and what its journal says stands
   for (const a of [...record.attempts].reverse()) {
@@ -1061,9 +1156,16 @@ async function resume(deps, record) {
   if (last.state === "journaled" && !record.closed) {
     const stale = await resumeProblem(deps, record, last);
     if (stale) {
-      last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
       record.skipped = [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }];
       closeRecord(record, stale);
+      // the attempt is recorded as failed before payment only once its op is closed for good: until then a rail run of it with the
+      // order's flag may be paying (during the feature read, say), and closing the order finds that instead
+      const end = await endUnpaid(deps, record, stale);
+      if (end.kind === "none") {
+        last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
+        try { writeRecord(record); } catch { /* every op of the order is closed either way */ }
+      }
+      return end;
     } else {
       const done = await runAttempt(deps, record, last);
       if (done.kind === "result") return done;

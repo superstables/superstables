@@ -131,13 +131,17 @@ describe("--site on every command", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.result.state).toBe("waiting_owner");
     const other = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0", "--site", "https://staging.superstables.com"]);
-    expect(other.code).toBe(2);
+    // an approval with a request recorded on a site may have sent: a mistaken flag is unknown (exit 5) with the fix, never failed
+    expect(other.code).toBe(5);
+    expect(other.result).toMatchObject({ state: "unknown", final: false, id: first.result.id });
     expect(other.result.reason).toMatch(/is not the site this approval was made on/);
+    expect(other.result.next).toContain(`--site ${site.url}`);
     const same = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "0", "--site", site.url]);
     expect(same.result).toMatchObject({ state: "waiting_owner", id: first.result.id });
     // the refusal comes before the --shown check: nothing is read for a request that is not on this site
     const noShown = await budget(["wait", "--id", first.result.id, "--site", "https://staging.superstables.com"]);
     expect(noShown.result.reason).toMatch(/is not the site this approval was made on/);
+    expect(noShown.result.state).toBe("unknown");
     // settled, so its background worker ends with the test instead of polling a closed site for 10 minutes
     Object.assign(site.requests[0], { state: "linked", owner: OWNER });
     expect((await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "30", "--site", site.url])).result).toMatchObject({ state: "ok", id: first.result.id });

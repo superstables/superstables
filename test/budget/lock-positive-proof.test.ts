@@ -164,7 +164,7 @@ it.runIf(runsNoProcSandbox)('a dead real no-proc holder requires the explicit ow
   expect(unlock(b.home).status).toBe(0);
   expect(existsSync(b.path)).toBe(false); expect(readFileSync(journal, 'utf8')).toBe('{"state":"submitted"}');
 });
-it.runIf(process.platform === 'linux')('a real live holder with blocked identity survives the round-2 two-second clock step', async () => {
+it.runIf(process.platform === 'linux')('a real live holder with blocked identity survives a two-second clock step', async () => {
   const b = box(), blocked = join(b.home, 'blocked.mjs'), stepped = join(b.home, 'clockstep.mjs');
   writeFileSync(blocked, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module'; for (const name of ['readFileSync','readlinkSync','readdirSync']) { const original = fs[name]; fs[name] = function(path,...args) { if (String(path).startsWith('/proc/')) throw Object.assign(new Error('denied'),{code:'EACCES'}); return original.call(this,path,...args); }; } syncBuiltinESMExports();`);
   writeFileSync(stepped, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module'; const original = fs.readFileSync; fs.readFileSync = function(path,...args) { const out = original.call(this,path,...args); return String(path) === '/proc/stat' ? String(out).replace(/^btime (\\d+)$/m,(_,b)=>'btime '+(Number(b)+2)) : out; }; syncBuiltinESMExports();`);

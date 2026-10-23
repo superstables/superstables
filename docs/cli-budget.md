@@ -757,7 +757,8 @@ Prints: one RESULT line: state, final, chain_final, id, url, matchCode (on super
   waiting.
   --json: stdout is that RESULT object alone, as JSON, without the RESULT prefix.
 Exit codes: 0 waiting (final false) or done, 1 failed, 2 bad input, unknown id or no --shown, 3 refused (rejected,
-  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it)
+  expired), 4 paid but not delivered (buy-once), 5 unknown (the wallet may have sent it; also a refused flag or a record it
+  cannot read, for an approval that exists here: final false, nothing read or changed)
 ```
 
 ## superstables budget find
