@@ -15,9 +15,9 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   a browser extension wallet. Over SSH, forward the approval link's port first:
   `ssh -L PORT:127.0.0.1:PORT user@host`. No superstables.com account is needed.
 - For **approvals on superstables.com**, the owner can use a wallet on another device. They need a
-  superstables.com account: they sign in with an Ethereum or Solana wallet or an email address, and the
-  account holds the wallets that approve (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
-  Solana). An account admin adds wallets on the account page. An ordinary remote browser without a compatible
+  superstables.com account. They sign in with an Ethereum or Solana wallet or an email address. An account
+  admin links wallets on the account page: an Ethereum wallet for EVM chains and Tempo, or a Solana wallet
+  for Solana. The owner approves with the linked wallet. An ordinary remote browser without a compatible
   wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 

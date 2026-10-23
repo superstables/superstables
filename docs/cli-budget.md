@@ -36,7 +36,7 @@ computer, no account needed (the default); the owner approves in their own walle
   superstables budget doctor --rail evm             check keys, addresses and balances; says what to top up
   superstables budget grant --rail evm --amount 5   an allowance of 5 USDC from the owner's wallet; the USDC stays there
 
-Or approve from any device on superstables.com (needs an account there; the owner signs in with their wallet):
+Or approve from a device with the owner's wallet on superstables.com (needs an account; the owner signs in with an Ethereum or Solana wallet or an email address):
   superstables budget setup --rail evm --hosted --grant 5 --fund
                                                     one approval link for all of it: add agent, gas, budget
 Use this one when the owner asks for it.
@@ -105,8 +105,8 @@ Owner approvals: an owner command starts a page on 127.0.0.1 and prints its appr
 The owner opens it in the browser that has their wallet. The page is on this machine only: over SSH, forward its port
 first (ssh -L PORT:127.0.0.1:PORT user@this-host, PORT from the approval link). On a chain set up with --hosted (and for
 buy-once), the approval link is on superstables.com instead: it opens on any device where the owner is signed in, and
-their account must hold the wallet the chain needs (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
-Solana); an account admin adds wallets on the account page. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
+their account must have a wallet linked for the chain (an Ethereum wallet for EVM chains and Tempo, a Solana wallet for
+Solana); an account admin links wallets on the account page. The APPROVE line also carries a matchCode the owner picks there. Not in a terminal (an agent), the
 command returns at once with state waiting_owner and final false. Reply to the owner with message_for_owner from the RESULT, word for word
 (you may add one short line before it), and end your turn; when they say they've approved, run
 superstables budget wait --id ID --shown. The approval link expires after --timeout seconds (default 600): if the wallet
@@ -684,7 +684,7 @@ finalized too. A revoke that is only in a block leaves the rotation incomplete (
 key file and its records stay, and the transactions are recorded. Run it again once superstables budget status says the revoke is
 final; rotate then checks the recorded transactions and does not send them again.
 --plan reads the chains and sends nothing. The retired list is a file on this machine: the owner's revoke on chain is
-what stops a stolen key. On a chain approved on superstables.com, the old agent is also removed on the account page.
+what stops a stolen key. On a chain approved on superstables.com, the owner must also remove the old agent on the account page.
 tempo has no rotation: setup --rail tempo --agent LABEL adds a new key (a revoked or expired tempo key is never granted again).
 
 How the owner approves: every step is the command of the same name, so each asks the owner as that command does, one approval
@@ -808,8 +808,8 @@ The command asks the site for the purchase and prints the owner's approval link 
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
 short line before it), and end your turn. The first approval link the owner opens
 asks them to sign in, with an Ethereum or Solana wallet (a message, no fee) or an email address. The owner pays
-from a wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet.
-An account admin adds wallets on the account page.
+from a wallet linked to their account: an Ethereum wallet on EVM chains and Tempo, or a Solana wallet on Solana devnet.
+An account admin links wallets on the account page.
 Not in a terminal (an agent), or with --detach: returns at
 once with state waiting_owner and an approval id; when the owner says they've approved, run
 superstables budget wait --id ID --shown. In a terminal, or with --wait: blocks until the purchase ends. One buy-once

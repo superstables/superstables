@@ -46,8 +46,8 @@ signing in with an Ethereum or Solana wallet or an email address, or a compatibl
 `superstables owner settings` (see [budget/CLI.md](../budget/CLI.md#hosted-approvals-what-a-compatible-site-must-do)).
 The installed CLI runs on your own machine, but the site coordinates this single purchase after
 the owner approves. This differs from a budget, whose client pays sellers directly. The owner pays from a
-wallet their account holds: an Ethereum wallet on EVM chains and Tempo, a Solana wallet on Solana devnet, with
-that wallet on the owner's device to sign. An account admin adds wallets on the account page. Signing in does not approve a purchase. The
+wallet linked to their account: an Ethereum wallet on EVM chains and Tempo, or a Solana wallet on Solana devnet.
+That wallet must be available on the owner's device to sign. An account admin links wallets on the account page. Signing in does not approve a purchase. The
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
