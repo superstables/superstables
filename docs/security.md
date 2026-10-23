@@ -592,8 +592,8 @@ undo an owner signature or a transaction already sent through setup on superstab
   is here, and that the address was not retired. An edited public file is refused before any page
   opens. A public file from before this check has no signature: on testnet the command warns and
   goes on, and running `setup` again where the agent key is records one. Deleting the signature
-  lines makes a file look that old. Refusing such files is a prerequisite for mainnet support; that
-  check is not implemented in this release. The check proves
+  lines makes a file look that old. On a chain that is not a testnet the command refuses such a file;
+  mainnet signing is off in this build, so that does not apply yet. The check proves
   who the owner on record signed for, not who that owner is. `revoke` is never blocked by it.
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
@@ -915,8 +915,9 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 - **Evidence from real runs.** What the client assumes about a chain, such as when its blocks are final, which network fees
   count against an access key's limit and what the token's signing domain is, was checked on the testnets it supports. It has
   not been checked on any mainnet chain, and each one needs the same checks before it is added.
-- **Refusing public files from before the agent address was signed.** On testnet the client warns and goes on (see
-  [Budgets](#budgets)). A mainnet chain would have to refuse them, and that refusal is not written.
+- **Public files from before the agent address was signed.** On testnet the client warns and goes on (see
+  [Budgets](#budgets)). On a chain that is not a testnet it already refuses them; mainnet signing is off in this
+  build, so that does not apply yet.
 - **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
   rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
 - **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.
