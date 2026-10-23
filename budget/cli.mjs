@@ -1791,6 +1791,28 @@ async function railBuy(f, ctx, lock, reads) {
   return { rr, n: normalize("buy", f, rr, r.code) };
 }
 
+/**
+ * Whether this op's journal still proves nothing signed, read under the op's record lock: rail scripts run by hand do not take this
+ * command's lock, but every rail holds the record lock from before its terms read until its last write. A lock that is held, or
+ * cannot be taken, is { busy }: the command holding it may be paying.
+ */
+function unsignedUnderLock(f) {
+  let held;
+  try { held = lockRecord(opsDir(f.rail, f.chain), f.op); } catch (err) { return { busy: { details: `the lock of operation ${f.op} could not be taken (${err?.message ?? err})` } }; }
+  if (!held.ok) return { busy: held };
+  try { return { unsigned: provesUnsigned(f.rail, journalState(f)) }; } finally { try { held.release(); } catch { /* released with the process */ } }
+}
+
+/** The answer after the site was asked: unknown while a command holds the op, the journal's answer once it may have signed, or null. */
+function signedMeanwhile(f, ctx) {
+  const now = unsignedUnderLock(f);
+  if (now.busy) {
+    log(`superstables budget: another process is working on operation ${f.op}. ${now.busy.details}. This command signed nothing; the other process may have paid.`);
+    return () => emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: lockNext(now.busy, f.op, f.rail, f.chain), reason: "op_in_progress" });
+  }
+  return now.unsigned ? null : () => originalAnswer(f, ctx);
+}
+
 async function buy({ f, ctx }) {
   // An order that auto recovery took over belongs to its recovery record, and the answer comes from the candidate's journal. This
   // runs BEFORE the original's own setup, key and retirement refusals: those must never make a recovered order look unpaid.
@@ -1850,8 +1872,9 @@ async function buy({ f, ctx }) {
     if (t && t.attempts_used === 1 && raw?.final !== true) {
       // asked once; recovery uses the same answer if reads 2 and 3 fail too
       advised = await adviseOrder({ ...recoveryDeps(f, ctx), failure: t });
-      // the rail scripts do not take this command's lock: one run by hand may have paid this op while the site was asked
-      if (!provesUnsigned(f.rail, journalState(f))) return originalAnswer(f, ctx);
+      // the rail scripts do not take this command's lock: one run by hand may be paying, or have paid, this op while the site was asked
+      const meanwhile = signedMeanwhile(f, ctx);
+      if (meanwhile) return meanwhile();
       const wait = advised.ok ? nextWait(1, typeof raw?.retry_after === "string" ? raw.retry_after : null) : null;
       if (wait !== null && !interrupted) {
         await new Promise((r) => setTimeout(r, wait));
@@ -1875,9 +1898,12 @@ async function buy({ f, ctx }) {
     if (moved?.closed) n.fields.next = "use a new --op for a new purchase: this --op and every operation of its order are closed and never paid";
     if (moved?.recovery) n.fields.recovery = moved.recovery;
   }
-  // after the site was asked, an unpaid refusal stands only while this op's journal still shows nothing signed: a rail script run
-  // by hand meanwhile, or the further reads finding it paid, is answered from the journal, never as unpaid
-  if (waited && n.fields.paid === false && !provesUnsigned(f.rail, journalState(f))) return originalAnswer(f, ctx);
+  // after the site was asked, an unpaid refusal stands only while no command holds this op and its journal still shows nothing
+  // signed: a rail script run by hand meanwhile, or the further reads finding it paid, is answered unknown or from the journal
+  if (waited && n.fields.paid === false) {
+    const meanwhile = signedMeanwhile(f, ctx);
+    if (meanwhile) return meanwhile();
+  }
   emit(n.code, n.fields);
 }
 

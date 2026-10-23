@@ -299,9 +299,9 @@ function markTargetProblem(existing, replacement) {
   try { dir = opsDir(existing.rail, existing.chain); lock = lockRecord(dir, existing.op); } catch { return "mark_target_unreadable"; }
   if (!lock.ok) return "busy";
   try {
-    let j = null;
-    try { j = JSON.parse(readFileSync(join(dir, `${existing.op}.json`), "utf8")); } catch (err) { if (err?.code !== "ENOENT") return "mark_target_unreadable"; }
-    if (j === null) return "";
+    // only a missing file means the target never journaled; any present content that is not a journal (null included) is unreadable
+    let j;
+    try { j = JSON.parse(readFileSync(join(dir, `${existing.op}.json`), "utf8")); } catch (err) { return err?.code === "ENOENT" ? "" : "mark_target_unreadable"; }
     if (!j || typeof j !== "object" || journalProblem(existing.rail, j, existing.op)) return "mark_target_unreadable";
     return provesUnsigned(existing.rail, { present: true, journal: j }) ? "" : "may_have_signed";
   } finally { try { lock.release(); } catch { /* released with the process */ } }
@@ -330,11 +330,12 @@ export function freezeOp({ rail, chain, op }, mark, { attempt = false, base = nu
   if (!lock.ok) return { ok: false, why: "busy" };
   try {
     const file = join(dir, `${op}.json`);
-    let cur = null;
-    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch (err) { if (err?.code !== "ENOENT") return { ok: false, why: "unreadable" }; }
+    // only a missing file is absent: present content that is not a journal (null included) is never replaced
+    let cur, absent = false;
+    try { cur = JSON.parse(readFileSync(file, "utf8")); } catch (err) { if (err?.code !== "ENOENT") return { ok: false, why: "unreadable" }; absent = true; }
     const now = new Date().toISOString();
     let start;
-    if (cur !== null) {
+    if (!absent) {
       if (!cur || typeof cur !== "object" || journalProblem(rail, cur, op)) return { ok: false, why: "unreadable" };
       // an attempt op's name is derived from the order: whatever journal is at that name is this order's evidence. The one case that is
       // not is a request that clearly differs (another url): a collision, never marked and never skipped
@@ -966,12 +967,18 @@ async function decided(deps, record, attempt, probe) {
  */
 function rootFirst(deps, record, attempt) {
   const frozen = markRoot(deps, record, record.sealed ? closedMark(record, record.closed) : movedTo(record, attempt));
-  if (frozen.ok) return null;
+  if (frozen.ok) return ownOriginal(record);
   // the order has met this attempt: it owns the original from now on, and the attempt is at least unknown, so every rerun returns here
   record.owns = true;
   learn(record, attempt, { state: "unknown", tx: {} });
   const quiet = { command: "buy", rail: attempt.rail, chain: attempt.chain, op: attempt.op, state: "unknown", paid: null, delivered: null, amount: null, tx: { ...(attempt.tx ? { settle: attempt.tx } : {}), ...(attempt.tx_pull ? { pull: attempt.tx_pull } : {}), ...(attempt.tx_unknown_kind ? { recorded: attempt.tx_unknown_kind } : {}) } };
   return heldResult(record, attempt, quiet, { ...rootOf(record), why: frozen.why });
+}
+
+/** The original carries this order's mark: the record owns it from now on, durably, whatever happens to its journal (recordOwns). */
+function ownOriginal(record) {
+  if (record.owns !== true) { record.owns = true; try { writeRecord(record); } catch { /* the mark is the truth; the record only repeats it */ } }
+  return null;
 }
 
 /** Whether an attempt was never contacted because the original could not be marked before it (runAttempt). */
@@ -985,7 +992,7 @@ const neverContacted = (a) => typeof a.freeze === "string" && a.freeze.startsWit
  */
 function rootFirstUncontacted(deps, record, attempt) {
   const frozen = markRoot(deps, record, record.sealed ? closedMark(record, record.closed) : movedTo(record, attempt));
-  if (frozen.ok) return null;
+  if (frozen.ok) return ownOriginal(record);
   const contacted = record.attempts.some((a) => !neverContacted(a) && (a.freeze === "done" || recordedSigned(a)));
   if (frozen.why === "may_have_signed" && !contacted) return { kind: "original" };
   return stuckResult(record, { ...rootOf(record), why: frozen.why }, { marking: true });
@@ -1149,9 +1156,16 @@ async function resume(deps, record) {
   if (last.state === "journaled" && !record.closed) {
     const stale = await resumeProblem(deps, record, last);
     if (stale) {
-      last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
       record.skipped = [...(record.skipped ?? []), { offer_id: last.offer_id, reason: stale }];
       closeRecord(record, stale);
+      // the attempt is recorded as failed before payment only once its op is closed for good: until then a rail run of it with the
+      // order's flag may be paying (during the feature read, say), and closing the order finds that instead
+      const end = await endUnpaid(deps, record, stale);
+      if (end.kind === "none") {
+        last.state = "done"; last.outcome = "failed_before_payment"; last.note = `not contacted: ${stale}`;
+        try { writeRecord(record); } catch { /* every op of the order is closed either way */ }
+      }
+      return end;
     } else {
       const done = await runAttempt(deps, record, last);
       if (done.kind === "result") return done;
