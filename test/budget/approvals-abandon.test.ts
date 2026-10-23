@@ -2,10 +2,10 @@
 // record, and frees the chain; a worker's own final, a worker that runs again, and a restart cannot be undone or doubled by it.
 // Small scripts stand in for the worker. No network.
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createIdentitySource } from "../../budget/lock-identity.mjs";
 
 let home: string;
@@ -21,11 +21,15 @@ const HOSTED = { site: "http://127.0.0.1:9", requestId: "ba_test0001", kind: "gr
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 /** A process standing in for a worker: its group's leader, with the start identity a record names it by. */
+const sleepers: number[] = [];
 function liveWorker() {
   const child = spawn("sleep", ["60"], { detached: true, stdio: "ignore" });
   child.unref();
+  sleepers.push(child.pid!);
   return { pid: child.pid!, ...createIdentitySource().fields(child.pid!) };
 }
+// every stand-in worker a test started is stopped when the test ends: a process left running fails the test run
+afterEach(() => { for (const pid of sleepers.splice(0)) { try { process.kill(-pid, "SIGKILL"); } catch { /* already gone */ } } });
 async function goneWorker() {
   const w = liveWorker();
   process.kill(-w.pid, "SIGKILL");
@@ -150,6 +154,48 @@ describe("abandonApproval", () => {
       expect(JSON.stringify(record)).not.toContain("ssbt_");
     }
   });
+
+  it("a result the record's write refuses is not stored: recordFinalWith does not say it was, and the chain is not freed", async () => {
+    const id = await open();
+    // a result that drops payment evidence is refused by the write, which returns the record as it was
+    const refused = approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true }, record: { seen: undefined } }));
+    expect(refused.stored).toBe(false);
+    expect(approvals.readApproval(id)?.final).toBeUndefined();
+    expect(approvals.findPending("evm", "base-sepolia")?.id, "the chain stays held").toBe(id);
+    const stored = approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true } }));
+    expect(stored.stored).toBe(true);
+    expect(approvals.findPending("evm", "base-sepolia")).toBeNull();
+  });
+
+  // every read of the record is strict: a file that is gone, or that is not a record wait can answer from, is no approval to decide on
+  // (a stored final that is only `true` included), whenever it is read, and the file is left as found
+  for (const [label, replace] of [
+    ["removed", (_path: string, _base: any) => rmSync(_path)],
+    ["only its id", (path: string, base: any) => writeFileSync(path, JSON.stringify({ id: base.id }))],
+    ["a stored final that is true", (path: string, base: any) => writeFileSync(path, JSON.stringify({ ...base, final: true }))],
+    ["a stored final that is a string", (path: string, base: any) => writeFileSync(path, JSON.stringify({ ...base, final: "yes" }))],
+  ] as [string, (path: string, base: any) => void][]) {
+    it(`a record ${label} while the give-up stops the approval's processes is gone: nothing is stored, the file is as found, the chain stays held`, async () => {
+      const id = await open();
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      const base = JSON.parse(readFileSync(path, "utf8"));
+      const out = await approvals.abandonApproval(id, build, { stop: async () => replace(path, base) });
+      expect(out).toEqual({ kind: "gone", record: null });
+      if (label === "removed") expect(existsSync(path)).toBe(false);
+      else expect(JSON.parse(readFileSync(path, "utf8")).abandoned).toBeUndefined();
+      expect(existsSync(lockFile()), "the chain's lock is not freed by a record nothing was decided from").toBe(true);
+    });
+
+    it(`a record that is ${label} before the give-up first reads it is gone, whatever it holds`, async () => {
+      const id = await open();
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      replace(path, JSON.parse(readFileSync(path, "utf8")));
+      let stopped = false;
+      const out = await approvals.abandonApproval(id, build, { stop: async () => { stopped = true; } });
+      expect(out).toEqual({ kind: "gone", record: null });
+      expect(stopped, "nothing is stopped for a record that cannot be read").toBe(false);
+    });
+  }
 });
 
 describe("spawnRail", () => {
@@ -233,6 +279,139 @@ describe("spawnRail", () => {
     expect(out.ended).toBe(false);
     expect(out.child.pid).toBeGreaterThan(0);
     killGroup(out.child.pid);
+  });
+});
+
+describe("waitFor when the record file goes", () => {
+  it("answers gone (not final, and no throw) when the file is removed or stops being a record after it was first read", async () => {
+    for (const how of ["removed", "null"] as const) {
+      const id = await open({}, liveWorker());
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      setTimeout(() => { if (how === "removed") rmSync(path, { force: true }); else writeFileSync(path, "null"); }, 400);
+      const answer = await approvals.waitFor(id, 5000, { poll: 100 });
+      expect(answer, how).toMatchObject({ final: false, gone: true });
+      expect(answer?.record?.id).toBe(id);
+      killGroup(answer!.record.pid);
+    }
+  });
+
+  it("answers gone, never null, for a caller that already read the record when the file is missing or not a record at its first read", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const kept = readFileSync(path, "utf8");
+    rmSync(path, { force: true });
+    expect(await approvals.waitFor(id, 1000, { poll: 50, seen: true })).toMatchObject({ final: false, gone: true });
+    expect(await approvals.waitFor(id, 1000, { poll: 50 }), "an approval this home never had").toBeNull();
+    for (const content of ["null", "{}", JSON.stringify({ id }), JSON.stringify({ ...JSON.parse(kept), final: true })]) {
+      writeFileSync(path, content);
+      for (const seen of [true, false]) expect(await approvals.waitFor(id, 1000, { poll: 50, seen }), `${content} seen=${seen}`).toMatchObject({ final: false, gone: true });
+    }
+    writeFileSync(path, kept);
+    killGroup(JSON.parse(kept).pid);
+  });
+
+  it("a record missing what every record has, or with a field of the wrong shape, is not a record", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const kept = JSON.parse(readFileSync(path, "utf8"));
+    expect(approvals.readApprovalFile(id).kind).toBe("record");
+    for (const over of [{ id: undefined }, { command: undefined }, { rail: 5 }, { chain: "" }, { final: true }, { final: "x" }, { final: {} }, { final: { code: "0", result: {} } }, { final: { code: 0, result: null } }, { final: { code: 0, result: {} } }, { command: "buy-once", hosted: null }, { seen: "x" }, { workerArgs: "x" }, { timeoutS: "x" }, { hosted: "x" }, { hosted: { site: {} } }, { hosted: [] }, { pid: "1" }, { pid: 1.5 }, { deadline: "soon" }]) {
+      writeFileSync(path, JSON.stringify({ ...kept, ...over }));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(over)).not.toBe("record");
+    }
+    for (const over of [{ final: null }, { hosted: null }, { pid: null }, { deadline: null }, { final: { code: 5, result: { state: "unknown" } } }]) {
+      writeFileSync(path, JSON.stringify({ ...kept, ...over }));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(over)).toBe("record");
+    }
+    writeFileSync(path, JSON.stringify(kept));
+    killGroup(kept.pid);
+  });
+
+  it("answers gone when a live record is rewritten mid-poll to a shape wait cannot answer from, and stores nothing", async () => {
+    const shapes: [string, (id: string, base: any) => unknown][] = [
+      ["an object holding only the id", (id) => ({ id })],
+      ["a final that is true", (_id, base) => ({ ...base, final: true })],
+      ["a final with no code", (_id, base) => ({ ...base, final: { result: { ok: false } } })],
+    ];
+    for (const [label, make] of shapes) {
+      const id = await open({}, liveWorker());
+      const path = join(home, "budget", "approvals", `${id}.json`);
+      const base = JSON.parse(readFileSync(path, "utf8"));
+      const damaged = JSON.stringify(make(id, base));
+      setTimeout(() => writeFileSync(path, damaged), 400);
+      const answer = await approvals.waitFor(id, 5000, { poll: 100 });
+      expect(answer, label).toMatchObject({ final: false, gone: true });
+      expect(readFileSync(path, "utf8"), `${label}: nothing stored`).toBe(damaged);
+      killGroup(base.pid);
+    }
+  });
+
+  it("a record wait cannot answer from is damaged, not undecodable: readApproval still returns it (lock recovery reads partial records)", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    for (const content of [{ id }, { ...base, command: undefined }, { ...base, final: true }, { ...base, final: "yes" }, { ...base, final: {} }, { ...base, final: { code: 0 } }, { ...base, final: { code: 0.5, result: {} } }, { ...base, final: { result: { ok: false } } },
+      { ...base, seen: { hashes: {} } }, { ...base, seen: { hashes: 1 } }, { ...base, seen: { hashes: [1] } }, { ...base, seen: { payers: { "0xab": 7 } } }, { ...base, seen: { nonce: 1 } }, { ...base, seen: { moved: "maybe" } }]) {
+      writeFileSync(path, JSON.stringify(content));
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("damaged");
+      expect(approvals.readApproval(id)?.id, "lock scans still see the approval").toBe(id);
+    }
+    // a whole record, with or without a stored { code, result }, stays a record, and so does payment evidence as it is written: every key,
+    // values pinned to null after a conflict, or only the keys an older version wrote
+    const tx = `0x${"a".repeat(64)}`;
+    const evidence = { nonce: `0x${"b".repeat(64)}`, payer: null, order: null, validBefore: null, hashes: [tx], payers: { [tx]: null }, named: true, paid: false, stepOver: true, moved: false };
+    for (const content of [base, { ...base, final: { code: 3, result: { ok: false, state: "refused_precheck" } } }, { ...base, seen: evidence }, { ...base, seen: { ...evidence, payer: `0x${"c".repeat(40)}`, validBefore: 1_800_000_000, payers: { [tx]: `0x${"c".repeat(40)}` } } }, { ...base, seen: { hashes: [], payers: {}, named: false, paid: false, moved: false } }]) {
+      writeFileSync(path, JSON.stringify(content));
+      expect(approvals.readApprovalFile(id).kind).toBe("record");
+    }
+    killGroup(base.pid);
+  });
+
+  it("readApproval, which lock recovery reads, still returns an object filed under another id: such a record can keep the chain", async () => {
+    const id = await open();
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    // the approval holds its chain through its hosted request's token: its worker is gone, the lock is old
+    expect(approvals.findPending("evm", "base-sepolia")?.id).toBe(id);
+    const other = "oa-20261021999999-ffffffff";
+    writeFileSync(path, JSON.stringify({ ...base, id: other }));
+    expect(approvals.readApprovalFile(id).kind, "wait does not take it for this approval's record").toBe("undecodable");
+    expect(approvals.readApproval(id)?.id, "lock recovery still sees what it holds").toBe(other);
+    expect(approvals.findPending("evm", "base-sepolia"), "and the chain stays held").not.toBeNull();
+    // anything that is not an object stays null
+    for (const content of ["[]", "5", '"x"', "null", "false", "{ broken", ""]) {
+      writeFileSync(path, content);
+      expect(approvals.readApproval(id), JSON.stringify(content)).toBeNull();
+    }
+    writeFileSync(path, JSON.stringify(base));
+  });
+
+  it("a record filed under another id takes no result: recordFinal and recordFinalWith say nothing was stored and the chain stays held", async () => {
+    const id = await open();
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    const base = JSON.parse(readFileSync(path, "utf8"));
+    const misfiled = JSON.stringify({ ...base, id: "oa-20261021999999-ffffffff" });
+    writeFileSync(path, misfiled);
+    expect(approvals.recordFinalWith(id, () => ({ code: 5, result: { ok: false, state: "unknown", final: true } })).stored).toBe(false);
+    approvals.recordFinal(id, 5, { ok: false, state: "unknown", final: true });
+    expect(readFileSync(path, "utf8"), "the file is as found").toBe(misfiled);
+    expect(approvals.findPending("evm", "base-sepolia"), "the chain stays held").not.toBeNull();
+    killGroup(base.pid);
+  });
+
+  it("readApprovalFile tells a missing file, a file that is not a record, and a record apart", async () => {
+    const id = await open({}, liveWorker());
+    const path = join(home, "budget", "approvals", `${id}.json`);
+    expect(approvals.readApprovalFile(id).kind).toBe("record");
+    for (const content of ["false", "0", '""', "null", "[]", "7", "42", '"x"', "{}", "{ broken", "", JSON.stringify({ id: "oa-20261021999999-ffffffff" })]) {
+      writeFileSync(path, content);
+      expect(approvals.readApprovalFile(id).kind, JSON.stringify(content)).toBe("undecodable");
+      // lock recovery's lenient reading: an object filed under another id is still returned (below); every other shape is null
+      expect(approvals.readApproval(id)?.id ?? null, JSON.stringify(content)).toBe(content.includes('"id":"oa-20261021999999-ffffffff"') ? "oa-20261021999999-ffffffff" : null);
+    }
+    rmSync(path, { force: true });
+    expect(approvals.readApprovalFile(id).kind).toBe("none");
+    expect(approvals.readApprovalFile("not an id").kind).toBe("none");
   });
 });
 

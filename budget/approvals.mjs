@@ -38,7 +38,7 @@
 // Nothing here kills a process group it did not start. `--replace` first asks the running page to cancel
 // (POST /cancel): only a page that confirms the wallet was never asked is stopped.
 import { randomBytes } from "node:crypto";
-import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readFileSync, readdirSync, readSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { HOME, approvalsDir, ensurePrivateDir, ownerApprovalsLog } from "./paths.mjs";
 import { writeJournalFile } from "./journal.mjs";
@@ -84,13 +84,117 @@ function ensureDir() {
   ensurePrivateDir(approvalsDir(), { root: HOME });
 }
 
-export function readApproval(id) {
-  if (!isApprovalId(id)) return null;
+/**
+ * The approval record file of `id`, read so that a bad file is never taken for no approval: { kind: "none" } when there is no
+ * file (or `id` is no approval id), { kind: "undecodable" } when a file is there but does not decode to a record (broken JSON,
+ * `null`, `false`, `0`, an empty file, `{}`, an array, a record filed under another id, a file that cannot be read),
+ * { kind: "record", record } otherwise.
+ */
+const existsAsLink = (path) => {
   try {
-    return JSON.parse(readFileSync(recordFile(id), "utf8"));
+    lstatSync(path);
+    return true;
   } catch {
-    return null;
+    return false;
   }
+};
+const isObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const isText = (v) => typeof v === "string" && v !== "";
+const absentOr = (v, ok) => v === undefined || v === null || ok(v);
+
+/**
+ * Whether `s` is payment evidence as budget/once.mjs writes it (unionSeen): `hashes` a list of text, `payers` an object of text or null,
+ * `payer`, `nonce` and `order` text or null, `validBefore` a number or null, and the flags true or false. Older records may lack any of
+ * them. The merge (unionSeen) and the check that evidence only grows (seenGrows) read these, so evidence of another shape is damage.
+ */
+const isEvidence = (s) => isObject(s)
+  && absentOr(s.hashes, (h) => Array.isArray(h) && h.every((t) => typeof t === "string"))
+  && absentOr(s.payers, (p) => isObject(p) && Object.values(p).every((w) => w === null || typeof w === "string"))
+  && ["payer", "nonce", "order"].every((k) => absentOr(s[k], (v) => typeof v === "string"))
+  && absentOr(s.validBefore, Number.isFinite)
+  && ["named", "paid", "stepOver", "moved"].every((k) => absentOr(s[k], (v) => typeof v === "boolean"));
+
+/**
+ * Whether a record that carries its own id is one `wait` can answer from, as every writer makes one: the command, rail and chain are
+ * text, a stored final is { code: integer, result: { state: text } }, payment evidence has its shape (isEvidence), and the other fields
+ * wait goes through (hosted, pid, deadline, workerArgs, timeoutS) have their own. A purchase that is not over is read back from its site, so it needs one. `{ "id": ... }`
+ * alone, `final: true` or a site that is not text make an approval wait cannot read, not one to act on.
+ */
+function usableRecord(value) {
+  return isText(value.command) && isText(value.rail) && isText(value.chain)
+    && absentOr(value.final, (f) => isObject(f) && Number.isInteger(f.code) && isObject(f.result) && isText(f.result.state))
+    && absentOr(value.hosted, (h) => isObject(h) && absentOr(h.site, (x) => typeof x === "string"))
+    && (value.command !== "buy-once" || value.final || (isObject(value.hosted) && isText(value.hosted.site)))
+    && absentOr(value.seen, isEvidence)
+    && absentOr(value.pid, Number.isInteger)
+    && absentOr(value.deadline, Number.isFinite)
+    && absentOr(value.workerArgs, Array.isArray)
+    && absentOr(value.timeoutS, Number.isFinite);
+}
+
+/**
+ * The approval record file of `id`, read so that a bad file is never taken for no approval: { kind: "none" } when there is no
+ * file (or `id` is no approval id), { kind: "undecodable" } when a file is there but does not decode to an object carrying `id` (broken JSON,
+ * `null`, `false`, `0`, an empty file, `{}`, an array, a record filed under another id, a dangling link, a file that cannot be read),
+ * { kind: "damaged", record } when it carries `id` but is not a record `wait` can answer from (see usableRecord), and
+ * { kind: "record", record } otherwise. A damaged record is still an approval that holds its chain: readApproval returns it.
+ */
+export function readApprovalFile(id) {
+  if (!isApprovalId(id)) return { kind: "none" };
+  let text;
+  try {
+    text = readFileSync(recordFile(id), "utf8");
+  } catch (err) {
+    // a dangling link in the record's place is there, and is not a record
+    return err?.code === "ENOENT" && !existsAsLink(recordFile(id)) ? { kind: "none" } : { kind: "undecodable" };
+  }
+  try {
+    const value = JSON.parse(text);
+    // a record is an object that carries its own id: `{}`, an array, a number, a string, or a record filed under another id is not one
+    if (!(value && typeof value === "object" && !Array.isArray(value) && value.id === id)) {
+      // an object that carries another id (a record filed under the wrong name) is not this approval's record; readApproval, which lock
+      // recovery reads, still returns what it holds, as it always has: it may name a live process or a token that holds the chain
+      return value && typeof value === "object" && !Array.isArray(value) ? { kind: "undecodable", value } : { kind: "undecodable" };
+    }
+    return { kind: usableRecord(value) ? "record" : "damaged", record: value };
+  } catch {
+    return { kind: "undecodable" };
+  }
+}
+
+export function readApproval(id) {
+  const file = readApprovalFile(id);
+  return file.record ?? file.value ?? null;
+}
+
+/** The code of the error a strict change throws when the record's file is gone, or is not a record `wait` can answer from, once the command has read it. */
+export const RECORD_GONE = "RECORD_GONE";
+const recordGone = (id) => Object.assign(new Error(`the record of ${id} is gone, is not a record any more, or is no longer the approval this command read`), { code: RECORD_GONE });
+
+/**
+ * Whether `now` is still the approval a command saw as `seen`: the same id, command, rail and chain, made at the same moment, on the same
+ * site, and still holding a hosted request once it held one (no writer removes it). The request id itself may change: a command that
+ * asks the owner twice records a second request. A decision about one request (asking the site to cancel it, a restart that takes it
+ * over) compares its id as well.
+ */
+export function sameApproval(seen, now) {
+  if (!isObject(seen) || !isObject(now)) return false;
+  for (const k of ["id", "command", "rail", "chain", "createdAt"]) if (seen[k] !== undefined && now[k] !== seen[k]) return false;
+  if (isObject(seen.hosted) && !(isObject(now.hosted) && now.hosted.site === seen.hosted.site)) return false;
+  // a buy-once purchase is one request on the site from start to end: a record of another request is another purchase
+  if (seen.command === "buy-once" && isObject(seen.hosted) && now.hosted.requestId !== seen.hosted.requestId) return false;
+  return true;
+}
+
+/**
+ * The one strict read: the record of `id` when its file holds a record `wait` can answer from and, when `strict` is a record (what the
+ * command saw before), it is still that approval (sameApproval); null otherwise. Every read and change `wait` makes after its first read of
+ * a record goes through here, and a change under the record's lock too (writeRecord): `strict` is true, or the record seen before.
+ */
+export function readStrict(id, strict = true) {
+  const file = readApprovalFile(id);
+  if (file.kind !== "record") return null;
+  return strict === true || sameApproval(strict, file.record) ? file.record : null;
 }
 
 /**
@@ -103,10 +207,12 @@ export function saveApproval(record) {
 
 /**
  * Change a record under its lock, read, decided and written in one step: `fn` gets the record as stored now and returns
- * the patch (null: no change). A final record changes only by another final result, as with every other write.
+ * the patch (null: no change). A final record changes only by another final result, as with every other write. `strict` (every change
+ * `wait` makes): true, or the record the command read before; the record under the lock must pass readStrict, or the change throws
+ * RECORD_GONE and nothing is written.
  */
-export function updateApproval(id, fn) {
-  return update(id, fn);
+export function updateApproval(id, fn, { strict = false } = {}) {
+  return update(id, fn, { strict });
 }
 
 /**
@@ -115,16 +221,19 @@ export function updateApproval(id, fn) {
  * recordFinal otherwise. Returns the record, and
  * whether this call made it final.
  */
-export function recordFinalWith(id, decide) {
+export function recordFinalWith(id, decide, { strict = false } = {}) {
   let decided = null;
+  const endedAt = new Date().toISOString();
   const record = update(id, (before) => {
     if (before.final) return null;
     decided = decide(before);
     if (!decided) return null;
-    return { ...(decided.record ?? {}), state: "final", endedAt: new Date().toISOString(), final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
-  });
-  if (record && decided) release(record.rail, record.chain, id);
-  return { record, stored: Boolean(record && decided) };
+    return { ...(decided.record ?? {}), state: "final", endedAt, final: { code: decided.code, result: decided.result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+  }, { strict });
+  // stored only when the write was accepted: a refused one (a record filed under another id) returns the record as it was
+  const stored = Boolean(record && decided && record.final && record.endedAt === endedAt);
+  if (stored) release(record.rail, record.chain, id);
+  return { record, stored };
 }
 
 /**
@@ -304,9 +413,13 @@ function writeApproval(id, record) {
  * never stored altered behind its back. The result must be the locked record (`id` unchanged), and it is written to that
  * record's file only.
  */
-function writeRecord(id, compute) {
+function writeRecord(id, compute, { strict = false } = {}) {
   return withRecordLock(id, () => {
-    const stored = readApproval(id);
+    // strict (wait's changes, after its first read): the record as stored under the lock must still be one wait can answer from, and (given
+    // the record the command read) still that approval (readStrict); a file that went, turned bad or changed since the command read it ends
+    // the change, with nothing written and no answer made of what is left
+    const stored = strict ? readStrict(id, strict) : readApproval(id);
+    if (strict && !stored) throw recordGone(id);
     const baseline = stored && stored.seen !== undefined ? structuredClone(stored.seen) : undefined;
     const next = compute(stored ? structuredClone(stored) : null);
     if (!next) return stored;
@@ -320,7 +433,7 @@ function writeRecord(id, compute) {
 }
 
 /** Change a record under its lock: `patch`, or a function of the record that returns the patch (null: no change). */
-function update(id, patch) {
+function update(id, patch, { strict = false } = {}) {
   if (!isApprovalId(id)) return null;
   return writeRecord(id, (record) => {
     if (!record) return null;
@@ -330,7 +443,7 @@ function update(id, patch) {
     // only grows): no write makes it not final again
     if (record.final && !p.final && Object.keys(p).some((k) => k !== "seen")) return null;
     return { ...record, ...p };
-  });
+  }, { strict });
 }
 
 /**
@@ -437,21 +550,33 @@ export const startingUp = (record) => Boolean(record && !record.final && !record
  * step too, and neither can happen between the stop and the write. A worker's own final, a restart and this give-up cannot
  * both happen: whichever the lock admits first stands, and a restart finds the record final. The record keeps everything it holds (its
  * evidence, the request id and site, its log) except the access token. Nothing is asked of the site.
- * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting", record: any }>} `ended`: a result was already
+ * Every read of the record is strict (a file that is there and is not a record wait can answer from is no record, a stored final included):
+ * `gone` (record null) when the file is missing, unusable or another approval (`seen`, sameApproval) at the first read or under the lock
+ * when the give-up would be stored. Nothing
+ * is stored then and the file is left as found, though the processes it named may have been stopped.
+ * @returns {Promise<{ kind: "abandoned" | "ended" | "running" | "starting" | "gone", record: any }>} `ended`: a result was already
  * stored (the record is returned); `running`: a process of the approval could not be stopped; `starting`: its worker is
  * still being launched. Nothing was stored in the last two.
  */
-export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3 } = {}) {
+export async function abandonApproval(id, build, { stop = stopRecord, attempts = 3, seen = true } = {}) {
   if (!isApprovalId(id)) return { kind: "ended", record: null };
   return holdingRecordLock(id, async () => {
-    let record = readApproval(id);
-    for (let attempt = 0; record && !record.final && attempt < attempts; attempt++) {
+    // `seen`: the record the command read before it asked the owner; one that is no longer that approval is not given up
+    let record = readStrict(id, seen);
+    if (!record) return { kind: "gone", record: null };
+    for (let attempt = 0; !record.final && attempt < attempts; attempt++) {
       await stop(record);
-      const out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)));
+      let out;
+      try {
+        out = recordFinalWith(id, (before) => (processesAlive(before) || startingUp(before) ? null : build(before)), { strict: record });
+      } catch (err) {
+        if (err?.code === RECORD_GONE) return { kind: "gone", record: null };
+        throw err;
+      }
       record = out.record;
       if (out.stored) return { kind: "abandoned", record };
     }
-    return { kind: record?.final ? "ended" : startingUp(record) ? "starting" : "running", record };
+    return { kind: record.final ? "ended" : startingUp(record) ? "starting" : "running", record };
   });
 }
 
@@ -768,16 +893,18 @@ export function recordFinalAsRestart(id, generation, code, result) {
  * store its RESULT and exit code for every later `wait`, and free the chain. The access token goes. Every final result is
  * recorded here, and only here.
  */
-export function recordFinal(id, code, result) {
+export function recordFinal(id, code, result, { strict = false } = {}) {
   // one locked change: the result, and the hosted request without its access token (writeApproval enforces it too). A result
   // already stored stays: whatever ended the approval first (a worker, a give-up) is the answer every later wait gives.
-  let stored = false;
+  const endedAt = new Date().toISOString();
+  let decided = false;
   const record = update(id, (before) => {
     if (before.final) return null;
-    stored = true;
-    return { state: "final", endedAt: new Date().toISOString(), final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
-  });
-  if (record && stored) release(record.rail, record.chain, id);
+    decided = true;
+    return { state: "final", endedAt, final: { code, result }, ...(before.hosted ? { hosted: { ...before.hosted, token: undefined } } : {}) };
+  }, { strict });
+  // stored only when the write was accepted (see recordFinalWith)
+  if (decided && record?.final && record.endedAt === endedAt) release(record.rail, record.chain, id);
   return record;
 }
 
@@ -841,35 +968,56 @@ export const canResume = (record) => Boolean(record && !record.final && !record.
  * still open, resumable and no process of it runs, so two commands cannot start two workers. `script` is the dispatcher's
  * path; the arguments are the first worker's. The worker gets RESUME_ENV: its rail script takes the recorded request over
  * and creates none.
- * @returns {{ started: boolean, record: any }}
+ * Every read is strict (readStrict): `seen` is the record `wait` decided to restart from. A record that is gone, is not one wait can answer
+ * from, is no longer that approval, or holds another request than the one `seen` names, before or under the lock, starts nothing,
+ * claims no chain and writes nothing: { started: false, gone: true }. The chain is claimed under the record's lock, right before the
+ * launch, and the worker's identity, deadline and restart count are written in that same locked step.
+ * @returns {{ started: boolean, record: any, gone?: boolean, blockedBy?: any }}
  */
-export function restartWorker(id, { cmd, script, cwd, env = process.env }) {
-  const open = readApproval(id);
-  // The chain is this approval's, or free for it: an owner who cleared the chain's lock by hand (unlock) and started another
-  // approval since must not get two open requests from a restart.
-  if (canResume(open) && readLock(open.rail, open.chain)?.id !== id) {
-    const taken = claim(open.rail, open.chain, id);
-    if (!taken.ok) return { started: false, record: open, blockedBy: taken.pending };
-  }
+export function restartWorker(id, { cmd, script, cwd, env = process.env, seen = true }) {
+  const sameRequest = (r) => seen === true || (r.hosted?.requestId ?? null) === (seen.hosted?.requestId ?? null);
+  const open = readStrict(id, seen);
+  if (!open || !sameRequest(open)) return { started: false, record: null, gone: true };
   let launched = null;
+  let blockedBy = null;
   let record;
   try {
-    record = restartLocked(id, { cmd, script, cwd, env }, (l) => (launched = l));
+    record = restartLocked(id, { cmd, script, cwd, env }, open, {
+      request: sameRequest,
+      // The chain is this approval's, or free for it: an owner who cleared the chain's lock by hand (unlock) and started another
+      // approval since must not get two open requests from a restart.
+      chain: (before) => {
+        if (readLock(before.rail, before.chain)?.id === id) return true;
+        const taken = claim(before.rail, before.chain, id);
+        if (!taken.ok) blockedBy = taken.pending;
+        return taken.ok;
+      },
+      remember: (l) => (launched = l),
+    });
   } catch (err) {
     // the worker may have started and not been recorded: it would run unseen, so it is stopped
     try { if (launched?.child.pid) process.kill(-launched.child.pid, "SIGKILL"); } catch {}
+    if (err?.code === RECORD_GONE && !launched) return { started: false, record: null, gone: true };
     throw err;
   }
+  if (blockedBy) return { started: false, record: open, blockedBy };
   const child = launched?.child;
   if (!child?.pid || !record || record.pid !== child.pid) return { started: false, record };
-  child.once("identity", (selfStartedAt) => updateApproval(id, (r) => (r.pid === child.pid && !r.final ? { selfStartedAt } : {})));
+  child.once("identity", (selfStartedAt) => {
+    // strict as well: a record that went or changed since the restart is left as it is, and wait's next read answers that
+    try { updateApproval(id, (r) => (r.pid === child.pid && !r.final ? { selfStartedAt } : {}), { strict: record }); } catch (err) { if (err?.code !== RECORD_GONE) throw err; }
+  });
   child.unref();
   return { started: true, record };
 }
 
-function restartLocked(id, { cmd, script, cwd, env }, remember) {
+/** The locked step of restartWorker: the strict read under the lock, the request check, the chain, the launch and its record, in that order. */
+function restartLocked(id, { cmd, script, cwd, env }, open, { request, chain, remember }) {
   return update(id, (before) => {
     if (!canResume(before) || processesAlive(before)) return null;
+    // a record that holds another request than the one wait decided to restart is not taken over
+    if (!request(before)) throw recordGone(id);
+    if (!chain(before)) return null;
     // the site this approval was made on is the one the restarted command asks: a command that took it from its environment
     // (SUPERSTABLES_SITE) must not take another from the environment `wait` runs in
     const launched = launchWorker(id, { cmd, args: [script, ...before.workerArgs], cwd, env: { ...env, [RESUME_ENV]: id, [RESUME_GENERATION_ENV]: String((before.resumes ?? 0) + 1), SUPERSTABLES_SITE: before.hosted.site } });
@@ -885,7 +1033,7 @@ function restartLocked(id, { cmd, script, cwd, env }, remember) {
       deadline: Date.now() + workerDeadlineMs(before.timeoutS ?? 600),
       resumes: (before.resumes ?? 0) + 1,
     };
-  });
+  }, { strict: open });
 }
 
 /**
@@ -1115,12 +1263,21 @@ function sentUnknown(record, reason) {
  * result leaves the approval open for the next `wait`. Only an approval that cannot be finished (not resumable) ends the way an
  * approval whose worker is gone always has: the site is asked to cancel it, else unknown.
  */
-export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
-  const first = readApproval(id);
-  if (!first) return null;
+export async function waitFor(id, timeoutMs, { poll = 250, seen = false } = {}) {
+  // null only for an approval this home never had: a caller that already read the record (`seen`: true, or the record it read) is told it
+  // is gone, and a file that is there and is not a record wait can answer from, or (given the record) is another approval, is never "no
+  // such approval"
+  const file = readApprovalFile(id);
+  if (file.kind === "none") return seen ? { final: false, gone: true, record: isObject(seen) ? seen : null } : null;
+  if (file.kind !== "record" || (isObject(seen) && !sameApproval(seen, file.record))) return { final: false, gone: true, record: isObject(seen) ? seen : null };
+  const first = file.record;
   const until = Date.now() + timeoutMs;
+  let last = first;
   for (;;) {
-    let record = readApproval(id);
+    let record = readStrict(id, first);
+    // the file went (or is not a record any more, or is another approval) after this command read it: no answer is made of what is left
+    if (!record) return { final: false, gone: true, record: last };
+    last = record;
     if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
     if (record.deadline && Date.now() > record.deadline && processesAlive(record)) {
       // past the worker's own backstop: this command started that group, so it stops it
@@ -1135,7 +1292,8 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
     }
     if (!processesAlive(record)) {
       await sleep(100); // a worker that just wrote its RESULT may still be exiting
-      record = readApproval(id);
+      record = readStrict(id, first);
+      if (!record) return { final: false, gone: true, record: last };
       if (record.final) return { final: true, code: record.final.code, result: record.final.result, record };
       if (processesAlive(record)) continue;
       if (canResume(record)) return { final: false, resume: true, record };
@@ -1143,10 +1301,21 @@ export async function waitFor(id, timeoutMs, { poll = 250 } = {}) {
       const h = record.hosted?.token ? record.hosted : null;
       const cancelled = h ? (await cancelSiteRequest({ site: h.site, id: h.requestId, token: h.token }))?.cancelled === true : false;
       // decided from the record as stored under its lock: a final another process stored meanwhile stands, and a worker another command started meanwhile keeps the approval open
-      const { record: ended } = recordFinalWith(id, (before) => (processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled)));
-      const stored = ended ?? readApproval(id);
-      if (!stored?.final) continue;
-      return { final: true, code: stored.final.code, result: stored.final.result, record: stored };
+      // strict: the record under the lock must still be one wait can answer from, or nothing is decided from what is left
+      // and it must still be the approval this command asked the site about: a record that turned into another request while the site was
+      // asked is not decided from what that answer was about
+      let ended;
+      try {
+        ({ record: ended } = recordFinalWith(id, (before) => {
+          if ((before.hosted?.requestId ?? null) !== (record.hosted?.requestId ?? null)) throw Object.assign(new Error(`the request of ${id} changed while the site was asked to cancel it`), { code: RECORD_GONE });
+          return processesAlive(before) || canResume(before) ? null : abandoned(before, cancelled);
+        }, { strict: record }));
+      } catch (err) {
+        if (err?.code === RECORD_GONE) return { final: false, gone: true, record: last };
+        throw err;
+      }
+      if (!ended?.final) continue;
+      return { final: true, code: ended.final.code, result: ended.final.result, record: ended };
     }
     const orphaned = !alive(record.pid, record.pidStart, record.pidStartUtc, { ...record, createdAt: record.foreground ? record.createdAt : undefined });
     if (record.url && record.url !== first.url) return { final: false, record, page: await pageStateOf(record), orphaned };

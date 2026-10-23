@@ -247,11 +247,12 @@ Exit codes share one table, but a missing budget shows differently per command:
 | owner commands, `budget buy-once`, `budget wait` | 1 | Failed. An owner command whose wallet was asked to send says this only when the chain proves its transaction changed nothing: `proof` names how (`reverted`, `blockhash_expired`) |
 | owner commands, `budget buy-once`, `budget wait` | 3 | The owner rejected it or the approval link expired before the wallet was asked to send (buy-once: also over `--max`). Nothing was sent. If an earlier step of a setup on superstables.com with `--grant` or `--fund`, or of `recover`, sent a transaction, the answer is exit 5 instead |
 | `budget wait` | 2 | `show_owner_first`: you ran it without `--shown`, so it read nothing and says nothing about payment. Reply with `message_for_owner` first and end your turn |
+| `budget wait` | 5 | Also `unknown` with `final: false` when it refuses a flag (a mistyped one, or one `wait` does not take) for an approval that exists here, or cannot read that approval's record. It read and changed nothing, and the approval may have sent: follow `next`, then run `wait --id ID --shown` again before any other owner command on that chain |
 | `quote` | 1 / 3 | Not a paid endpoint or not payable here / the spend policy refuses it |
 | `pay`, `status ATTEMPT_ID` | 0 | Settled; for `status`, also not final yet |
 | `pay`, `status ATTEMPT_ID` | 1 | `failed`, `expired`, `abandoned`: nothing paid when there is no transaction (`receipt.transaction` or `transaction`), or `chain` is `unpaid`; otherwise, with a transaction, safety rule 12 applies |
 | `pay`, `status ATTEMPT_ID` | 3 | The owner rejected it (`denied`), or the spend policy refused it |
-| any | 2 | Bad input, nothing done (also a used or expired quote): fix the command, read `--help` |
+| any | 2 | Bad input, nothing done (also a used or expired quote): fix the command, read `--help`. `budget wait` on an approval that exists here answers bad input with exit 5 instead (above) |
 | any | 4 | Paid, not delivered: never pay again; report the `tx` or receipt |
 | any | 5 | Unknown, it may have paid. Busy reconcile includes `op`, `reason: "op_in_progress"` and guidance in `next`. Purchase: `budget reconcile --rail R --chain C --op ID`. `pay`: `status ATTEMPT_ID`, `receipts`. Owner action (also one whose transaction differs from the plan, or that stopped after the wallet was asked): `budget status`, wallet activity, and `steps` and `tx` when present. With `final: false` and `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: reply with `message_for_owner` and end your turn, as for `waiting_owner` |
 
