@@ -1394,8 +1394,8 @@ export async function finishExpiredSetup(record) {
     const { stored } = recordFinalWith(record.id, (before) =>
       before.hosted?.requestId !== h.requestId || recordMayHaveSent(before) || processesAlive(before) || startingUp(before) ? null : {
         code: 3, result: {
-          ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id,
-          reason: "the approval link expired on the site without a completed approval", next: "run setup again",
+          ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
+          reason: "the approval link expired on the site without a completed approval", next: `superstables budget setup --rail ${record.rail} --hosted --site ${h.site}`,
         },
       }, { strict: record });
     return stored;

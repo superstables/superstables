@@ -166,7 +166,15 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     expect(site.requests).toHaveLength(2);
     expect(site.requests[1].steps).toBeUndefined();
     expect(readFileSync(keyPath, "utf8")).toBe(key);
-    expect(record(id)).toMatchObject({ final: { code: 3, result: { state: "refused_precheck" } } });
+    const retired = await budget(["wait", "--shown", "--id", id]);
+    expect(retired.code, retired.stderr).toBe(3);
+    const retiredResult = {
+      state: "refused_precheck", id, url: first.result.url,
+      reason: "the approval link expired on the site without a completed approval",
+      next: `superstables budget setup --rail evm --hosted --site ${site.url}`,
+    };
+    expect(retired.result).toMatchObject({ ...retiredResult, final: true });
+    expect(record(id)).toMatchObject({ final: { code: 3, result: retiredResult } });
     expect(record(id).hosted.token).toBeUndefined();
 
     Object.assign(site.requests[1], { state: "linked", owner: OWNER });
@@ -219,6 +227,13 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
       const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
       expect(retry.code, retry.stderr).toBe(3);
       expect(retry.result.id).toBe(id);
+      if (evidence && flags.includes("--replace")) {
+        expect(retry.result).toMatchObject({
+          state: "refused_precheck",
+          reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+          next: `superstables budget wait --id ${id} --shown`,
+        });
+      }
       expect(record(id).final).toBeUndefined();
       expect(record(id).hosted.token).toBeTruthy();
       expect(existsSync(lockPath())).toBe(true);
@@ -248,6 +263,13 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     site.cancelFails = true;
     const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--replace"]);
     expect(retry.code, retry.stderr).toBe(3);
+    if (answer === "error with send evidence") {
+      expect(retry.result).toMatchObject({
+        state: "refused_precheck", id,
+        reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+        next: `superstables budget wait --id ${id} --shown`,
+      });
+    }
     expect(record(id).final).toBeUndefined();
     expect(record(id).hosted.token).toBeTruthy();
     expect(existsSync(lockPath())).toBe(true);
@@ -288,6 +310,11 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     site.requests[0].expiresAt = Date.now() - 1;
     const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--replace"]);
     expect(retry.code, retry.stderr).toBe(3);
+    expect(retry.result).toMatchObject({
+      state: "refused_precheck", id,
+      reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+      next: `superstables budget wait --id ${id} --shown`,
+    });
     expect(record(id).final).toBeUndefined();
     expect(record(id).hosted.token).toBeTruthy();
     expect(existsSync(lockPath())).toBe(true);
