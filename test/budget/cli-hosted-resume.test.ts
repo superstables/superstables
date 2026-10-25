@@ -146,6 +146,168 @@ const startSetup = async (args = setupArgs(), env: Record<string, string> = {}) 
 };
 
 describe("setup --hosted --grant --fund, when the host ends the worker before the owner approves", () => {
+  it.each([{ flags: [] }, { flags: ["--replace"] }])("an abandoned fresh setup that expired can be linked again with $flags, keeping its agent key", async ({ flags }) => {
+    await fakeChain(0n, 10000n);
+    const first = await budget(setupArgs());
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.result.state).toBe("waiting_owner");
+    const id = first.result.id;
+    await endEveryProcess(id);
+    const keyPath = join(home, "keys", "budget", "evm-agent.env");
+    const key = readFileSync(keyPath, "utf8");
+    expect(existsSync(publicPath())).toBe(false);
+    site.requests[0].expiresAt = Date.now() - 1;
+
+    // Linking first is safe even if this older key already has an allowance somewhere. It neither grants nor funds.
+    const again = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.result).toMatchObject({ state: "waiting_owner" });
+    expect(again.result.id).not.toBe(id);
+    expect(site.requests).toHaveLength(2);
+    expect(site.requests[1].steps).toBeUndefined();
+    expect(readFileSync(keyPath, "utf8")).toBe(key);
+    expect(record(id)).toMatchObject({ final: { code: 3, result: { state: "refused_precheck" } } });
+    expect(record(id).hosted.token).toBeUndefined();
+
+    Object.assign(site.requests[1], { state: "linked", owner: OWNER });
+    const done = await budget(["wait", "--shown", "--id", again.result.id, "--timeout", "30"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ state: "ok", owner: OWNER });
+    expect(publicFile()).not.toMatch(/^B4_CAP=/m);
+    expect(readFileSync(keyPath, "utf8")).toBe(key);
+  }, 120_000);
+
+  it("an expired fresh setup with an ownerless key still refuses a bundled grant; link first reuses the key", async () => {
+    await fakeChain(0n, 10000n);
+    const first = await budget(setupArgs());
+    expect(first.result.state).toBe("waiting_owner");
+    await endEveryProcess(first.result.id);
+    const keyPath = join(home, "keys", "budget", "evm-agent.env");
+    const key = readFileSync(keyPath, "utf8");
+    site.requests[0].expiresAt = Date.now() - 1;
+    const bundled = await budget([...setupArgs(), "--replace"]);
+    expect(bundled.code, bundled.stderr).toBe(3);
+    expect(bundled.result.reason).toContain("Set up first (link), then grant");
+    expect(site.requests).toHaveLength(1);
+    expect(readFileSync(keyPath, "utf8")).toBe(key);
+    const linked = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(linked.result.state).toBe("waiting_owner");
+    expect(site.requests[1].steps).toBeUndefined();
+    Object.assign(site.requests[1], { state: "linked", owner: OWNER });
+    expect((await budget(["wait", "--shown", "--id", linked.result.id, "--timeout", "30"])).code).toBe(0);
+    expect(readFileSync(keyPath, "utf8")).toBe(key);
+  }, 120_000);
+
+  it.each([
+    { name: "a non-final expiry", patch: { final: false }, evidence: false },
+    { name: "another request", patch: { id: "bl_other0001" }, evidence: false },
+    { name: "another request in error", patch: { error: { id: "bl_other0001" } }, evidence: false },
+    { name: "a wallet request", patch: { wallet_asked: true }, evidence: true },
+    { name: "a transaction", patch: { tx_hash: FUND_HASH }, evidence: true },
+    { name: "money that may have moved", patch: { money_moved: "unknown" }, evidence: true },
+    { name: "a sent step", patch: { steps: [{ state: "sent" }] }, evidence: true },
+    { name: "money in error", patch: { error: { money_moved: "unknown" } }, evidence: true },
+    { name: "a transaction in an error step", patch: { error: { steps: [{ state: "skipped", tx_hash: FUND_HASH }] } }, evidence: true },
+  ])("setup expiry with $name keeps the request and starts nothing", async ({ patch, evidence }) => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const before = publicFile();
+    site.readAnswer = (r) => ({ status: 200, body: { id: r.id, state: "expired", final: true, wallet_asked: false, ...patch } });
+    site.cancelFails = true;
+    for (const flags of [[], ["--replace"]]) {
+      const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
+      expect(retry.code, retry.stderr).toBe(3);
+      expect(retry.result.id).toBe(id);
+      expect(record(id).final).toBeUndefined();
+      expect(record(id).hosted.token).toBeTruthy();
+      expect(existsSync(lockPath())).toBe(true);
+      expect(site.requests).toHaveLength(1);
+      expect(publicFile()).toBe(before);
+    }
+    if (evidence) {
+      expect(record(id).sending).toBe(true);
+      // A later, clean final answer cannot retract the send this retry read.
+      site.readAnswer = undefined;
+      site.cancelFails = false;
+      site.requests[0].expiresAt = Date.now() - 1;
+      const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--replace"]);
+      expect(retry.code, retry.stderr).toBe(3);
+      expect(record(id).final).toBeUndefined();
+      expect(site.requests).toHaveLength(1);
+    }
+  }, 120_000);
+
+  it.each(["unreadable", "unavailable", "error with send evidence"])("a setup whose site answers %s keeps its token and chain lock", async (answer) => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    site.readAnswer = () => answer === "unreadable"
+      ? { status: 200, body: null }
+      : { status: 503, body: { error: { code: "unavailable", ...(answer === "error with send evidence" ? { money_moved: "unknown" } : {}) } } };
+    site.cancelFails = true;
+    const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--replace"]);
+    expect(retry.code, retry.stderr).toBe(3);
+    expect(record(id).final).toBeUndefined();
+    expect(record(id).hosted.token).toBeTruthy();
+    expect(existsSync(lockPath())).toBe(true);
+    expect(site.requests).toHaveLength(1);
+    if (answer === "error with send evidence") expect(record(id).sending).toBe(true);
+  }, 120_000);
+
+  it.each(["sending", "another request"])("a setup record changed during the expiry read to %s is kept", async (change) => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    let changed = "";
+    site.readAnswer = (r) => {
+      const before = record(id);
+      changed = JSON.stringify(change === "sending" ? { ...before, sending: true } : { ...before, hosted: { ...before.hosted, requestId: "bl_other0001" } });
+      writeFileSync(join(approvals(), `${id}.json`), changed);
+      return { status: 200, body: { id: r.id, state: "expired", final: true, wallet_asked: false } };
+    };
+    const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(retry.code, retry.stderr).toBe(3);
+    expect(readFileSync(join(approvals(), `${id}.json`), "utf8")).toBe(changed);
+    expect(existsSync(lockPath())).toBe(true);
+    expect(site.requests).toHaveLength(1);
+  }, 120_000);
+
+  it.each(["sending", "wallet log", "earlier wallet log"])("an expired setup with local evidence in %s is kept even when the site answers cleanly", async (source) => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    await endEveryProcess(id);
+    const r = record(id);
+    if (source === "sending") r.sending = true;
+    else {
+      const earlierId = "bl_earlier001";
+      if (source === "earlier wallet log") r.earlierUrls = [`${site.url}/approve/budget/${earlierId}#x`];
+      writeFileSync(join(home, "budget", "owner-approvals.jsonl"), JSON.stringify({ id: source === "wallet log" ? r.hosted.requestId : earlierId, kind: "grant", status: "sent", sending: true }) + "\n");
+    }
+    writeFileSync(join(approvals(), `${id}.json`), JSON.stringify(r));
+    site.requests[0].expiresAt = Date.now() - 1;
+    const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--replace"]);
+    expect(retry.code, retry.stderr).toBe(3);
+    expect(record(id).final).toBeUndefined();
+    expect(record(id).hosted.token).toBeTruthy();
+    expect(existsSync(lockPath())).toBe(true);
+    expect(site.requests).toHaveLength(1);
+    expect(site.requests[0].cancels).toBe(0);
+  }, 120_000);
+
+  it("a setup worker still reading its expired request cannot leave a stale refusal behind", async () => {
+    await fakeChain(0n, 10000n);
+    const id = await startSetup();
+    site.requests[0].expiresAt = Date.now() - 1;
+    const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
+    expect(retry.code, retry.stderr).toBe(0);
+    expect(retry.result.state).toBe("waiting_owner");
+    expect(retry.result.id).not.toBe(id);
+    Object.assign(site.requests[1], { state: "linked", owner: OWNER });
+    expect((await budget(["wait", "--shown", "--id", retry.result.id, "--timeout", "30"])).code).toBe(0);
+    expect(record(id).final.code).toBe(3);
+  }, 120_000);
+
   it("wait finishes it from the site's request: the same result and the same local records, recorded once", async () => {
     await fakeChain(0n, 10000n);
     const id = await startSetup();

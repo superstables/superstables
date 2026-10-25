@@ -16,8 +16,8 @@
 // owner approves. A hosted request the site still holds is then finished by the next `wait`: restartWorker starts the same worker
 // command again with RESUME_ENV set, and the rail script takes the recorded request over (hosted.ts) instead of creating one,
 // then does what the first worker would have done. Until that finishes, the record holds the chain (lockHeld): no second
-// request starts before the first is reconciled. No automatic path ends such an approval except a worker that has read the
-// request on the site: not wait, not a startup that failed, not a count of failed restarts. Only the owner can end it otherwise
+// request starts before the first is reconciled. A setup retry can also retire a link the site confirms finally expired,
+// with no send evidence. Not wait, not a startup that failed, not a count of failed restarts. Only the owner can end it otherwise
 // (--replace, which the site must confirm, or the owner's terminal unlock of the chain, which does not reconcile the request).
 //
 // Files, under $SUPERSTABLES_HOME/budget/approvals/ (paths.mjs), no key material in any of them:
@@ -46,7 +46,7 @@ import { spawnIdentified } from './child-identity.mjs';
 import { createIdentitySource, inspectProcess, visiblePid } from '../src/core/process-identity.mjs';
 import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../src/core/owner-recovery.mjs';
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
-import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteText, siteWord } from "./site.mjs";
+import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteText, siteWord, viewEvidence } from "./site.mjs";
 import { readCapped } from "./response.mjs";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
@@ -1373,6 +1373,36 @@ export async function replacePending(record, byId) {
     } });
   release(record.rail, record.chain, record.id);
   return { ok: true };
+}
+
+/** Retire a setup only when its own site confirms final expiry and neither the site nor the local record holds a send. */
+export async function finishExpiredSetup(record) {
+  const h = record.hosted;
+  if (record.command !== "setup" || h?.kind !== "link" || !h.token || recordMayHaveSent(record)) return false;
+  try {
+    const answer = await readSiteRequest({ site: h.site, id: h.requestId, token: h.token, own: true });
+    if (answer.asked || (answer.ok && viewEvidence(answer.view))) {
+      // Evidence from this read must survive a later clean answer, just as the worker's page log does.
+      update(record.id, (before) => before.hosted?.requestId === h.requestId ? { sending: true } : null, { strict: record });
+      return false;
+    }
+    if (!answer.ok || answer.view.state !== "expired" || answer.view.final !== true) return false;
+    const current = readStrict(record.id, record);
+    if (!current || current.final || current.hosted?.requestId !== h.requestId || recordMayHaveSent(current)) return false;
+    // A worker may still be reading the expired link. Stop its identified processes before freeing the chain.
+    await stopRecord(current);
+    const { stored } = recordFinalWith(record.id, (before) =>
+      before.hosted?.requestId !== h.requestId || recordMayHaveSent(before) || processesAlive(before) || startingUp(before) ? null : {
+        code: 3, result: {
+          ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id,
+          reason: "the approval link expired on the site without a completed approval", next: "run setup again",
+        },
+      }, { strict: record });
+    return stored;
+  } catch (err) {
+    if (err.code === RECORD_GONE) return false;
+    throw err;
+  }
 }
 
 /** Owner recovery preserves approvals and submitted-payment evidence. Never fabricates a final RESULT. */
