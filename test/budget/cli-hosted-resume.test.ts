@@ -171,8 +171,9 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const retiredResult = {
       state: "refused_precheck", id, url: first.result.url,
       reason: "the approval link expired on the site without a completed approval",
-      next: `superstables budget setup --rail evm --hosted --site ${site.url}`,
+      next: `superstables budget setup --rail evm --chain ${record(id).chain} --hosted --site ${site.url}`,
     };
+    expect(record(id).chain).toEqual(expect.any(String));
     expect(retired.result).toMatchObject({ ...retiredResult, final: true });
     expect(record(id)).toMatchObject({ final: { code: 3, result: retiredResult } });
     expect(record(id).hosted.token).toBeUndefined();
@@ -230,7 +231,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
       if (evidence && flags.includes("--replace")) {
         expect(retry.result).toMatchObject({
           state: "refused_precheck",
-          reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+          reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
           next: `superstables budget wait --id ${id} --shown`,
         });
       }
@@ -266,7 +267,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     if (answer === "error with send evidence") {
       expect(retry.result).toMatchObject({
         state: "refused_precheck", id,
-        reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+        reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
         next: `superstables budget wait --id ${id} --shown`,
       });
     }
@@ -312,7 +313,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     expect(retry.code, retry.stderr).toBe(3);
     expect(retry.result).toMatchObject({
       state: "refused_precheck", id,
-      reason: `the pending approval ${id} has evidence that the wallet may be sending it, so it is not replaced`,
+      reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
       next: `superstables budget wait --id ${id} --shown`,
     });
     expect(record(id).final).toBeUndefined();

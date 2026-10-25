@@ -2575,7 +2575,7 @@ async function ownerGate({ cmd, f, ctx }) {
   if (pending) {
     if (!f.replace) return refusePending(ctx, pending);
     if (cmd === "setup" && pending.command === "setup" && recordMayHaveSent(readApproval(pending.id))) {
-      return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: `the pending approval ${pending.id} has evidence that the wallet may be sending it, so it is not replaced` });
+      return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: `the pending approval ${pending.id} is not replaced because the wallet may already be sending money` });
     }
     const r = await replacePending(pending, id);
     if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: r.reason });
