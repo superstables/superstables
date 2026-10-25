@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, WORKER_ENV, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -2567,9 +2567,16 @@ async function ownerGate({ cmd, f, ctx }) {
   }
   const detach = walletFlow(f) && (f.detach === true || (!f.wait && !process.stdout.isTTY));
   const id = newApprovalId();
-  const pending = findPending(f.rail, f.chain);
+  let pending = findPending(f.rail, f.chain);
+  if (cmd === "setup" && pending) {
+    await finishExpiredSetup(pending);
+    pending = findPending(f.rail, f.chain);
+  }
   if (pending) {
     if (!f.replace) return refusePending(ctx, pending);
+    if (cmd === "setup" && pending.command === "setup" && recordMayHaveSent(readApproval(pending.id))) {
+      return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: `the pending approval ${pending.id} is not replaced because the wallet may already be sending money` });
+    }
     const r = await replacePending(pending, id);
     if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: r.reason });
     log(`superstables budget: cancelled approval ${pending.id} before its wallet was asked. Check wallet activity before approving its replacement`);
