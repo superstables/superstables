@@ -310,7 +310,7 @@ describe("verdicts against two endpoints, one of which lies (in-process)", () =>
       : m === "eth_call" ? { result: pad("0x0") } : undefined;
     chain.hook = blockReply(low);
     mirror.hook = blockReply(high);
-    const lib = await import("../../budget/evm/lib.js");
+    const lib = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
     const invoke = (atLeast?: bigint) => {
       switch (path) {
         case "allowanceAgreed": return lib.allowanceAgreed(OWNER.address, AGENT.address, atLeast);
@@ -352,7 +352,7 @@ describe("verdicts against two endpoints, one of which lies (in-process)", () =>
     };
     chain.hook = hooks(low);
     mirror.hook = hooks(high);
-    const lib = await import("../../budget/evm/lib.js");
+    const lib = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
     const got = await (path === "allowanceAgreed" ? lib.allowanceAgreed(OWNER.address, AGENT.address, atLeast)
       : path === "authorizationStateAgreed" ? lib.authorizationStateAgreed(OWNER.address, NONCE, atLeast)
       : path === "receiptAgreed" ? lib.receiptAgreed(PULL, atLeast) : lib.txAgreed(PULL, atLeast));

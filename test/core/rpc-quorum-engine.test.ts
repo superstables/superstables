@@ -462,7 +462,7 @@ describe("chain-aware finality and stale state", () => {
 
   it.each(["finalized", "instant"] as const)("%s: never reads above an endpoint's final head and vetoes revoked or spent allowance", async (finality) => {
     const seen: [string, bigint][] = [];
-    const at = { [A]: 50210845n, [B]: 50212667n };
+    const at: Record<string, bigint> = { [A]: 50210845n, [B]: 50212667n };
     const fakes = { [A]: { finalized: Number(at[A]) }, [B]: { finalized: Number(at[B]) } };
     const got = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), call: transport(fakes).call, chainId: 84532, finality,
       read: async (url, block) => {
@@ -520,7 +520,7 @@ describe("chain-aware finality and stale state", () => {
         ? { number: "0x65", hash: "0xaa100", timestamp: "0x10" } : base(url, method, params),
     });
     expect(got).toMatchObject({ agreed: false, why: "missing" });
-    expect(got.left).toHaveLength(1);
+    expect(!got.agreed && got.left).toHaveLength(1);
   });
 
   it("rejects a re-read of F with another hash even when every re-read agrees", async () => {

@@ -112,6 +112,13 @@ function ownHeadDrift(c: Pick<Awaited<ReturnType<typeof evmCase>>, "chain" | "mi
     : method === "eth_call" ? { result: `0x${(BigInt(params[1]?.blockHash ?? params[1]) > low ? 5n : 0n).toString(16).padStart(64, "0")}` } : undefined;
 }
 
+// Own-head drift the other way: a grant final on the leading endpoint only, so the latest block already reads it.
+function ownHeadDriftLiveGrant(c: Pick<Awaited<ReturnType<typeof evmCase>>, "chain" | "mirror">) {
+  ownHeadDrift(c);
+  const base = c.chain.hook!;
+  c.chain.hook = (method, params) => method === "eth_call" && params[1] === "latest" ? { result: `0x${(5n).toString(16).padStart(64, "0")}` } : base(method, params);
+}
+
 const APPROVE = "0x095ea7b3";
 const approvals = (chain: FakeEvm) => chain.sentRaw.filter((t) => t.data.startsWith(APPROVE)).length;
 
@@ -149,6 +156,16 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(approvals(c.chain)).toBe(0);
+  }, 150_000);
+
+  it("grant under own-head drift with an allowance at the latest block is refused as a live allowance, not a revoke", async () => {
+    const c = await evmCase({ lag: 0, allow: "0" });
+    ownHeadDriftLiveGrant(c);
+    const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/is already live for this agent/);
+    expect(r.stdout).not.toMatch(/the previous revoke is not final yet/);
     expect(approvals(c.chain)).toBe(0);
   }, 150_000);
 
@@ -323,6 +340,15 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     const r = await c.run();
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(c.site.posts).toEqual([]);
+  }, 150_000);
+
+  it("setup under own-head drift with an allowance at the latest block is refused as a live budget, not a revoke", async () => {
+    const c = await bundle({ lag: 0, allow: "0" });
+    ownHeadDriftLiveGrant(c);
+    const r = await c.run();
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("a budget is live"), next: expect.stringContaining("revoke first") });
     expect(c.site.posts).toEqual([]);
   }, 150_000);
 

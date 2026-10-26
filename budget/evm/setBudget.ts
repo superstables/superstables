@@ -56,6 +56,8 @@ const liveRefusal = () => {
 // owner's own grant, so the refusals below that read the chain's state before asking are not run for it.
 if (!verifyOnly && !resuming() && !(replace && OWNER_KEY_FILE && beforeAllow > 0n) && !(!OWNER_KEY_FILE && approveResetHostedProblem())) {
   const atFinal = await allowanceAgreed(pub.owner, pub.agent);
+  // Own-head drift with an allowance at the latest block is a grant not yet final everywhere, not a revoke.
+  if (!atFinal.agreed && atFinal.why === "not_final_yet" && beforeAllow > 0n) liveRefusal();
   if (!atFinal.agreed && atFinal.why === "not_final_yet") {
     const reason = `the previous revoke is not final yet. Grant again once it is final${usuallyWords()}`;
     console.log(`REFUSED: ${reason}. Nothing was sent.`);
