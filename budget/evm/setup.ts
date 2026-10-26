@@ -260,7 +260,7 @@ if (BUNDLE) {
         // Own-head drift with an allowance at the latest block is a grant not yet final everywhere, not a revoke.
         const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
         if (latest === 0n) refuse(
-          `we can't yet confirm a final zero allowance. Check budget status before granting again${usuallyWords()}`,
+          `we can't yet confirm a final zero allowance. Check budget status before granting again`,
           `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again`,
         );
         if (latest !== null) refuse(
@@ -273,7 +273,7 @@ if (BUNDLE) {
         const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
         refuse(
           latest === 0n
-            ? `the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Check budget status before granting again${usuallyWords()}`
+            ? `the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Check budget status before granting again`
             : `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(at.value as bigint)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
           latest === 0n ? `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
         );
