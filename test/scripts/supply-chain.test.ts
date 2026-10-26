@@ -80,15 +80,19 @@ describe("pins", () => {
     expect(lock[""].devDependencies).toEqual(pkg.devDependencies);
   });
 
-  it("the packages no exact spec reaches are exactly the four that are known", () => {
+  it("the packages no exact spec reaches are exactly the three that are known", () => {
     const production = Object.entries<any>(lock).filter(([key, v]) => key && !v.dev && !v.optional && !v.devOptional);
     const pinned = new Set<string>();
     for (const deps of [lock[""].dependencies, ...production.map(([, v]) => v.dependencies)]) {
       for (const [name, spec] of Object.entries<string>(deps ?? {})) if (EXACT.test(spec)) pinned.add(`${name}@${spec}`);
     }
     const floating = [...new Set(production.map(([key, v]) => `${nameOf(key)}@${v.version}`))].filter((id) => !pinned.has(id));
-    expect([...new Set(floating.map((id) => id.slice(0, id.lastIndexOf("@"))))].sort()).toEqual(["@adraffy/ens-normalize", "@noble/ciphers", "@scure/base", "zod"]);
-    expect(floating.filter((id) => id.startsWith("zod@"))).toEqual(["zod@3.25.76"]);
+    expect([...new Set(floating.map((id) => id.slice(0, id.lastIndexOf("@"))))].sort()).toEqual(["@adraffy/ens-normalize", "@noble/ciphers", "@scure/base"]);
+  });
+
+  it("ships one zod, the root's, to x402 as well", () => {
+    const zods = Object.entries<any>(lock).filter(([key, v]) => nameOf(key) === "zod" && !v.dev).map(([key, v]) => `${key}@${v.version}`);
+    expect(zods).toEqual([`node_modules/zod@${pkg.dependencies.zod}`]);
   });
 });
 
