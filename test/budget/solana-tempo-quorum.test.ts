@@ -433,13 +433,13 @@ describe("tempo: readBudget", () => {
   async function lateGrant(lie: (p: any[]) => unknown) {
     const a = await tempo();
     a.keys.set(tempoKeyId, LIVE_KEY);
-    let asked = 0n;
+    const header = (n: bigint) => ({ number: `0x${n.toString(16)}`, timestamp: "0x1", hash: `0x${n.toString(16).padStart(64, "0")}`, transactions: [] });
     a.overrides = {
-      eth_getBlockByNumber: (p) => { if (p[0] !== "latest") asked = BigInt(p[0]); return undefined; },
-      eth_call: (p) => (p[1]?.blockHash && asked < 900n ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : undefined),
+      eth_getBlockByNumber: (p) => header(p[0] === "latest" ? a.head.number : BigInt(p[0])),
+      eth_call: (p) => (p[1]?.blockHash && BigInt(p[1].blockHash) < 900n ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : undefined),
     };
     const b = track(await a.mirror({ overrides: {
-      eth_getBlockByNumber: (p) => (p[0] === "latest" ? { number: "0x1f4", timestamp: "0x1", hash: `0x${"ab".repeat(32)}`, transactions: [] } : undefined),
+      eth_getBlockByNumber: (p) => header(p[0] === "latest" ? 500n : BigInt(p[0])),
       eth_blockNumber: () => "0x1f4",
       eth_call: lie,
     } }));
@@ -541,6 +541,30 @@ describe("tempo: revoke", () => {
     expect(site.requests).toHaveLength(1);
   }, 120_000);
 
+  it("keeps simulation answers at F and the leading head so sends is never overwritten", async () => {
+    const a = await tempo();
+    let simulations = 0;
+    // Own-head simulations receive the head hash directly, without another header read.
+    a.revokeSimulation = () => ++simulations === 1 ? "ok" : "KeyAlreadyRevoked";
+    const b = track(await a.mirror({
+      overrides: { eth_getBlockByNumber: (p) => p[0] === "latest" && a.head.number === 1000n ? { number: "0x3b6", timestamp: `0x${(a.head.timestamp - 50).toString(16)}`, hash: `0x${"ab".repeat(32)}`, transactions: [] } : undefined },
+      revokeSimulation: () => "KeyAlreadyRevoked",
+    }));
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup(true);
+    site.owner = OWNER_EVM;
+    a.keys.set(tempoKeyId, REVOKED_KEY);
+    site.onPoll = (r: FakeRequest) => {
+      if (r.polls !== 2 || r.kind === "link") return;
+      Object.assign(r, { state: "confirmed", tx_hash: a.mine(r.owner!, r.body.transaction.data), wallet_asked: true });
+    };
+    const r = await budget(["revoke", "--rail", "tempo", "--wait", "--no-open"], tempoEnv(a));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.result).toMatchObject({ state: "settled", revoked: true });
+    expect(site.requests).toHaveLength(1);
+    expect(simulations).toBeGreaterThanOrEqual(2);
+  }, 120_000);
+
   it("both refuse with KeyAlreadyRevoked: already revoked, nothing sent, with the agreement named", async () => {
     const a = await tempo();
     const b = track(await a.mirror());
@@ -590,14 +614,14 @@ describe("tempo: reconcile of an expired purchase", () => {
   }, 120_000);
 
   // A purchase the chain shows bound to this operation (memo, owner, agent key), whose receipt each server names with `status`.
-  const bound = (status: "0x0" | "0x1") => {
+  const bound = (status: "0x0" | "0x1", blockNumber = "0x3e8") => {
     const hash = `0x${"cd".repeat(32)}`;
     const padded = (a: string) => `0x${a.slice(2).toLowerCase().padStart(64, "0")}`;
-    const log = { address: "0x20C0000000000000000000000000000000000000", topics: [TRANSFER_WITH_MEMO_TOPIC, padded(OWNER_EVM), padded(RECIPIENT), MEMO], data: `0x${(10_000).toString(16).padStart(64, "0")}`, blockNumber: "0x3e8", blockHash: `0x${"ab".repeat(32)}`, transactionHash: hash, removed: false };
+    const log = { address: "0x20C0000000000000000000000000000000000000", topics: [TRANSFER_WITH_MEMO_TOPIC, padded(OWNER_EVM), padded(RECIPIENT), MEMO], data: `0x${(10_000).toString(16).padStart(64, "0")}`, blockNumber, blockHash: `0x${"ab".repeat(32)}`, transactionHash: hash, removed: false };
     return {
       eth_getLogs: (p: any[]) => (p[0]?.topics?.[3] === MEMO ? [log] : undefined),
       eth_getTransactionByHash: () => ({ hash, from: OWNER_EVM, signature: { keyId: TEMPO_AGENT } }),
-      eth_getTransactionReceipt: () => ({ transactionHash: hash, status, blockNumber: "0x3e8", blockHash: `0x${"ab".repeat(32)}`, from: OWNER_EVM, logs: [log], gasUsed: "0x1" }),
+      eth_getTransactionReceipt: () => ({ transactionHash: hash, status, blockNumber, blockHash: `0x${"ab".repeat(32)}`, from: OWNER_EVM, logs: [log], gasUsed: "0x1" }),
     };
   };
 
@@ -623,6 +647,20 @@ describe("tempo: reconcile of an expired purchase", () => {
     writeTempoOp("tempo-revert-both");
     const r = await budget(["reconcile", "--rail", "tempo", "--op", "tempo-revert-both"], tempoEnv(a));
     expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "failed" });
+  }, 120_000);
+
+  it("a confirming endpoint's off-chain receipt cannot release the payment", async () => {
+    const a = await tempo();
+    a.overrides = bound("0x0", "0x3e7");
+    const b = track(await a.mirror({ overrides: { ...bound("0x0", "0x3e7"),
+      eth_getBlockByNumber: (p) => p[0] === "0x3e7" ? { number: "0x3e7", timestamp: `0x${(a.head.timestamp - 1).toString(16)}`, hash: `0x${"ef".repeat(32)}` } : undefined,
+    } }));
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup();
+    writeTempoOp("tempo-revert-placement");
+    const r = await budget(["reconcile", "--rail", "tempo", "--op", "tempo-revert-placement"], tempoEnv(a));
+    expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "unknown" });
+    expect(r.result.reason).toMatch(/Do not pay again/);
   }, 120_000);
 
   it("both endpoints are clean past validBefore: not found", async () => {

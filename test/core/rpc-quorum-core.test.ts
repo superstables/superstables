@@ -15,7 +15,7 @@ import { ARC_TESTNET, BASE_SEPOLIA, SOLANA_DEVNET, TEMPO_MODERATO } from "../../
 import { recheckChain } from "../../src/core/pay.js";
 import { endpointId, type EndpointSet } from "../../src/core/rpc-endpoints.mjs";
 import { forgetIdentities } from "../../src/core/rpc-quorum.mjs";
-import { findAuthorization } from "../../src/core/settlement.js";
+import { confirmAuthorizationDead, confirmCancellationFinal, findAuthorization } from "../../src/core/settlement.js";
 import { buildPayment, checkSigned } from "../../src/core/rails/solana-transaction.js";
 import { tempoRail } from "../../src/core/rails/tempo.js";
 import { Records } from "../../src/core/records.js";
@@ -333,6 +333,52 @@ describe("a payment is called never made only when the endpoints agree", () => {
     const done = await recheckChain(r, "a", { fetchImpl: net.fetchImpl });
     expect(done).toMatchObject({ state: "failed", chain: "unpaid", chainAgreement: "quorum" });
     expect(BigInt(done!.chainAgreedAt!.block!)).toBeGreaterThanOrEqual(block);
+  });
+});
+
+describe("core authorization proofs with batched final heads", () => {
+  beforeEach(noRpcVariables);
+  const low = 50210845n;
+  const high = low + 1822n;
+  const hash = (n: bigint) => `0x${n.toString(16).padStart(64, "0")}`;
+  const tx = `0x${"12".repeat(32)}`;
+  const transport = (mode: "unused" | "used_since_low" | "cancelled", receiptBlock = low) => {
+    const reads: [string, bigint][] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      const body = JSON.parse(String(init?.body)) as { id: number; method: string; params: unknown[] };
+      const head = url === BASE_URL ? low : high;
+      let result: unknown;
+      if (body.method === "eth_chainId") result = "0x14a34";
+      else if (body.method === "eth_getBlockByNumber") {
+        const n = body.params[0] === "finalized" ? head : BigInt(String(body.params[0]));
+        expect(n <= head).toBe(true);
+        result = { number: `0x${n.toString(16)}`, hash: hash(n), timestamp: "0x6ad00000" };
+      } else if (body.method === "eth_call") {
+        const at = body.params[1] as { blockHash: string };
+        const n = BigInt(at.blockHash);
+        expect(n <= head).toBe(true);
+        reads.push([url, n]);
+        result = mode === "cancelled" || (mode === "used_since_low" && n > low) ? hash(1n) : hash(0n);
+      } else if (body.method === "eth_getTransactionReceipt") {
+        result = { transactionHash: tx, status: "0x1", blockNumber: `0x${receiptBlock.toString(16)}`, blockHash: hash(receiptBlock), logs: [{ address: BASE_SEPOLIA.usdc.address, topics: [keccak256(toBytes("AuthorizationCanceled(address,bytes32)")), `0x${PAYER.slice(2).padStart(64, "0")}`, NONCE] }] };
+      } else throw new Error("unexpected method");
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+    };
+    return { fetchImpl, reads };
+  };
+
+  it("expiry requires unused state at every counted endpoint's own final head", async () => {
+    const unused = transport("unused");
+    expect(await confirmAuthorizationDead(BASE_SEPOLIA, { payer: PAYER, nonce: NONCE, validBefore: 1 }, unused)).toMatchObject({ dead: true });
+    expect(unused.reads).toContainEqual([PUBLICNODE_URL, high]);
+    expect(await confirmAuthorizationDead(BASE_SEPOLIA, { payer: PAYER, nonce: NONCE, validBefore: 1 }, transport("used_since_low"))).toMatchObject({ dead: false });
+  });
+
+  it("cancellation is final only at or below every counted final head", async () => {
+    const cancellation = { payer: PAYER, nonce: NONCE, transaction: tx };
+    expect(await confirmCancellationFinal(BASE_SEPOLIA, cancellation, transport("cancelled"))).toMatchObject({ dead: true });
+    expect(await confirmCancellationFinal(BASE_SEPOLIA, cancellation, transport("cancelled", high))).toMatchObject({ dead: false });
   });
 });
 

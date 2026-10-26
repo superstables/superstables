@@ -300,6 +300,65 @@ describe("verdicts against two endpoints, one of which lies (in-process)", () =>
     return undefined;
   };
 
+  const agreementPaths = ["allowanceAgreed", "authorizationStateAgreed", "receiptAgreed", "txAgreed"] as const;
+  it.each(agreementPaths)("%s: accepts Base's 1,822-block finality batch but never proves a later block final", async (path) => {
+    const low = 50210845n;
+    const high = low + 1822n;
+    const header = (n: bigint) => ({ number: hex(n), hash: pad(toHex(n)), timestamp: hex(1792964037n + (n - low) / 5n) });
+    const blockReply = (head: bigint): NonNullable<FakeEvm["hook"]> => (m, p) => m === "eth_getBlockByNumber"
+      ? { result: header(p[0] === "finalized" ? head : BigInt(p[0])) }
+      : m === "eth_call" ? { result: pad("0x0") } : undefined;
+    chain.hook = blockReply(low);
+    mirror.hook = blockReply(high);
+    const lib = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
+    const invoke = (atLeast?: bigint) => {
+      switch (path) {
+        case "allowanceAgreed": return lib.allowanceAgreed(OWNER.address, AGENT.address, atLeast);
+        case "authorizationStateAgreed": return lib.authorizationStateAgreed(OWNER.address, NONCE, atLeast);
+        case "receiptAgreed": return lib.receiptAgreed(PULL, atLeast);
+        case "txAgreed": return lib.txAgreed(PULL, atLeast);
+      }
+    };
+    expect(await invoke()).toMatchObject({ agreed: true, block: { number: low, highest: high } });
+    expect(await invoke(low + 1n)).toMatchObject({ agreed: false, why: "not_final_yet" });
+    // A contradictory endpoint cannot be outvoted or replaced by a common historical answer.
+    mirror.hook = (m, p) => {
+      if (m === "eth_call") return { result: pad("0x1") };
+      if (m === "eth_getTransactionReceipt") return { result: { ...receiptOf(PULL, "0x0"), blockNumber: hex(high), blockHash: pad(toHex(high)) } };
+      if (m === "eth_getTransactionByHash") return { result: { ...txOf(PULL), blockNumber: hex(high), blockHash: pad(toHex(high)) } };
+      return blockReply(high)(m, p);
+    };
+    expect(await invoke()).toMatchObject({ agreed: false, why: "disagree" });
+    expect(await lib.finalityOf(PULL, { blockNumber: high, blockHash: pad(toHex(high)) })).toMatchObject({ final: false });
+  });
+
+  it.each(agreementPaths.flatMap((path) => [undefined, 50210844n, 50210845n].map((atLeast) => ({ path, atLeast }))))("$path: own-head-only drift never agrees a stale value with atLeast $atLeast", async ({ path, atLeast }) => {
+    const low = 50210845n, high = low + 1822n;
+    const header = (n: bigint) => ({ number: hex(n), hash: pad(toHex(n)), timestamp: hex(1792964037n) });
+    const hooks = (head: bigint): NonNullable<FakeEvm["hook"]> => {
+      let receiptReads = 0, txReads = 0;
+      return (method, params) => {
+        if (method === "eth_getBlockByNumber") {
+          return { result: header(params[0] === "finalized" ? head : BigInt(params[0])) };
+        }
+        if (method === "eth_call") {
+          const at = BigInt(params[1].blockHash);
+          return { result: pad(toHex(path === "allowanceAgreed" ? (at <= low ? 5 : 2) : (at <= low ? 0 : 1))) };
+        }
+        if (method === "eth_getTransactionReceipt") return { result: (++receiptReads === 1 || head === low) ? null : { ...receiptOf(PULL, "0x0"), blockNumber: hex(high), blockHash: pad(toHex(high)) } };
+        if (method === "eth_getTransactionByHash") return { result: (++txReads === 1 || head === low) ? null : { ...txOf(PULL), blockNumber: hex(high), blockHash: pad(toHex(high)) } };
+        return undefined;
+      };
+    };
+    chain.hook = hooks(low);
+    mirror.hook = hooks(high);
+    const lib = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
+    const got = await (path === "allowanceAgreed" ? lib.allowanceAgreed(OWNER.address, AGENT.address, atLeast)
+      : path === "authorizationStateAgreed" ? lib.authorizationStateAgreed(OWNER.address, NONCE, atLeast)
+      : path === "receiptAgreed" ? lib.receiptAgreed(PULL, atLeast) : lib.txAgreed(PULL, atLeast));
+    expect(got).toMatchObject({ agreed: false, why: "not_final_yet" });
+  });
+
   it("a replacement transaction that only the primary shows leaves the purchase unknown, not not_found", async () => {
     chain.hook = invented();
     const { reconcileJournal } = await ops();

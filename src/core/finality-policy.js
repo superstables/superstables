@@ -28,3 +28,18 @@ export function finalWords(rail, chain) {
 }
 
 export const SOLANA_DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG";
+
+/**
+ * Maximum distance between EVM final heads, in blocks. Base Sepolia advances finalized in batches of
+ * 1,354–2,420 blocks (~0.2 s/block, measured 26 October 2026). Publicnode's load balancer flips
+ * between old and new batches; 5,000 covers a two-step gap (~3,300–4,800 blocks).
+ * Own-head checks protect safety; this width is a liveness choice.
+ * Arbitrum's batched finality uses the same 5,000-block bound as the website. Other chains keep 1,000.
+ * This bounds lag; agreement also checks each endpoint's own final value so old live state cannot win.
+ * @param {number} chainId
+ */
+export function maxFinalizedSpread(chainId) {
+  if (chainId === 84532) return 5000n;
+  if (chainId === 421614) return 5000n;
+  return 1000n;
+}

@@ -121,9 +121,9 @@ async function main() {
     // The simulation is believed when every confirming endpoint, at one block, gives the same answer. A revoke that any one of them
     // says would succeed is sent: sending it is not wrong, and skipping it would leave a live key.
     const seen = new Map<string, Simulated>()
-    const agreedSim = await agreedAtBlock(async (url, _block, hash) => {
+    const agreedSim = await agreedAtBlock(async (url, block, hash) => {
       const one = await simulateRevokeAt(url, owner, agentAddress, hash)
-      seen.set(url, one)
+      seen.set(`${url}@${block}`, one)
       if (one.verdict === 'unknown') throw new Error('unknown')
       return one.verdict
     }, headStart.number > 64n ? headStart.number - 64n : 0n).catch(() => null) // KeyNotFound is a verdict of absence: it must hold from about the head read above

@@ -256,6 +256,18 @@ if (BUNDLE) {
         `superstables budget setup --rail evm${chainFlag}${HOSTED ? " --hosted" : ""}${NEW_OWNER ? " --new-owner" : ""}, then superstables budget grant --rail evm${chainFlag} --amount A`,
       );
       const at = await allowanceAgreed(recorded!, agentAddr);
+      if (!at.agreed && at.why === "not_final_yet") {
+        // Own-head drift with an allowance at the latest block is a grant not yet final everywhere, not a revoke.
+        const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
+        if (latest === 0n) refuse(
+          `the previous revoke is not final yet. Grant again once it is final${usuallyWords()}`,
+          `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final`,
+        );
+        if (latest !== null) refuse(
+          `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(latest)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
+          `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
+        );
+      }
       if (!at.agreed) refuse(`the allowance at the chain's final block could not be confirmed (${agreementWords(at)})`, `superstables budget doctor --rail evm${chainFlag}, then run setup again`);
       if (at.value !== 0n) {
         const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
