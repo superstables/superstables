@@ -85,7 +85,7 @@ async function withRevertAgreement(found: Extract<Lookup, { kind: 'found' }>): P
   }, found.receipt.blockNumber).catch(() => null)
   const value = agreed && agreed.agreed ? (agreed.value as { status: string; blockHash: string; blockNumber: string }) : null
   if (agreed && agreed.agreed && value?.status === '0x0') return { ...found, revert: { agreed: true, agreement: agreed.agreement } }
-  return { ...found, revert: { agreed: false, words: !agreed ? 'the RPC endpoints could not be read' : agreed.agreed ? 'the confirming RPC endpoints do not show it reverted' : agreementWords(agreed) } }
+  return { ...found, revert: { agreed: false, words: !agreed ? 'we couldn\'t check the chain state' : agreed.agreed ? 'the confirming RPC endpoints do not show it reverted' : agreementWords(agreed) } }
 }
 
 /** Polls `lookupOnce` every second until it is decided or `maxMs` passes. */

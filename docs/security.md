@@ -409,7 +409,7 @@ settings when they set their own.
 `SUPERSTABLES_RPC_URL`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` (each HTTPS, or HTTP on this
 machine, without credentials) still choose where reads go, but an endpoint named only there never decides
 `unpaid`: unless it is a table URL or one the owner set, the attempt stays `uncertain` and counted, with the
-way out in words (unset the variable, or ask the owner to add it in the owner settings). When endpoints
+way out in words (unset the variable, or stop and ask the owner to add this RPC in the settings). When endpoints
 disagree, one is missing or unreadable, or a confirmer is still reading, the attempt also stays
 `uncertain`, and the agent is told not to pay again. Records written before this check are not re-opened,
 and a purchase on the hosted site (`buy-once`) is not covered by it. The client does not run a node: HTTPS
@@ -422,7 +422,7 @@ authenticates the connection to an RPC, not the chain behind it. The budget rail
   single public RPC, so its verdicts rest on that one, labelled `single`, until the owner pins more. Owner
   commands on Solana read and send through the endpoints the owner set; an RPC that only
   `SUPERSTABLES_SOLANA_RPC` names is refused there (exit 3), and a verdict that would rest on it stays
-  unknown, with that reason and the fix (unset it, or ask the owner to add it in the owner settings). When
+  unknown, with that reason and the fix (unset it, or stop and ask the owner to add this RPC in the settings). When
   the endpoints disagree or one is missing, the answer is unknown and nothing is treated as revoked or as
   never paid.
 

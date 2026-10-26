@@ -59,9 +59,9 @@ if (!verifyOnly && !resuming() && !(replace && OWNER_KEY_FILE && beforeAllow > 0
   // Own-head drift with an allowance at the latest block is a grant not yet final everywhere, not a revoke.
   if (!atFinal.agreed && atFinal.why === "not_final_yet" && beforeAllow > 0n) liveRefusal();
   if (!atFinal.agreed && atFinal.why === "not_final_yet") {
-    const reason = `the previous revoke is not final yet. Grant again once it is final${usuallyWords()}`;
+    const reason = `we can't yet confirm a final zero allowance. Check budget status before granting again${usuallyWords()}`;
     console.log(`REFUSED: ${reason}. Nothing was sent.`);
-    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` }));
+    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again` }));
   }
   if (!atFinal.agreed) {
     const reason = `the allowance at the chain's final block could not be confirmed (${agreementWords(atFinal)})`;
@@ -69,9 +69,9 @@ if (!verifyOnly && !resuming() && !(replace && OWNER_KEY_FILE && beforeAllow > 0
     process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget doctor --rail evm${chainFlag}, then grant again` }));
   }
   if (atFinal.value !== 0n && beforeAllow === 0n) {
-    const reason = `the previous revoke is not final yet: the allowance reads 0 at the latest block but ${usdc(atFinal.value as bigint)} ${SYM} at the final block. Grant again once it is final${usuallyWords()}`;
+    const reason = `the allowance reads 0 at the latest block but ${usdc(atFinal.value as bigint)} ${SYM} at the final block. Check budget status before granting again${usuallyWords()}`;
     console.log(`REFUSED: ${reason}. Nothing was sent.`);
-    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` }));
+    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again` }));
   }
   // A new grant waits until the previous revoke is final, whatever the final block's allowance reads: an earlier grant that is itself
   // not final yet leaves the final block at 0, so only the recorded revoke (B4_REVOKED_BLOCK) can tell.

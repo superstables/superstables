@@ -260,8 +260,8 @@ if (BUNDLE) {
         // Own-head drift with an allowance at the latest block is a grant not yet final everywhere, not a revoke.
         const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
         if (latest === 0n) refuse(
-          `the previous revoke is not final yet. Grant again once it is final${usuallyWords()}`,
-          `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final`,
+          `we can't yet confirm a final zero allowance. Check budget status before granting again${usuallyWords()}`,
+          `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again`,
         );
         if (latest !== null) refuse(
           `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(latest)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
@@ -273,9 +273,9 @@ if (BUNDLE) {
         const latest = await allowanceOf(recorded!, agentAddr).catch(() => null);
         refuse(
           latest === 0n
-            ? `the previous revoke is not final yet: the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Grant again once it is final${usuallyWords()}`
+            ? `the allowance reads 0 at the latest block but ${usdc(at.value as bigint)} ${SYM} at the final block. Check budget status before granting again${usuallyWords()}`
             : `a budget is live: the owner on record ${recorded} still allows the agent ${usdc(at.value as bigint)} ${SYM}. A grant overwrites it in place, so it is not asked for here`,
-          latest === 0n ? `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
+          latest === 0n ? `superstables budget status --rail evm${chainFlag}; wait for a confirmed zero allowance before granting again` : `revoke first (superstables budget revoke --rail evm${chainFlag}), then superstables budget grant --rail evm${chainFlag} --amount A`,
         );
       }
       if (/^\d+$/.test(p.B4_REVOKED_BLOCK ?? "") && at.block.number < BigInt(p.B4_REVOKED_BLOCK!)) refuse(

@@ -155,7 +155,7 @@ describe("an RPC the owner did not approve cannot say a payment never happened",
       expect(found.found).toBe(false);
       expect((found as { never?: boolean }).never).toBeUndefined();
       expect((found as { reason: string }).reason).toMatch(/SUPERSTABLES_RPC_URL/);
-      expect((found as { reason: string }).reason).toMatch(/unset it, or ask the owner to add it/);
+      expect((found as { reason: string }).reason).toMatch(/unset the variable, or stop and ask the owner to add this RPC/);
       expect(calls[0]).toBe(`${ATTACKER} eth_chainId`);
       expect(calls.every((c) => c.startsWith(`${ATTACKER} `))).toBe(true);
     });
@@ -167,7 +167,7 @@ describe("an RPC the owner did not approve cannot say a payment never happened",
     const fetchImpl = inMemory((method) => (method === "eth_chainId" ? "0x14a34" : method === "eth_call" ? UNUSED : { number: "0x100", hash: `0x${"ab".repeat(32)}`, timestamp: `0x${now.toString(16)}` }), []);
     const r = ledger();
     evmAttempt(r, new Date((now - 3_600) * 1000).toISOString());
-    expectHeld(await recheckChain(r, "a", { fetchImpl }), r, /SUPERSTABLES_RPC_URL.*unset it, or ask the owner to add it/);
+    expectHeld(await recheckChain(r, "a", { fetchImpl }), r, /SUPERSTABLES_RPC_URL.*unset the variable, or stop and ask the owner to add this RPC/);
   });
 });
 
@@ -217,7 +217,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
     const net = route({ [BASE_URL]: a.url });
     const r = ledger();
     evmAttempt(r, pastValidBefore(a));
-    expectHeld(await recheckChain(r, "a", { fetchImpl: net.fetchImpl }), r, /a second RPC endpoint was not available/);
+    expectHeld(await recheckChain(r, "a", { fetchImpl: net.fetchImpl }), r, /we couldn't complete the required RPC checks/);
   });
 
   it("a final failure and an unused nonce, both from a lying primary, cannot release it", async () => {
@@ -250,7 +250,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
     const net = route({ [BASE_URL]: a.url, [PUBLICNODE_URL]: wrong.url });
     const r = ledger();
     evmAttempt(r, pastValidBefore(a));
-    expectHeld(await recheckChain(r, "a", { fetchImpl: net.fetchImpl }), r, /not available.*answers chain id 1/);
+    expectHeld(await recheckChain(r, "a", { fetchImpl: net.fetchImpl }), r, /couldn't complete the required RPC checks.*answers chain id 1/);
   });
 
   it("one pinned owner RPC without the owner's own node is not enough", async () => {
@@ -258,7 +258,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
     vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith({ version: 1, rpcEnv: { allowLoopback: true }, rpc: { "base-sepolia": { urls: [a.url] } } }));
     const r = ledger();
     evmAttempt(r, pastValidBefore(a));
-    expectHeld(await recheckChain(r, "a", { fetchImpl: route({}).fetchImpl }), r, /a second RPC endpoint was not available/);
+    expectHeld(await recheckChain(r, "a", { fetchImpl: route({}).fetchImpl }), r, /we couldn't complete the required RPC checks/);
   });
 
   it("the owner's own node decides alone, and the record says so", async () => {
@@ -285,7 +285,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
     vi.stubEnv("SUPERSTABLES_RPC_URL", (await own(a.mirror())).url);
     const r = ledger();
     evmAttempt(r, pastValidBefore(a));
-    expectHeld(await recheckChain(r, "a", { fetchImpl: route({ [BASE_URL]: a.url }).fetchImpl }), r, /a second RPC endpoint was not available/);
+    expectHeld(await recheckChain(r, "a", { fetchImpl: route({ [BASE_URL]: a.url }).fetchImpl }), r, /we couldn't complete the required RPC checks/);
   });
 
   it("a testnet with one public RPC is decided by it, labelled single", async () => {
@@ -305,7 +305,7 @@ describe("a payment is called never made only when the endpoints agree", () => {
     evmAttempt(other, pastValidBefore(a));
     vi.stubEnv("SUPERSTABLES_RPC_URL", a.url);
     const viaVariable = await recheckChain(other, "a", { fetchImpl: route({}).fetchImpl });
-    expectHeld(viaVariable, other, /not available|could not be read/);
+    expectHeld(viaVariable, other, /couldn't complete the required RPC checks|could not be read/);
   });
 
   it("a cancellation one endpoint cannot show is not final", async () => {
@@ -497,7 +497,7 @@ describe("Solana: a second endpoint reads the blocks too", () => {
     const second = await own(s.chain.mirror());
     vi.stubEnv("SUPERSTABLES_SOLANA_RPC", (await own(s.chain.mirror())).url);
     vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith({ version: 1, rpcEnv: { allowLoopback: true }, rpc: { "solana-devnet": { urls: ["http://127.0.0.1:9/", second.url.replace("127.0.0.1", "localhost")] } } }));
-    expectHeld(await recheckChain(s.records, "sol"), s.records, /a second RPC endpoint was not available/);
+    expectHeld(await recheckChain(s.records, "sol"), s.records, /we couldn't complete the required RPC checks/);
   });
 
   it("the owner's two Solana RPCs from the owner settings: a primary that hides the block cannot release it", async () => {
@@ -532,7 +532,7 @@ describe("Solana: a second endpoint reads the blocks too", () => {
     vi.stubEnv("SUPERSTABLES_SOLANA_RPC", "https://solana.example/rpc");
     const s = await solanaCase();
     const done = await recheckChain(s.records, "sol", { fetchImpl: route({ "https://solana.example/rpc": s.chain.url }).fetchImpl });
-    expectHeld(done, s.records, /SUPERSTABLES_SOLANA_RPC.*unset it, or ask the owner to add it/);
+    expectHeld(done, s.records, /SUPERSTABLES_SOLANA_RPC.*unset the variable, or stop and ask the owner to add this RPC/);
   });
 });
 

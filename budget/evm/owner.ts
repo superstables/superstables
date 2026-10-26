@@ -454,7 +454,7 @@ export async function revokeInWallet(command: string, owner: Address, agent: Add
   }
   const final = sent.final && at.agreed && at.value === 0n;
   if (!final) {
-    console.log(`the revoke is in block ${sent.blockNumber} and the allowance reads 0, but the chain has not made it final yet (${at.agreed ? "its block is not confirmed as final" : agreementWords(at)})`);
+    console.log(`the revoke is in block ${sent.blockNumber} and the allowance reads 0, but final revocation could not be confirmed (${at.agreed ? "its block is not confirmed as final" : agreementWords(at)})`);
     handle.finish({ outcome: "confirmed", message: landedRevoke(), hash: sent.hash });
   } else handle.finish({ outcome: "confirmed", message: `Confirmed. This allowance is 0. Funds already withdrawn remain under the agent key. You can close this page.`, hash: sent.hash });
   await closeOwnerPage();

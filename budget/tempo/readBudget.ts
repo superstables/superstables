@@ -73,7 +73,7 @@ async function main() {
   // Revoked and expired never undo, so an old agreed block shows them truly. "Remaining 0" and "never granted" are true before a
   // grant: they are believed only at a block near the highest head, never one the lowest endpoint's lag has left far behind.
   const recent = !!agreed && agreed.agreed && agreed.block.highest - agreed.block.number <= 64n
-  const failure = !agreed ? 'the RPC endpoints could not be read' : agreed.agreed ? (recent ? 'the confirming RPC endpoints do not show it' : 'it is not final on chain yet') : agreementWords(agreed)
+  const failure = !agreed ? 'we couldn\'t check the chain state' : agreed.agreed ? (recent ? 'the RPC checks do not confirm this' : 'we can\'t yet confirm the chain\'s final state') : agreementWords(agreed)
   const words = (what: string) => ` (${what} on one RPC, but ${failure})`
   const agreedWords = ` (agreement: ${agreed && agreed.agreed ? agreed.agreement : ''})`
   const revoked = metadata.isRevoked && !!seen?.revoked

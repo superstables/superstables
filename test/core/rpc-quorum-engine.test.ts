@@ -98,7 +98,7 @@ describe("agreeAtFinalEvm", () => {
     const { call } = transport(fakes);
     const r = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), call, chainId: 84532, finality: "finalized", read: read(fakes) });
     expect(r).toMatchObject({ agreed: false, why: "missing" });
-    expect(agreementWords(r as never)).toContain("a second RPC endpoint was not available to confirm it");
+    expect(agreementWords(r as never)).toContain("we couldn't complete the required RPC checks");
     expect(agreementWords(r as never)).toContain("answers chain id 1, not 84532");
   });
 
@@ -142,7 +142,7 @@ describe("agreeAtFinalEvm", () => {
     const { call } = transport(fakes);
     const r = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), call, chainId: 84532, finality: "finalized", read: read(fakes), atLeast: 101n });
     expect(r).toMatchObject({ agreed: false, why: "not_final_yet" });
-    expect(agreementWords(r as never)).toBe("it is not final on chain yet");
+    expect(agreementWords(r as never)).toBe("we can't yet confirm the chain's final state");
   });
 
   it("a malformed settings set is unreadable", async () => {
@@ -416,13 +416,13 @@ describe("a liar can delay a verdict but cannot decide one", () => {
 
   it("endpointSetErrorWords: a refused variable gets the way out, unreadable owner settings do not", () => {
     const refused = "SUPERSTABLES_SOLANA_RPC (http://rpc.example.com/…) is not an RPC the owner set for solana-devnet: owner actions and verdicts read only the owner's RPCs or the built-in ones";
-    const want = "the RPC endpoints could not be read: SUPERSTABLES_SOLANA_RPC (http://rpc.example.com/…) is not an RPC the owner set for solana-devnet; unset it, or ask the owner to add it in the owner settings";
+    const want = "the RPC check was refused: SUPERSTABLES_SOLANA_RPC (http://rpc.example.com/…) is not an RPC the owner set for solana-devnet; unset the variable, or stop and ask the owner to add this RPC in the settings";
     expect(endpointSetErrorWords(refused, "SUPERSTABLES_SOLANA_RPC")).toBe(want);
     expect(agreementWords({ agreed: false, why: "unreadable", reason: refused } as never)).toBe(want);
     const broken = "the owner settings at /x/settings.json cannot be used: it is not JSON. Nothing was done";
     const words = endpointSetErrorWords(broken, "SUPERSTABLES_SOLANA_RPC");
-    expect(words).toBe(`the RPC endpoints could not be read: ${broken}; ask the owner to check the owner settings`);
-    expect(words).not.toMatch(/unset it/);
+    expect(words).toBe(`the RPC check could not run: ${broken}; stop and ask the owner to check the settings`);
+    expect(words).not.toMatch(/unset the variable/);
     expect(agreementWords({ agreed: false, why: "unreadable", reason: broken } as never)).toBe(words);
   });
 
@@ -439,7 +439,17 @@ describe("a liar can delay a verdict but cannot decide one", () => {
     const { call } = transport({ [A]: { fail: true } });
     const r = await agreeAtFinalEvm({ set: mk({ [A]: "a" }, 1, "single"), call, chainId: 84532, finality: "finalized", read: async () => 1 });
     expect(r).toMatchObject({ agreed: false, why: "unreadable" });
-    expect(agreementWords(r as never)).toContain("could not be read");
+    expect(agreementWords(r as never)).toContain("couldn't read the chain data");
+  });
+
+  it("a single endpoint whose head reads but whose value read fails is missing, and the words do not say a second endpoint was needed", async () => {
+    const fakes = { [A]: { finalized: 100 } };
+    const { call } = transport(fakes);
+    const r = await agreeAtFinalEvm({ set: mk({ [A]: "a" }, 1, "single"), call, chainId: 84532, finality: "finalized", read: async () => { throw new Error("value read failed"); } });
+    expect(r).toMatchObject({ agreed: false, why: "missing" });
+    const words = agreementWords(r as never);
+    expect(words).toContain("we couldn't complete the required RPC checks");
+    expect(words).not.toMatch(/second RPC endpoint/);
   });
 });
 

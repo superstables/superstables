@@ -34,7 +34,7 @@ if (last) {
 }
 const revokeFinal = lastOwnerAction?.action !== "revoke" || lastOwnerAction.final;
 const revoked = allowance === 0n && recorded && agreedZero && revokeFinal;
-const agreement = agreed === null ? null : agreed.agreed ? (agreedZero && revokeFinal ? agreed.agreement : "it is not final on chain yet") : agreementWords(agreed);
+const agreement = agreed === null ? null : agreed.agreed ? (agreedZero && revokeFinal ? agreed.agreement : "we can't yet confirm the chain's final state") : agreementWords(agreed);
 console.log(`owner  ${c.owner}  ${SYM} ${usdc(ownerBal)}  native ${GAS.symbol} ${gasFmt(ownerNative)}`);
 console.log(`agent  ${c.agent}  ${SYM} ${usdc(held)}  native ${GAS.symbol} ${gasFmt(agentNative)}`);
 console.log(`allowance (owner -> agent): ${usdc(allowance)} ${SYM}  (the agent can move min(allowance, owner balance) = ${usdc(allowance < ownerBal ? allowance : ownerBal)} ${SYM} to any address)`);

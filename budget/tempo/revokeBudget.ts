@@ -132,10 +132,10 @@ async function main() {
     const sim: Simulated & { agreement?: string } = agreedSim && agreedSim.agreed
       ? { verdict: agreedSim.value as Simulated['verdict'], words: answers[0]?.words ?? 'it was simulated', agreement: agreedSim.agreement }
       : anySends
-        ? { verdict: 'sends', words: 'it would succeed on at least one RPC endpoint' }
-        : { verdict: 'unknown', words: answers.find((x) => x.verdict === 'unknown')?.words ?? (agreedSim ? agreementWords(agreedSim) : 'the RPC endpoints could not be read') }
+        ? { verdict: 'sends', words: 'the revoke succeeded in a simulation on at least one RPC endpoint' }
+        : { verdict: 'unknown', words: answers.find((x) => x.verdict === 'unknown')?.words ?? (agreedSim ? agreementWords(agreedSim) : 'we couldn\'t check the chain state') }
     simAgreement = sim.agreement
-    console.log(`The key reads ${reads}; a simulated revokeKey from the owner at the confirming block${sim.agreement ? ` (agreement: ${sim.agreement})` : ''}: ${sim.words}.`)
+    console.log(`The key reads ${reads}; revoke simulation${sim.agreement ? ` (agreement: ${sim.agreement})` : ''}: ${sim.words}.`)
     if (sim.verdict === 'unknown' || (!before.revoked && sim.verdict === 'already_revoked')) {
       const reason = sim.verdict === 'unknown'
         ? `the key reads ${reads}, but ${sim.words}; whether the key is live is unknown`
