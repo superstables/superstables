@@ -75,9 +75,12 @@ export async function lookupOnce(op: Op, extraHashes: string[] = []): Promise<Lo
  */
 async function withRevertAgreement(found: Extract<Lookup, { kind: 'found' }>): Promise<Lookup> {
   if (found.receipt.status !== 'reverted') return found
-  const agreed = await agreedAtBlock(async (url) => {
+  const agreed = await agreedAtBlock(async (url, block) => {
     const r = await rpcReadAt(url, 'eth_getTransactionReceipt', [found.hash])
     if (!r || typeof r.blockHash !== 'string' || typeof r.blockNumber !== 'string' || !['0x0', '0x1'].includes(r.status)) throw new Error('no receipt')
+    if (BigInt(r.blockNumber) > BigInt(block)) throw new Error('receipt is not final at the agreement block')
+    const included = await rpcReadAt(url, 'eth_getBlockByNumber', [r.blockNumber, false])
+    if (included?.hash?.toLowerCase() !== r.blockHash.toLowerCase()) throw new Error('receipt is not in the canonical block')
     return { status: r.status, blockHash: r.blockHash.toLowerCase(), blockNumber: r.blockNumber }
   }, found.receipt.blockNumber).catch(() => null)
   const value = agreed && agreed.agreed ? (agreed.value as { status: string; blockHash: string; blockNumber: string }) : null

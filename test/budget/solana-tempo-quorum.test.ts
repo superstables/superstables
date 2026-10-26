@@ -452,7 +452,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).not.toMatch(/granted:\s+no\b/);
-    expect(r.stdout).toMatch(/not final on chain yet/);
+    expect(r.stdout).toMatch(/the RPC endpoints disagree/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ atRisk: null });
     expect(s.result.next).not.toMatch(/no budget granted yet/);
@@ -464,7 +464,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => (p[1]?.blockHash ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : liveKeyAnswer(p) ?? zeroRemaining(p)));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).toMatch(/remaining:\s+unknown/);
-    expect(r.stdout).toMatch(/not final on chain yet/);
+    expect(r.stdout).toMatch(/the RPC endpoints disagree/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ remaining: null, atRisk: null });
     expect(s.result.next).not.toMatch(/spent/);
@@ -590,14 +590,14 @@ describe("tempo: reconcile of an expired purchase", () => {
   }, 120_000);
 
   // A purchase the chain shows bound to this operation (memo, owner, agent key), whose receipt each server names with `status`.
-  const bound = (status: "0x0" | "0x1") => {
+  const bound = (status: "0x0" | "0x1", blockNumber = "0x3e8") => {
     const hash = `0x${"cd".repeat(32)}`;
     const padded = (a: string) => `0x${a.slice(2).toLowerCase().padStart(64, "0")}`;
-    const log = { address: "0x20C0000000000000000000000000000000000000", topics: [TRANSFER_WITH_MEMO_TOPIC, padded(OWNER_EVM), padded(RECIPIENT), MEMO], data: `0x${(10_000).toString(16).padStart(64, "0")}`, blockNumber: "0x3e8", blockHash: `0x${"ab".repeat(32)}`, transactionHash: hash, removed: false };
+    const log = { address: "0x20C0000000000000000000000000000000000000", topics: [TRANSFER_WITH_MEMO_TOPIC, padded(OWNER_EVM), padded(RECIPIENT), MEMO], data: `0x${(10_000).toString(16).padStart(64, "0")}`, blockNumber, blockHash: `0x${"ab".repeat(32)}`, transactionHash: hash, removed: false };
     return {
       eth_getLogs: (p: any[]) => (p[0]?.topics?.[3] === MEMO ? [log] : undefined),
       eth_getTransactionByHash: () => ({ hash, from: OWNER_EVM, signature: { keyId: TEMPO_AGENT } }),
-      eth_getTransactionReceipt: () => ({ transactionHash: hash, status, blockNumber: "0x3e8", blockHash: `0x${"ab".repeat(32)}`, from: OWNER_EVM, logs: [log], gasUsed: "0x1" }),
+      eth_getTransactionReceipt: () => ({ transactionHash: hash, status, blockNumber, blockHash: `0x${"ab".repeat(32)}`, from: OWNER_EVM, logs: [log], gasUsed: "0x1" }),
     };
   };
 
@@ -623,6 +623,20 @@ describe("tempo: reconcile of an expired purchase", () => {
     writeTempoOp("tempo-revert-both");
     const r = await budget(["reconcile", "--rail", "tempo", "--op", "tempo-revert-both"], tempoEnv(a));
     expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "failed" });
+  }, 120_000);
+
+  it("a confirming endpoint's off-chain receipt cannot release the payment", async () => {
+    const a = await tempo();
+    a.overrides = bound("0x0", "0x3e7");
+    const b = track(await a.mirror({ overrides: { ...bound("0x0", "0x3e7"),
+      eth_getBlockByNumber: (p) => p[0] === "0x3e7" ? { number: "0x3e7", timestamp: `0x${(a.head.timestamp - 1).toString(16)}`, hash: `0x${"ef".repeat(32)}` } : undefined,
+    } }));
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup();
+    writeTempoOp("tempo-revert-placement");
+    const r = await budget(["reconcile", "--rail", "tempo", "--op", "tempo-revert-placement"], tempoEnv(a));
+    expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "unknown" });
+    expect(r.result.reason).toMatch(/Do not pay again/);
   }, 120_000);
 
   it("both endpoints are clean past validBefore: not found", async () => {

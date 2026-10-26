@@ -1,7 +1,9 @@
 // Deciding whether several RPC endpoints agree. A negative answer ("never paid", "expired", "failed") is believed only
 // when endpoints run by different operators, each on the right chain, show the same final block and the same value
 // there; any contradiction leaves it unknown. The caller supplies the transport, so one engine serves every rail.
-// Plain JS, no imports beyond Node's.
+// Plain JS, shared by the core and the budget build.
+
+import { maxFinalizedSpread } from "./finality-policy.js";
 
 /** @typedef {(url: string, method: string, params: unknown[]) => Promise<unknown>} Call */
 /** @typedef {{ kind: "evm", chainId: number } | { kind: "solana", genesis: string }} Identity */
@@ -10,7 +12,7 @@
 /** @typedef {{ verdict: Member[], quorum: number, agreement: Agreement } | { error: string }} VerdictSet */
 /** @typedef {{ agreed: false, why: "missing"|"disagree"|"not_final_yet"|"unreadable", reason: string, left?: string[] }} Failed */
 
-/** Final heads further apart than this (blocks, or slots for Solana) are a disagreement, not a lowest head to follow. */
+/** Solana final slots further apart than this are a disagreement, not a lowest head to follow. */
 export const DEFAULT_MAX_SPREAD = 1000n;
 
 const verified = new Set();
@@ -148,12 +150,13 @@ function short(members, set, left, answered = members.length > 0) {
  * EVM and Tempo: agree on a value read at one final block.
  *   1. identity on every verdict endpoint; wrong or unreadable ones are left out, with their reason
  *   2. each one's final head (`finalized`, or `latest` when finality is "instant"), strictly 0x-hex
- *   3. the highest head may be at most `maxSpread` blocks above the lowest (default 1000), else "disagree": a lagging
+ *   3. the highest head may be at most `maxSpread` blocks above the lowest (chain policy by default), else "disagree": a lagging
  *      or lying endpoint can delay a verdict but cannot drag the block to an old one
  *   4. F = the lowest; every one's block F must have the same hash and the same time (else "disagree")
  *   5. `read(url, hexF, hash)` on each (pass `{ blockHash: hash }` to eth_call to bind the value to the block); the
  *      returned plain data must be equal (else "disagree"); Map, Set, class instances and the like leave that
  *      endpoint out
+ *      Each endpoint also reads at its own final head; a different value vetoes the old value.
  *   6. answering operators >= quorum (else "missing")
  *   7. `atLeast` given and F < atLeast: "not_final_yet"
  * A verdict of ABSENCE (allowance 0, not found, delegate absent, unused) is trivially true at an old block, so such a
@@ -164,7 +167,7 @@ function short(members, set, left, answered = members.length > 0) {
  * @returns {Promise<{ agreed: true, value: unknown, block: { number: bigint, hash: string, timestamp: number, highest: bigint },
  *   agreement: Agreement, operators: string[] } | Failed>}
  */
-export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLeast, maxSpread = DEFAULT_MAX_SPREAD }) {
+export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLeast, maxSpread = maxFinalizedSpread(chainId) }) {
   const first = await usable(set, { kind: "evm", chainId }, call);
   if ("agreed" in first) return first;
   const vset = /** @type {Exclude<VerdictSet, { error: string }>} */ (set);
@@ -175,35 +178,48 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
     try {
       const b = /** @type {any} */ (await call(m.url, "eth_getBlockByNumber", [tag, false]));
       if (!b) throw new Error("no block");
-      return { m, number: quantity(b.number) };
+      if (typeof b.hash !== "string") throw new Error("no hash");
+      return { m, number: quantity(b.number), hash: b.hash.toLowerCase(), timestamp: quantity(b.timestamp) };
     } catch (err) {
       left.push(`the RPC ${hostOf(m.url)} did not give its ${tag} block (${whatWentWrong(err)})`);
       return undefined;
     }
   }));
-  const withHead = /** @type {{ m: Member, number: bigint }[]} */ (heads.filter(Boolean));
+  const withHead = /** @type {{ m: Member, number: bigint, hash: string, timestamp: bigint }[]} */ (heads.filter(Boolean));
   const early = short(withHead.map((h) => h.m), vset, left, first.members.length > 0 && withHead.length > 0);
   if (early) return early;
   const F = withHead.reduce((lo, h) => (h.number < lo ? h.number : lo), withHead[0].number);
   const highest = withHead.reduce((hi, h) => (h.number > hi ? h.number : hi), withHead[0].number);
   if (highest - F > maxSpread) return { agreed: false, why: "disagree", reason: `the endpoints' final heads are ${highest - F} blocks apart`, left };
-  const rows = await Promise.all(withHead.map(async ({ m }) => {
+  const rows = await Promise.all(withHead.map(async ({ m, number, hash: headHash, timestamp: headTime }) => {
     try {
       const b = /** @type {any} */ (await call(m.url, "eth_getBlockByNumber", [hex(F), false]));
-      if (!b || typeof b.hash !== "string") throw new Error("no such block");
+      if (!b || typeof b.hash !== "string" || quantity(b.number) !== F) throw new Error("no such block");
       const timestamp = quantity(b.timestamp);
       const hash = b.hash.toLowerCase();
       const value = await read(m.url, hex(F), hash);
-      return { m, hash, timestamp, value, key: canonical(value) };
+      const key = canonical(value);
+      let headKey = key;
+      if (number !== F) {
+        try { headKey = canonical(await read(m.url, hex(number), headHash)); }
+        catch (err) {
+          left.push(`the RPC ${hostOf(m.url)} could not be read at its own final head (${whatWentWrong(err)})`);
+          headKey = null;
+        }
+      }
+      const changed = number === F && (hash !== headHash || timestamp !== headTime);
+      return { m, hash, timestamp, value, key, headKey, changed };
     } catch (err) {
       left.push(`the RPC ${hostOf(m.url)} could not be read at block ${F} (${whatWentWrong(err)})`);
       return undefined;
     }
   }));
   const ok = /** @type {NonNullable<(typeof rows)[number]>[]} */ (rows.filter(Boolean));
+  if (ok.some((r) => r.changed || (r.headKey !== null && r.key !== r.headKey))) return { agreed: false, why: "disagree", reason: "an endpoint gives a different value or block at its own final head", left };
   if (new Set(ok.map((r) => r.hash)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints name different blocks at ${F}`, left };
   if (new Set(ok.map((r) => r.timestamp)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints give block ${F} different times`, left };
   if (new Set(ok.map((r) => r.key)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints read different values at block ${F}`, left };
+  if (ok.some((r) => r.headKey === null)) return { agreed: false, why: "unreadable", reason: "an endpoint could not be read at its own final head", left };
   const missing = short(ok.map((r) => r.m), vset, left, withHead.length > 0);
   if (missing) return missing;
   if (atLeast !== undefined && F < atLeast) return { agreed: false, why: "not_final_yet", reason: `final head ${F} is below block ${atLeast}`, left };
