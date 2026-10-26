@@ -433,13 +433,13 @@ describe("tempo: readBudget", () => {
   async function lateGrant(lie: (p: any[]) => unknown) {
     const a = await tempo();
     a.keys.set(tempoKeyId, LIVE_KEY);
-    let asked = 0n;
+    const header = (n: bigint) => ({ number: `0x${n.toString(16)}`, timestamp: "0x1", hash: `0x${n.toString(16).padStart(64, "0")}`, transactions: [] });
     a.overrides = {
-      eth_getBlockByNumber: (p) => { if (p[0] !== "latest") asked = BigInt(p[0]); return undefined; },
-      eth_call: (p) => (p[1]?.blockHash && asked < 900n ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : undefined),
+      eth_getBlockByNumber: (p) => header(p[0] === "latest" ? a.head.number : BigInt(p[0])),
+      eth_call: (p) => (p[1]?.blockHash && BigInt(p[1].blockHash) < 900n ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : undefined),
     };
     const b = track(await a.mirror({ overrides: {
-      eth_getBlockByNumber: (p) => (p[0] === "latest" ? { number: "0x1f4", timestamp: "0x1", hash: `0x${"ab".repeat(32)}`, transactions: [] } : undefined),
+      eth_getBlockByNumber: (p) => header(p[0] === "latest" ? 500n : BigInt(p[0])),
       eth_blockNumber: () => "0x1f4",
       eth_call: lie,
     } }));
@@ -452,7 +452,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).not.toMatch(/granted:\s+no\b/);
-    expect(r.stdout).toMatch(/the RPC endpoints disagree/);
+    expect(r.stdout).toMatch(/not final on chain yet/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ atRisk: null });
     expect(s.result.next).not.toMatch(/no budget granted yet/);
@@ -464,7 +464,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => (p[1]?.blockHash ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : liveKeyAnswer(p) ?? zeroRemaining(p)));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).toMatch(/remaining:\s+unknown/);
-    expect(r.stdout).toMatch(/the RPC endpoints disagree/);
+    expect(r.stdout).toMatch(/not final on chain yet/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ remaining: null, atRisk: null });
     expect(s.result.next).not.toMatch(/spent/);
@@ -539,6 +539,30 @@ describe("tempo: revoke", () => {
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.result).toMatchObject({ state: "settled", revoked: true });
     expect(site.requests).toHaveLength(1);
+  }, 120_000);
+
+  it("keeps simulation answers at F and the leading head so sends is never overwritten", async () => {
+    const a = await tempo();
+    let simulations = 0;
+    // Own-head simulations receive the head hash directly, without another header read.
+    a.revokeSimulation = () => ++simulations === 1 ? "ok" : "KeyAlreadyRevoked";
+    const b = track(await a.mirror({
+      overrides: { eth_getBlockByNumber: (p) => p[0] === "latest" && a.head.number === 1000n ? { number: "0x3b6", timestamp: `0x${(a.head.timestamp - 50).toString(16)}`, hash: `0x${"ab".repeat(32)}`, transactions: [] } : undefined },
+      revokeSimulation: () => "KeyAlreadyRevoked",
+    }));
+    tree.set({ "tempo-moderato": [a.url, b.url] });
+    tempoSetup(true);
+    site.owner = OWNER_EVM;
+    a.keys.set(tempoKeyId, REVOKED_KEY);
+    site.onPoll = (r: FakeRequest) => {
+      if (r.polls !== 2 || r.kind === "link") return;
+      Object.assign(r, { state: "confirmed", tx_hash: a.mine(r.owner!, r.body.transaction.data), wallet_asked: true });
+    };
+    const r = await budget(["revoke", "--rail", "tempo", "--wait", "--no-open"], tempoEnv(a));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.result).toMatchObject({ state: "settled", revoked: true });
+    expect(site.requests).toHaveLength(1);
+    expect(simulations).toBeGreaterThanOrEqual(2);
   }, 120_000);
 
   it("both refuse with KeyAlreadyRevoked: already revoked, nothing sent, with the agreement named", async () => {

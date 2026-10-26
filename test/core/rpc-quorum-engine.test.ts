@@ -453,7 +453,7 @@ describe("chain-aware finality and stale state", () => {
     expect(await run(84532, 50210845, 50212667)).toMatchObject({ agreed: true, block: { number: 50210845n, highest: 50212667n } });
   });
 
-  it.each([[84532, 3000], [421614, 5000], [11155111, 1000], [5042002, 1000], [80002, 1000], [324705682, 1000], [46630, 1000], [42431, 1000], [1, 1000]])(
+  it.each([[84532, 5000], [421614, 5000], [11155111, 1000], [5042002, 1000], [80002, 1000], [324705682, 1000], [46630, 1000], [42431, 1000], [1, 1000]])(
     "bounds final-head lag on chain %i at %i blocks", async (id, limit) => {
       expect(await run(id, 100, 100 + limit)).toMatchObject({ agreed: true });
       expect(await run(id, 100, 101 + limit)).toMatchObject({ agreed: false, why: "disagree" });
@@ -472,7 +472,7 @@ describe("chain-aware finality and stale state", () => {
         return n <= at[A] ? 5n : 0n;
       },
     });
-    expect(got).toMatchObject({ agreed: false, why: "disagree" });
+    expect(got).toMatchObject({ agreed: false, why: "not_final_yet" });
     expect(seen).toContainEqual([B, at[B]]);
     expect(seen).toContainEqual([A, at[A]]);
   });
@@ -480,7 +480,7 @@ describe("chain-aware finality and stale state", () => {
   it("a third endpoint's contradiction vetoes even when two operators still agree", async () => {
     const C = "https://c.example";
     const fakes = { [A]: { finalized: 100 }, [B]: { finalized: 100 }, [C]: { finalized: 1922 } };
-    expect(await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b", [C]: "c" }), call: transport(fakes).call, chainId: 84532, finality: "finalized", read: async (_u, b) => BigInt(b) <= 100n ? 5n : 0n })).toMatchObject({ agreed: false, why: "disagree" });
+    expect(await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b", [C]: "c" }), call: transport(fakes).call, chainId: 84532, finality: "finalized", read: async (_u, b) => BigInt(b) <= 100n ? 5n : 0n })).toMatchObject({ agreed: false, why: "not_final_yet" });
   });
 
   it("a failed own-head read cannot erase a contradiction or leave a stale majority deciding", async () => {
@@ -493,6 +493,48 @@ describe("chain-aware finality and stale state", () => {
       } });
       expect(got).toMatchObject({ agreed: false, why: common === 0n ? "disagree" : "unreadable" });
     }
+  });
+
+  it.each(["block", "value"])("a leading failed %s read at F cannot leave two stale operators deciding", async (failure) => {
+    const C = "https://c.example";
+    const fakes = { [A]: { finalized: 100 }, [B]: { finalized: 100 }, [C]: { finalized: 1922 } };
+    const base = transport(fakes).call;
+    const got = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b", [C]: "c" }), chainId: 84532, finality: "finalized",
+      call: async (url, method, params) => {
+        if (failure === "block" && url === C && method === "eth_getBlockByNumber" && params[0] === "0x64") throw new Error("pruned block");
+        return base(url, method, params);
+      },
+      read: async (url, block) => {
+        if (failure === "value" && url === C && block === "0x64") throw new Error("pruned state");
+        return 5n;
+      },
+    });
+    expect(got).toMatchObject({ agreed: false, why: "unreadable" });
+  });
+
+  it("leaves an endpoint out when block F has another number", async () => {
+    const fakes = { [A]: { finalized: 100 }, [B]: { finalized: 100 } };
+    const base = transport(fakes).call;
+    const got = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), chainId: 84532, finality: "finalized", read: read(fakes),
+      call: async (url, method, params) => url === B && method === "eth_getBlockByNumber" && params[0] === "0x64"
+        ? { number: "0x65", hash: "0xaa100", timestamp: "0x10" } : base(url, method, params),
+    });
+    expect(got).toMatchObject({ agreed: false, why: "missing" });
+    expect(got.left).toHaveLength(1);
+  });
+
+  it("rejects a re-read of F with another hash even when every re-read agrees", async () => {
+    const fakes = { [A]: { finalized: 100 }, [B]: { finalized: 100 } };
+    const base = transport(fakes).call;
+    const got = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b" }), chainId: 84532, finality: "finalized", read: read(fakes),
+      call: async (url, method, params) => method === "eth_getBlockByNumber" && params[0] === "0x64"
+        ? { number: "0x64", hash: "0xbb100", timestamp: "0x10" } : base(url, method, params),
+    });
+    expect(got).toMatchObject({ agreed: false, why: "disagree" });
+  });
+
+  it("atLeast takes precedence over isolated own-head drift", async () => {
+    expect(await run(84532, 100, 1922, { atLeast: 101n, read: async (_url, block) => BigInt(block) > 100n ? 0n : 5n })).toMatchObject({ agreed: false, why: "not_final_yet", reason: "final head 100 is below block 101" });
   });
 
   it("a wider window never bypasses atLeast", async () => {

@@ -156,12 +156,12 @@ function short(members, set, left, answered = members.length > 0) {
  *   5. `read(url, hexF, hash)` on each (pass `{ blockHash: hash }` to eth_call to bind the value to the block); the
  *      returned plain data must be equal (else "disagree"); Map, Set, class instances and the like leave that
  *      endpoint out
- *      Each endpoint also reads at its own final head; a different value vetoes the old value.
+ *      Each endpoint also reads at its own final head; a different value above F is not_final_yet, never agreed.
  *   6. answering operators >= quorum (else "missing")
  *   7. `atLeast` given and F < atLeast: "not_final_yet"
  * A verdict of ABSENCE (allowance 0, not found, delegate absent, unused) is trivially true at an old block, so such a
  * caller must pass `atLeast`: the block at which the absence has to be proven.
- * Never throws: a read that throws leaves that endpoint out, with fixed words (never the RPC's own text).
+ * Never throws: a failed leading read fails closed; other failed reads leave the endpoint out, with fixed words (never the RPC's own text).
  * @param {{ set: VerdictSet, call: Call, chainId: number, finality: "finalized"|"instant",
  *   read: (url: string, block: string, hash: string) => Promise<unknown>, atLeast?: bigint, maxSpread?: bigint }} a
  * @returns {Promise<{ agreed: true, value: unknown, block: { number: bigint, hash: string, timestamp: number, highest: bigint },
@@ -191,6 +191,7 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
   const F = withHead.reduce((lo, h) => (h.number < lo ? h.number : lo), withHead[0].number);
   const highest = withHead.reduce((hi, h) => (h.number > hi ? h.number : hi), withHead[0].number);
   if (highest - F > maxSpread) return { agreed: false, why: "disagree", reason: `the endpoints' final heads are ${highest - F} blocks apart`, left };
+  let leadingReadFailed = false;
   const rows = await Promise.all(withHead.map(async ({ m, number, hash: headHash, timestamp: headTime }) => {
     try {
       const b = /** @type {any} */ (await call(m.url, "eth_getBlockByNumber", [hex(F), false]));
@@ -210,19 +211,21 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
       const changed = number === F && (hash !== headHash || timestamp !== headTime);
       return { m, hash, timestamp, value, key, headKey, changed };
     } catch (err) {
+      if (number > F) leadingReadFailed = true;
       left.push(`the RPC ${hostOf(m.url)} could not be read at block ${F} (${whatWentWrong(err)})`);
       return undefined;
     }
   }));
   const ok = /** @type {NonNullable<(typeof rows)[number]>[]} */ (rows.filter(Boolean));
-  if (ok.some((r) => r.changed || (r.headKey !== null && r.key !== r.headKey))) return { agreed: false, why: "disagree", reason: "an endpoint gives a different value or block at its own final head", left };
+  if (ok.some((r) => r.changed)) return { agreed: false, why: "disagree", reason: "an endpoint gives a different value or block at its own final head", left };
   if (new Set(ok.map((r) => r.hash)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints name different blocks at ${F}`, left };
   if (new Set(ok.map((r) => r.timestamp)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints give block ${F} different times`, left };
   if (new Set(ok.map((r) => r.key)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints read different values at block ${F}`, left };
-  if (ok.some((r) => r.headKey === null)) return { agreed: false, why: "unreadable", reason: "an endpoint could not be read at its own final head", left };
+  if (leadingReadFailed || ok.some((r) => r.headKey === null)) return { agreed: false, why: "unreadable", reason: "an endpoint could not be read at its own final head", left };
   const missing = short(ok.map((r) => r.m), vset, left, withHead.length > 0);
   if (missing) return missing;
   if (atLeast !== undefined && F < atLeast) return { agreed: false, why: "not_final_yet", reason: `final head ${F} is below block ${atLeast}`, left };
+  if (ok.some((r) => r.key !== r.headKey)) return { agreed: false, why: "not_final_yet", reason: "the value changed above the common final block", left };
   return {
     agreed: true,
     value: ok[0].value,
