@@ -101,7 +101,7 @@ describe("superstables status reads the endpoint table, not one RPC", () => {
       const r = await status(home(honest), { SUPERSTABLES_RPC_URL: lying.url, ...(accountHome ? { SUPERSTABLES_TEST_ACCOUNT_HOME: accountHome } : {}) });
       expect(r.body.state).toBe("uncertain");
       expect(r.body.chain).not.toBe("unpaid");
-      expect(r.body.chain_reason).toMatch(accountHome ? /SUPERSTABLES_RPC_URL.*unset it/ : /the RPC endpoints disagree/);
+      expect(r.body.chain_reason).toMatch(accountHome ? /SUPERSTABLES_RPC_URL.*unset the variable/ : /the RPC endpoints disagree/);
     }, 60_000);
   }
 });

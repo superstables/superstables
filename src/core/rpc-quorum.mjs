@@ -310,8 +310,9 @@ export function endpointSetErrorWords(error, envName) {
   const refused = /is not an RPC the owner set/.test(error) && (!envName || error.startsWith(envName));
   // the long explanation after the colon is the settings module's; the words keep what was refused and the way out
   return refused
-    ? `the RPC endpoints could not be read: ${error.replace(/: owner actions and verdicts read only.*$/, "")}; unset it, or ask the owner to add it in the owner settings`
-    : `the RPC endpoints could not be read: ${error}; ask the owner to check the owner settings`;
+    ? `the RPC check was refused: ${error.replace(/: owner actions and verdicts read only.*$/, "")}; unset the variable, or stop and ask the owner to add this RPC in the settings`
+    // the settings module ends its own error with the owner-only command that checks the file; that is not for the agent to run
+    : `the RPC check could not run: ${error.replace(/\. Nothing that needs them was done; the owner checks the file with .*$/, "")}; stop and ask the owner to check the settings`;
 }
 
 /**
@@ -320,12 +321,12 @@ export function endpointSetErrorWords(error, envName) {
  */
 export function agreementWords(failed) {
   if (failed.why === "disagree") return "the RPC endpoints disagree";
-  if (failed.why === "not_final_yet") return "it is not final on chain yet";
+  if (failed.why === "not_final_yet") return "we can't yet confirm the chain's final state";
   const left = failed.left?.length ? ` (left out: ${failed.left.join("; ")})` : "";
   // no endpoint was tried: the set itself was refused (an RPC variable that is not the owner's, or unreadable owner settings)
   if (failed.why === "unreadable" && failed.reason && !failed.left) {
     return endpointSetErrorWords(failed.reason);
   }
-  if (failed.why === "unreadable") return `the RPC endpoints could not be read${left}`;
-  return `a second RPC endpoint was not available to confirm it${left}`;
+  if (failed.why === "unreadable") return `we couldn't read the chain data from all required RPC endpoints${left}`;
+  return `we couldn't complete the required RPC checks${left}`;
 }

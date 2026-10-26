@@ -155,7 +155,7 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     ownHeadDrift(c);
     const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
     expect(r.code, r.stdout + r.stderr).toBe(3);
-    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm; wait for a confirmed zero allowance before granting again" });
     expect(approvals(c.chain)).toBe(0);
   }, 150_000);
 
@@ -165,7 +165,7 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.stdout).toMatch(/is already live for this agent/);
-    expect(r.stdout).not.toMatch(/the previous revoke is not final yet/);
+    expect(r.stdout).not.toMatch(/we can't yet confirm a final zero allowance/);
     expect(approvals(c.chain)).toBe(0);
   }, 150_000);
 
@@ -177,7 +177,7 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     const g = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
     expect(g.code, g.stdout + g.stderr).toBe(3);
     expect(g.result).toMatchObject({ state: "refused_precheck" });
-    expect(g.result.reason).toMatch(/the previous revoke is not final yet: the allowance reads 0 at the latest block but 1 USDC at the final block/);
+    expect(g.result.reason).toMatch(/the allowance reads 0 at the latest block but 1 USDC at the final block. Check budget status before granting again/);
     expect(approvals(c.chain)).toBe(1); // nothing more was sent
   }, 150_000);
 
@@ -339,7 +339,7 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     ownHeadDrift(c);
     const r = await c.run();
     expect(r.code, r.stdout + r.stderr).toBe(3);
-    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm; wait for a confirmed zero allowance before granting again" });
     expect(c.site.posts).toEqual([]);
   }, 150_000);
 

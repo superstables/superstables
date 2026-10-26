@@ -170,9 +170,9 @@ describe("a set that cannot be built says why, in the owner settings' words (the
     const r = await zeroAllowance((url) => ({ B4_RPC: url }));
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.result).toMatchObject({ allowanceZero: true, revoked: false });
-    expect(r.result.agreement).toMatch(/^the RPC endpoints could not be read: B4_RPC \(http:\/\/127\.0\.0\.1:\d+\) is not an RPC the owner set for base-sepolia/);
-    expect(r.stdout).toContain("revoked: no: the allowance reads 0 on this RPC, but the RPC endpoints could not be read: B4_RPC (");
-    expect(r.result.agreement).toContain("; unset it, or ask the owner to add it in the owner settings");
+    expect(r.result.agreement).toMatch(/^the RPC check was refused: B4_RPC \(http:\/\/127\.0\.0\.1:\d+\) is not an RPC the owner set for base-sepolia/);
+    expect(r.stdout).toContain("revoked: no: the allowance reads 0 on this RPC, but the RPC check was refused: B4_RPC (");
+    expect(r.result.agreement).toContain("; unset the variable, or stop and ask the owner to add this RPC in the settings");
   }, 90_000);
 
   it("B4_RPC_BASE_SEPOLIA is the name in the words when it is the one that decided", async () => {
@@ -185,11 +185,11 @@ describe("agreementWords", () => {
   it("keeps the engine's words, and adds the refusal's own reason only for a set that could not be built", async () => {
     const { agreementWords } = await import(new URL("../../budget/evm/lib.ts", import.meta.url).href);
     expect(agreementWords({ agreed: false, why: "disagree" } as any)).toBe("the RPC endpoints disagree");
-    expect(agreementWords({ agreed: false, why: "unreadable", left: ["a: down"] } as any)).toBe("the RPC endpoints could not be read (left out: a: down)");
-    expect(agreementWords({ agreed: false, why: "unreadable", reason: "B4_RPC (https://a.example/…) is not an RPC the owner set for base-sepolia: owner actions" } as any)).toContain("; unset it, or ask the owner to add it in the owner settings");
+    expect(agreementWords({ agreed: false, why: "unreadable", left: ["a: down"] } as any)).toBe("we couldn't read the chain data from all required RPC endpoints (left out: a: down)");
+    expect(agreementWords({ agreed: false, why: "unreadable", reason: "B4_RPC (https://a.example/…) is not an RPC the owner set for base-sepolia: owner actions" } as any)).toContain("; unset the variable, or stop and ask the owner to add this RPC in the settings");
     // an unreadable settings file has nothing to unset: it says what to do instead
     const broken = agreementWords({ agreed: false, why: "unreadable", reason: "the owner settings could not be read: broken" } as any);
-    expect(broken).toBe("the RPC endpoints could not be read: the owner settings could not be read: broken; ask the owner to check the owner settings");
+    expect(broken).toBe("the RPC check could not run: the owner settings could not be read: broken; stop and ask the owner to check the settings");
   });
 });
 

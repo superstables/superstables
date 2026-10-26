@@ -409,7 +409,7 @@ settings when they set their own.
 `SUPERSTABLES_RPC_URL`, `SUPERSTABLES_TEMPO_RPC` and `SUPERSTABLES_SOLANA_RPC` (each HTTPS, or HTTP on this
 machine, without credentials) still choose where reads go, but an endpoint named only there never decides
 `unpaid`: unless it is a table URL or one the owner set, the attempt stays `uncertain` and counted, with the
-way out in words (unset the variable, or ask the owner to add it in the owner settings). When endpoints
+way out in words (unset the variable, or stop and ask the owner to add this RPC in the settings). When endpoints
 disagree, one is missing or unreadable, or a confirmer is still reading, the attempt also stays
 `uncertain`, and the agent is told not to pay again. Records written before this check are not re-opened,
 and a purchase on the hosted site (`buy-once`) is not covered by it. The client does not run a node: HTTPS
@@ -422,7 +422,7 @@ authenticates the connection to an RPC, not the chain behind it. The budget rail
   single public RPC, so its verdicts rest on that one, labelled `single`, until the owner pins more. Owner
   commands on Solana read and send through the endpoints the owner set; an RPC that only
   `SUPERSTABLES_SOLANA_RPC` names is refused there (exit 3), and a verdict that would rest on it stays
-  unknown, with that reason and the fix (unset it, or ask the owner to add it in the owner settings). When
+  unknown, with that reason and the fix (unset it, or stop and ask the owner to add this RPC in the settings). When
   the endpoints disagree or one is missing, the answer is unknown and nothing is treated as revoked or as
   never paid.
 
@@ -804,10 +804,11 @@ a full commit hash builds the client on your machine and runs the repository's b
 there; without a hash, npm installs whatever the default branch holds.
 
 The npm package pins its runtime dependencies to the exact versions its tests ran on, and viem pins
-the packages that sign and hash. Four packages further down (`@noble/ciphers`, `@scure/base`,
-`@adraffy/ens-normalize`, and zod 3 under `@x402/core` and `@x402/evm`) may still resolve to a
-newer compatible version; the project's nightly install check fails when an install no longer
-matches the tested set. `dist/sbom.cdx.json` in the package and `scripts/sbom.cdx.json` in the skill
+the packages that sign and hash. Three packages further down (`@noble/ciphers`, `@scure/base` and
+`@adraffy/ens-normalize`) may still resolve to a newer compatible version; the project's nightly
+install check fails when an install no longer matches the tested set. Installs from npm and the
+skill zip use zod 4.6.6 throughout. An install from git or from a package file resolves the zod 3
+range that `@x402/core` and `@x402/evm` declare instead. `dist/sbom.cdx.json` in the package and `scripts/sbom.cdx.json` in the skill
 zip list every package the client installs or bundles, including the bundled Solana and Tempo
 libraries that `npm audit` on your machine cannot see. Two builds of one commit are identical
 ([checking a build](install.md#checking-a-build-against-its-commit)). The package is not published

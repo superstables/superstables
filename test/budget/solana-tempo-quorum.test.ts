@@ -137,7 +137,7 @@ describe("solana: a second endpoint on another cluster", () => {
     const r = await script("budget/solana/readBudget.mjs", ["--owner", SOL_OWNER], solEnv(a));
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toContain("revoked: false");
-    expect(r.stdout).toMatch(/agreement: a second RPC endpoint was not available/);
+    expect(r.stdout).toMatch(/agreement: we couldn't complete the required RPC checks/);
     expect(b.calls).not.toContain("getAccountInfo");
     const s = await budget(["status", "--rail", "solana"], solEnv(a));
     expect(s.result).toMatchObject({ revoked: false });
@@ -145,7 +145,7 @@ describe("solana: a second endpoint on another cluster", () => {
 });
 
 describe("verdicts with an RPC that only the environment names", () => {
-  const needle = /is not an RPC the owner set.*unset it, or ask the owner to add it in the owner settings/;
+  const needle = /is not an RPC the owner set.*unset the variable, or stop and ask the owner to add this RPC in the settings/;
   it("solana: a recorded revoke both table endpoints agree on stays unknown, and the words say why and what to do", async () => {
     const a = await solana();
     const b = track(await a.mirror());
@@ -292,7 +292,7 @@ describe("solana: reconcile of an expired purchase", () => {
     writeSolanaOp("sol-wrong");
     const r = await budget(["reconcile", "--rail", "solana", "--op", "sol-wrong"], solEnv(a));
     expect(r.result, r.stdout + r.stderr).toMatchObject({ state: "unknown" });
-    expect(r.result.reason).toMatch(/second RPC endpoint was not available/);
+    expect(r.result.reason).toMatch(/we couldn't complete the required RPC checks/);
   }, 120_000);
 });
 
@@ -452,7 +452,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).not.toMatch(/granted:\s+no\b/);
-    expect(r.stdout).toMatch(/not final on chain yet/);
+    expect(r.stdout).toMatch(/we can't yet confirm the chain's final state/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ atRisk: null });
     expect(s.result.next).not.toMatch(/no budget granted yet/);
@@ -464,7 +464,7 @@ describe("tempo: readBudget", () => {
     const b = await lateGrant((p) => (p[1]?.blockHash ? keyAnswer(p, { expiry: 0n }) ?? zeroRemaining(p) : liveKeyAnswer(p) ?? zeroRemaining(p)));
     const r = await script("budget/tempo/readBudget.ts", ["--owner", OWNER_EVM, "--key", TEMPO_AGENT], tempoEnv(b));
     expect(r.stdout).toMatch(/remaining:\s+unknown/);
-    expect(r.stdout).toMatch(/not final on chain yet/);
+    expect(r.stdout).toMatch(/we can't yet confirm the chain's final state/);
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(b));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ remaining: null, atRisk: null });
     expect(s.result.next).not.toMatch(/spent/);
@@ -774,7 +774,7 @@ describe("solana: assessAgreed in process", () => {
     ops.writeOp(rec.op, rec);
     const out = await ops.assessAgreed(conn("http://p.test"), ops.readOp(rec.op), { ...options({ call: async () => MAINNET_GENESIS }), connect: () => conn("http://c.test", { genesis: MAINNET_GENESIS }) });
     expect(out.verdict).toBe("pending");
-    expect((out as any).reason).toMatch(/second RPC endpoint was not available/);
+    expect((out as any).reason).toMatch(/we couldn't complete the required RPC checks/);
   });
 
   it("with one operator in the set (a single public endpoint) the primary's verdict stands, labelled single", async () => {
