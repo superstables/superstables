@@ -100,6 +100,18 @@ async function evmCase(o: { lag: number; allow?: string; agentFile?: boolean; re
   const keyArgs = ["--owner-key-file", join(home, "owner.env"), "--yes"];
   return { chain, mirror, owner, agent, home, run, keyArgs, pub: () => readFileSync(pubFile, "utf8") };
 }
+function ownHeadDrift(c: Pick<Awaited<ReturnType<typeof evmCase>>, "chain" | "mirror">) {
+  const low = c.chain.blocks[c.chain.blocks.length - 1].number;
+  const high = low + 1822n;
+  const header = (n: bigint) => ({ number: `0x${n.toString(16)}`, hash: `0x${n.toString(16).padStart(64, "0")}`, timestamp: "0x10" });
+  c.chain.hook = (method, params) => method === "eth_getBlockByNumber"
+    ? { result: header(params[0] === "finalized" || params[0] === "latest" ? low : BigInt(params[0])) }
+    : method === "eth_call" ? { result: `0x${"0".repeat(64)}` } : undefined;
+  c.mirror.hook = (method, params) => method === "eth_getBlockByNumber"
+    ? { result: header(params[0] === "finalized" || params[0] === "latest" ? high : BigInt(params[0])) }
+    : method === "eth_call" ? { result: `0x${(BigInt(params[1]?.blockHash ?? params[1]) > low ? 5n : 0n).toString(16).padStart(64, "0")}` } : undefined;
+}
+
 const APPROVE = "0x095ea7b3";
 const approvals = (chain: FakeEvm) => chain.sentRaw.filter((t) => t.data.startsWith(APPROVE)).length;
 
@@ -129,6 +141,15 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     const r = await c.run(["revoke", "--rail", "evm", ...c.keyArgs]);
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.result).toMatchObject({ state: "settled", final: true, revoked: true });
+  }, 150_000);
+
+  it("grant under own-head drift waits for finality and points to status", async () => {
+    const c = await evmCase({ lag: 0, allow: "0" });
+    ownHeadDrift(c);
+    const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(approvals(c.chain)).toBe(0);
   }, 150_000);
 
   it("a grant right after a landed revoke is refused: the allowance at the final block is not 0", async () => {
@@ -295,6 +316,15 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     const run = (...more: string[]) => c.run(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", ...more]);
     return { ...c, site, run, run0: c.run };
   }
+
+  it("setup under own-head drift waits for finality and points to status", async () => {
+    const c = await bundle({ lag: 0, allow: "0" });
+    ownHeadDrift(c);
+    const r = await c.run();
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("the previous revoke is not final yet"), next: "superstables budget status --rail evm, then grant again once the revoke is final" });
+    expect(c.site.posts).toEqual([]);
+  }, 150_000);
 
   it("a reused key and an allowance read that fails: refused before any request to the site", async () => {
     const c = await bundle({ lag: 0, allow: "0" });

@@ -56,6 +56,11 @@ const liveRefusal = () => {
 // owner's own grant, so the refusals below that read the chain's state before asking are not run for it.
 if (!verifyOnly && !resuming() && !(replace && OWNER_KEY_FILE && beforeAllow > 0n) && !(!OWNER_KEY_FILE && approveResetHostedProblem())) {
   const atFinal = await allowanceAgreed(pub.owner, pub.agent);
+  if (!atFinal.agreed && atFinal.why === "not_final_yet") {
+    const reason = `the previous revoke is not final yet. Grant again once it is final${usuallyWords()}`;
+    console.log(`REFUSED: ${reason}. Nothing was sent.`);
+    process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: `superstables budget status --rail evm${chainFlag}, then grant again once the revoke is final` }));
+  }
   if (!atFinal.agreed) {
     const reason = `the allowance at the chain's final block could not be confirmed (${agreementWords(atFinal)})`;
     console.log(`REFUSED: ${reason}. Nothing was sent.`);

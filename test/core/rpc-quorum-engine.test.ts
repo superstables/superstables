@@ -537,6 +537,19 @@ describe("chain-aware finality and stale state", () => {
     expect(await run(84532, 100, 1922, { atLeast: 101n, read: async (_url, block) => BigInt(block) > 100n ? 0n : 5n })).toMatchObject({ agreed: false, why: "not_final_yet", reason: "final head 100 is below block 101" });
   });
 
+  it.each([99n, 100n])("atLeast %s at or below F cannot bypass own-head drift", async (atLeast) => {
+    expect(await run(84532, 100, 1922, { atLeast, read: async (_url, block) => BigInt(block) > 100n ? 5n : 0n })).toMatchObject({ agreed: false, why: "not_final_yet", reason: "the value changed above the common final block" });
+  });
+
+  it.each(["hash", "value"])("same-height leading endpoints with a different %s disagree before drift", async (conflict) => {
+    const C = "https://c.example";
+    const fakes = { [A]: { finalized: 100 }, [B]: { finalized: 1922 }, [C]: { finalized: 1922, hashes: conflict === "hash" ? { 1922: "0xfork" } : undefined } };
+    const got = await agreeAtFinalEvm({ set: mk({ [A]: "a", [B]: "b", [C]: "c" }), call: transport(fakes).call, chainId: 84532, finality: "finalized",
+      read: async (url, block) => conflict === "value" && url === B && BigInt(block) > 100n ? 0n : 5n,
+    });
+    expect(got).toMatchObject({ agreed: false, why: "disagree" });
+  });
+
   it("a wider window never bypasses atLeast", async () => {
     expect(await run(84532, 50210845, 50212667, { atLeast: 50210846n })).toMatchObject({ agreed: false, why: "not_final_yet" });
   });

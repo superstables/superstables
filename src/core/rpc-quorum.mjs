@@ -209,7 +209,7 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
         }
       }
       const changed = number === F && (hash !== headHash || timestamp !== headTime);
-      return { m, hash, timestamp, value, key, headKey, changed };
+      return { m, number, hash, timestamp, value, key, headKey, changed };
     } catch (err) {
       if (number > F) leadingReadFailed = true;
       left.push(`the RPC ${hostOf(m.url)} could not be read at block ${F} (${whatWentWrong(err)})`);
@@ -221,6 +221,12 @@ export async function agreeAtFinalEvm({ set, call, chainId, finality, read, atLe
   if (new Set(ok.map((r) => r.hash)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints name different blocks at ${F}`, left };
   if (new Set(ok.map((r) => r.timestamp)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints give block ${F} different times`, left };
   if (new Set(ok.map((r) => r.key)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints read different values at block ${F}`, left };
+  for (const h of withHead.filter((h) => h.number > F)) {
+    const peers = withHead.filter((p) => p.number === h.number);
+    if (new Set(peers.map((p) => p.hash)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints name different blocks at ${h.number}`, left };
+    const values = ok.filter((r) => r.number === h.number && r.headKey !== null);
+    if (new Set(values.map((r) => r.headKey)).size > 1) return { agreed: false, why: "disagree", reason: `the endpoints read different values at block ${h.number}`, left };
+  }
   if (leadingReadFailed || ok.some((r) => r.headKey === null)) return { agreed: false, why: "unreadable", reason: "an endpoint could not be read at its own final head", left };
   const missing = short(ok.map((r) => r.m), vset, left, withHead.length > 0);
   if (missing) return missing;

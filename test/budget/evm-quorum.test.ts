@@ -332,7 +332,7 @@ describe("verdicts against two endpoints, one of which lies (in-process)", () =>
     expect(await lib.finalityOf(PULL, { blockNumber: high, blockHash: pad(toHex(high)) })).toMatchObject({ final: false });
   });
 
-  it.each(agreementPaths)("%s: own-head-only drift never agrees a stale value", async (path) => {
+  it.each(agreementPaths.flatMap((path) => [undefined, 50210844n, 50210845n].map((atLeast) => ({ path, atLeast }))))("$path: own-head-only drift never agrees a stale value with atLeast $atLeast", async ({ path, atLeast }) => {
     const low = 50210845n, high = low + 1822n;
     const header = (n: bigint) => ({ number: hex(n), hash: pad(toHex(n)), timestamp: hex(1792964037n) });
     const hooks = (head: bigint): NonNullable<FakeEvm["hook"]> => {
@@ -353,9 +353,9 @@ describe("verdicts against two endpoints, one of which lies (in-process)", () =>
     chain.hook = hooks(low);
     mirror.hook = hooks(high);
     const lib = await import("../../budget/evm/lib.js");
-    const got = await (path === "allowanceAgreed" ? lib.allowanceAgreed(OWNER.address, AGENT.address)
-      : path === "authorizationStateAgreed" ? lib.authorizationStateAgreed(OWNER.address, NONCE)
-      : path === "receiptAgreed" ? lib.receiptAgreed(PULL) : lib.txAgreed(PULL));
+    const got = await (path === "allowanceAgreed" ? lib.allowanceAgreed(OWNER.address, AGENT.address, atLeast)
+      : path === "authorizationStateAgreed" ? lib.authorizationStateAgreed(OWNER.address, NONCE, atLeast)
+      : path === "receiptAgreed" ? lib.receiptAgreed(PULL, atLeast) : lib.txAgreed(PULL, atLeast));
     expect(got).toMatchObject({ agreed: false, why: "not_final_yet" });
   });
 
