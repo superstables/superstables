@@ -4,7 +4,7 @@
   "files": [],
   "expected_behavior": [
     "After the budget buy, calls the connector's `list_my_budgets` (\"List my budgets\") once and reports from that result, without waiting to be asked",
-    "Quotes the remaining amount for the agent on the purchase's chain (Base Sepolia) and attributes it to the connector",
+    "Quotes the remaining amount for the entry matching both the purchasing agent's address and chain.key, and attributes it to the connector; with two agents on Base Sepolia, never selects by chain alone; if the purchasing agent cannot be uniquely identified, says so and reports the CLI result without assigning another agent's balance to the purchase",
     "Where the CLI said 0.99 USDC remaining and the connector 0.98, says both and that the CLI's confirmed result stands; never turns the settled purchase into another outcome",
     "Reports the purchase as paid with the CLI's `tx`, and never buys again",
     "Does not pass an approval link to `list_my_budgets` and does not call `request_budget_revoke` or `remove_budget_agent`",

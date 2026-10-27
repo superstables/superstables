@@ -148,7 +148,7 @@ When the Superstables connector is signed in, its budget tools show on the owner
 | After | Call | Pass it | Quote |
 | --- | --- | --- | --- |
 | `setup`, `grant`, `revoke`, `wait` | `get_budget_request` ("Get a budget approval's status") | The approval link the CLI printed (`url`), as printed | `state`, `final`, `reason`, and each step's `state` and `tx_hash` |
-| `buy` | `list_my_budgets` ("List my budgets") | Nothing | The `remaining` and `state` of the agent whose `chain` matches the purchase |
+| `buy` | `list_my_budgets` ("List my budgets") | Nothing | The `remaining` and `state` of the entry whose `chain.key` and `agent` address match the CLI's purchasing agent. Use the agent address recorded by setup or read from CLI status; never guess from the chain alone. If no unique match is available, say so and report the CLI's result without attributing another entry's balance to this purchase. |
 
 - `get_budget_request` reads an approval on superstables.com, so it takes the link of a `setup --hosted` or of a grant or revoke approved there. The page on this machine has a link on `127.0.0.1`: the connector cannot read it, so report from the CLI alone.
 - Call `get_budget_request` again after each `wait --shown` until `final` is `true`. While `final` is `false` and the owner's wallet was asked, say the outcome is not final yet. If `state` is `unknown`, say it is not known yet; do not say it failed.
