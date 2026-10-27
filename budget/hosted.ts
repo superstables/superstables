@@ -62,6 +62,15 @@
 // address is cancelled and refused before the link is shown, and at any later point.
 // Once the site reports that the wallet was asked (`wallet_asked`) or a transaction hash exists, an unfinished outcome
 // is never "nothing sent": it settles with `sending: true`, and the command reports it as unknown.
+//
+// Signed here, sent by the connector (`signOnly`, then `adopt`). With signOnly the request is built and signed exactly as the create
+// path would send it to a site that lists both features (expected_owner, owner_proof_v2), handed to signOnly with what the record
+// keeps (intent, nonce, signing time, the exact body), and nothing is sent. The connector carries it to the site unchanged; it can
+// delay or drop it, and anything else breaks the agent proof. With adopt a later command takes the id, link and match code the
+// connector returned and checks them before anything is recorded: the command still builds the same body, the link is the site's own
+// for that id, the site gives this agent's key a fresh token for it (another agent's request is refused there), and the site's read of
+// it shows this agent, rail, chain and the exact transaction or steps that were signed. Only then is the request recorded
+// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over.
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as signBytes, verify as verifyBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -257,8 +266,30 @@ export type HostedRecord = {
   /** when the site ends the request, and when this command's own wait ends (ms since the epoch) */
   expiresAt?: number; deadline?: number;
   /** a link: the owner-proof version it asked for */ proofVersion?: 2;
+  /** signed here and sent by the connector (--sign-only): what was signed, kept once the request is adopted */
+  signed?: SignedFacts;
 };
 export type HostedRail = "evm" | "tempo" | "solana";
+
+/** A request signed here for someone else to send (--sign-only), as submit_budget_request takes it: header names lowercased, `body` the exact bytes signed. */
+export type SignedRequest = { method: "POST"; path: string; headers: Record<string, string>; body: string };
+/** What the approval record keeps of a signed request: its route and exact body, the proof's nonce and timestamp (unix seconds). */
+export type SignedFacts = { path: string; body: string; nonce: string; signedAt: number };
+/** The approval record's request before a site request is adopted for it: no id, token or match code yet. */
+export type SignedRecord = Pick<HostedRecord, "site" | "kind" | "then" | "intent" | "proofVersion"> & { resumable: true; signed: SignedFacts };
+
+/** request() signed the request (signOnly) and sent nothing. */
+export class HostedSigned extends Error {
+  constructor(readonly request: SignedRequest) {
+    super("signed, not sent");
+  }
+}
+/** request() checked and recorded the request the connector created from the signed record (adopt); it polls nothing. */
+export class HostedAdopted extends Error {
+  constructor() {
+    super("adopted");
+  }
+}
 
 export interface HostedSettings {
   /** The site's origin, as recorded at setup (site.mjs siteOrigin). */
@@ -295,6 +326,13 @@ export interface HostedSettings {
    * In a worker it does not return: the worker leaves with no result and the next wait reads the request again.
    */
   onUnresolved?: (why: string) => void;
+  /** --sign-only: sign the request this command would create and hand it here with what the record keeps; nothing is sent. */
+  signOnly?: (request: SignedRequest, record: SignedRecord) => void;
+  /**
+   * wait --site-request: the request the connector created from `signed`, as it returned it. Checked (see the header), then
+   * handed to onAdopt to record; nothing is polled and nothing is created.
+   */
+  adopt?: { signed: SignedRecord; requestId: string; link: string; matchCode: string; onAdopt: (record: HostedRecord, shown: { url: string; expires: number; terms: OwnerTerms }) => void };
 }
 
 /**
@@ -434,6 +472,12 @@ function siteReason(site: string, v: any): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** A link with control characters, spaces or invisible characters in it is never shown or recorded. */
+const UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
+/** The part of an approval link after #: the site's code for the owner's page. */
+const LINK_FRAGMENT = /^#[A-Za-z0-9_-]{8,256}$/;
+/** A match code as the site gives it, for the owner to pick on the page. */
+const MATCH_CODE = /^[A-Z0-9]{2,8}(-[A-Z0-9]{2,8}){0,3}$/;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 /**
@@ -581,7 +625,8 @@ export class HostedApprovals {
       kind = "link";
       // the owner recorded here (not with --new-owner), named to the site only when it says it takes the field
       expectedOwner = !input.newOwner ? this.w.owner(input.expectedOwner) : null;
-      const features = await this.features();
+      // a request signed for the connector reads nothing from the site: it is signed for a site that lists both features, as the site does
+      const features = this.s.signOnly || this.s.adopt ? new Set([EXPECTED_OWNER_FEATURE, OWNER_PROOF_V2_FEATURE]) : await this.features();
       sentOwner = Boolean(expectedOwner) && features.has(EXPECTED_OWNER_FEATURE);
       // the owner proof that names the account, only where the site says it takes the field
       askedV2 = features.has(OWNER_PROOF_V2_FEATURE);
@@ -603,6 +648,9 @@ export class HostedApprovals {
         : "";
       if (problem) throw new HostedRefusal(`the recorded request ${taken.requestId} cannot be finished: ${problem}. No new request was created; whether the owner approved it is not known here`, CHECK_CHAIN, { sending: true });
     }
+    const proofAsked = askedV2 ? (2 as const) : undefined;
+    if (this.s.signOnly) return this.signOnly(path, JSON.stringify(body), { site: this.s.site, kind, ...(then ? { then: then.map((t) => t.kind) } : {}), intent, ...(proofAsked ? { proofVersion: proofAsked } : {}) });
+    if (this.s.adopt) return this.adopt(this.s.adopt, { path, raw: JSON.stringify(body), body, kind, intent, then, terms: input.terms, timeoutMs: input.timeoutMs });
     const answer = taken
       ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
       : await this.create(path, body, kind === "link" ? "bl_" : "ba_");
@@ -794,18 +842,73 @@ export class HostedApprovals {
    * key over the body { agent }. The token is `ssbt_...` and the id is the request's own, or there is none.
    */
   private async renew(p: { id: string }): Promise<string | null> {
-    const path = `${BUDGET_API}/requests/${p.id}/token`;
+    const r = await this.renewToken(p.id);
+    return "token" in r ? r.token : null;
+  }
+
+  /** renew(), with the site's answer when it gave no token: its status (0 for none) and the reason in words. */
+  private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string }> {
+    const path = `${BUDGET_API}/requests/${id}/token`;
     const raw = JSON.stringify({ agent: agentAddressOf(this.s.agentKey) });
     try {
       const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
       const res = await (this.s.fetchImpl ?? fetch)(`${this.s.site}${path}`, { method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(20_000) });
       const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
-      if (!res.ok || truncated) return null;
-      const json = JSON.parse(bytes.toString("utf8"));
-      return json && json.id === p.id && isSiteToken(json.access_token) ? (json.access_token as string) : null;
-    } catch {
-      return null;
+      if (truncated) return { status: res.status, why: "an answer that was cut off" };
+      let json: any = null;
+      try { json = JSON.parse(bytes.toString("utf8")); } catch {}
+      if (!res.ok) return { status: res.status, why: siteFailure(res.status, json) };
+      return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request" };
+    } catch (err) {
+      return { status: 0, why: `no answer (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message, 120)})` };
     }
+  }
+
+  /** --sign-only: sign the body the create path would send, hand it over with what the record keeps, and send nothing. */
+  private async signOnly(path: string, raw: string, record: Omit<SignedRecord, "resumable" | "signed">): Promise<never> {
+    const signedAt = Math.floor(Date.now() / 1000);
+    const nonce = newNonce();
+    const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw, signedAt, nonce);
+    const request: SignedRequest = { method: "POST", path, headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])), body: raw };
+    // recorded before it is shown, so a request the connector sends always has a record here to adopt it into
+    this.s.signOnly!(request, { ...record, resumable: true, signed: { path, body: raw, nonce, signedAt } });
+    throw new HostedSigned(request);
+  }
+
+  /** wait --site-request: check the request the connector created from the signed record, then record it (see the header). */
+  private async adopt(a: NonNullable<HostedSettings["adopt"]>, ask: { path: string; raw: string; body: Record<string, unknown>; kind: HostedRecord["kind"]; intent: string; then?: HostedStep[]; terms: OwnerTerms; timeoutMs: number }): Promise<never> {
+    const id = a.requestId;
+    const refuse = (why: string, sending = false): never => {
+      throw new HostedRefusal(`${isSiteRequestId(id) ? id : "that request"} was not adopted: ${why}. Nothing was recorded`, sending ? CHECK_CHAIN : "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request", { sending });
+    };
+    const s = a.signed;
+    if (s.site !== this.s.site) return refuse("the signed request is for another site");
+    if (s.kind !== ask.kind || s.intent !== ask.intent || s.signed.path !== ask.path || s.signed.body !== ask.raw) return refuse("this command no longer asks for what was signed");
+    const prefix = ask.kind === "link" ? "bl_" : "ba_";
+    if (!isSiteRequestId(id) || !id.startsWith(prefix)) return refuse(`the id of a ${ask.kind === "link" ? "request to add an agent" : "wallet approval"} starts with ${prefix}`);
+    let link: URL | null = null;
+    try {
+      link = !UNSAFE_URL.test(a.link) ? new URL(a.link) : null;
+    } catch {}
+    if (!link || link.origin !== this.s.site || link.pathname !== `/approve/budget/${id}` || link.search || !LINK_FRAGMENT.test(link.hash)) return refuse(`the link is not ${this.s.site}/approve/budget/${id} with the site's code after #`);
+    if (!MATCH_CODE.test(a.matchCode)) return refuse("the match code is not one the site gives");
+    // the site gives a token only to the key that made the request: another agent's request ends here
+    const renewed = await this.renewToken(id);
+    if (!("token" in renewed)) return refuse(renewed.status === 403 ? "another agent's key made that request" : renewed.status === 404 ? `${this.name} has no request with that id` : `${this.name} gave this agent no token for it (${renewed.why})`);
+    const token = renewed.token;
+    if (carriesToken(link, token)) return refuse("the link carries the request's access token");
+    const r = await readSiteRequest({ site: this.s.site, id, token, wait: 0, own: true, fetchImpl: this.s.fetchImpl });
+    if (!r.ok) return refuse(`it could not be read back (${r.reason})`, r.asked === true);
+    const problem = signedProblem(r.view, { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then }, this.w.same);
+    if (problem) return refuse(problem, viewEvidence(r.view));
+    const now = Date.now();
+    const siteExpiry = Date.parse(typeof r.view.expires_at === "string" ? r.view.expires_at : "");
+    const expiresAt = Number.isFinite(siteExpiry) ? siteExpiry : now + ask.timeoutMs;
+    a.onAdopt(
+      { site: this.s.site, requestId: id, token, kind: ask.kind, matchCode: a.matchCode, ...(s.then ? { then: s.then } : {}), resumable: true, intent: ask.intent, expiresAt, deadline: Math.min(expiresAt, now + ask.timeoutMs), ...(s.proofVersion ? { proofVersion: s.proofVersion } : {}), signed: s.signed },
+      { url: link.href, expires: expiresAt, terms: ask.terms },
+    );
+    throw new HostedAdopted();
   }
 
   /** Renew `p`'s token and take the new one in everywhere this client holds the old one: the poll, the open and held requests, the approval record. */
@@ -916,15 +1019,15 @@ export class HostedApprovals {
     // re-serialized, and never a string with control characters, spaces or invisible characters in it.
     let link: URL | null = null;
     try {
-      link = typeof url === "string" && !/[\u0000-\u0020\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(url) ? new URL(url) : null;
+      link = typeof url === "string" && !UNSAFE_URL.test(url) ? new URL(url) : null;
     } catch {}
     const problem = !isSiteRequestId(id) || !String(id).startsWith(prefix) ? "no request id"
       : !isSiteToken(token) ? "no access token"
       : !link || link.origin !== this.s.site ? "an approval link on another site"
-      : link.pathname !== `/approve/budget/${id}` || link.search || !/^#[A-Za-z0-9_-]{8,256}$/.test(link.hash) ? "an approval link that is not /approve/budget/<its id>#<token>"
+      : link.pathname !== `/approve/budget/${id}` || link.search || !LINK_FRAGMENT.test(link.hash) ? "an approval link that is not /approve/budget/<its id>#<token>"
       // the link is shown to the owner and printed: it must not carry the agent's access token, whole or in part
       : carriesToken(link, token) ? "an approval link that carries the request's access token"
-      : typeof matchCode !== "string" || !/^[A-Z0-9]{2,8}(-[A-Z0-9]{2,8}){0,3}$/.test(matchCode) ? "no match code"
+      : typeof matchCode !== "string" || !MATCH_CODE.test(matchCode) ? "no match code"
       : !Number.isFinite(expires) || expires <= Date.now() ? "no expiry in the future"
       : "";
     if (problem) {
@@ -1476,12 +1579,41 @@ export function stepsProblem(sent: HostedStep[], got: unknown[] | undefined): st
       continue;
     }
     if (!want.transaction) continue;
-    const t = g.transaction;
-    if (!t || typeof t !== "object") return `step ${i} (${want.kind}) has no transaction`;
-    if (typeof t.to !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(t.to) || typeof t.data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(t.data) || typeof t.value !== "string" || !/^0x[0-9a-fA-F]{1,64}$/.test(t.value)) {
-      return `step ${i} (${want.kind}) has an incomplete transaction (to, data and value must each be 0x hex)`;
-    }
-    if (t.to.toLowerCase() !== want.transaction.to.toLowerCase() || t.data.toLowerCase() !== want.transaction.data.toLowerCase() || BigInt(t.value) !== BigInt(want.transaction.value)) return `step ${i} (${want.kind}) has another transaction`;
+    const problem = txProblem(want.transaction, g.transaction);
+    if (problem) return `step ${i} (${want.kind}) has ${problem}`;
   }
+  return "";
+}
+
+/** Why the site's transaction `t` is not `want`, or "": each of to, data and value present, in the site's format, and the same. */
+function txProblem(want: { to: string; data: string; value: string }, t: any): string {
+  if (!t || typeof t !== "object") return "no transaction";
+  if (typeof t.to !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(t.to) || typeof t.data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(t.data) || typeof t.value !== "string" || !/^0x[0-9a-fA-F]{1,64}$/.test(t.value)) {
+    return "an incomplete transaction (to, data and value must each be 0x hex)";
+  }
+  return t.to.toLowerCase() !== want.to.toLowerCase() || t.data.toLowerCase() !== want.data.toLowerCase() || BigInt(t.value) !== BigInt(want.value) ? "another transaction" : "";
+}
+
+/**
+ * Why the site's read of a request the connector created is not the request signed here (`body`), or "": this request's id and
+ * kind, this agent, rail and chain, and the exact transaction (or Solana amount), or for a link the same steps, the owner it
+ * names and the owner-proof version it asks for. A field the read leaves out is a mismatch: it cannot be checked.
+ */
+function signedProblem(v: any, f: { id: string; kind: string; rail: HostedRail; chain: string; agent: string; body: Record<string, any>; then?: HostedStep[] }, same: (a?: string | null, b?: string | null) => boolean): string {
+  if (!v || typeof v !== "object" || v.id !== f.id) return "the site's answer is about another request";
+  if (v.kind !== f.kind) return "it is another kind of request";
+  if (!same(v.agent, f.agent)) return "it is another agent's request";
+  if (v.rail !== f.rail || (v.chain && typeof v.chain === "object" ? v.chain.key : v.chain) !== f.chain) return "it is for another chain";
+  if (f.kind !== "link") {
+    if (f.body.transaction) {
+      const problem = txProblem(f.body.transaction, v.transaction);
+      return problem ? `it has ${problem}` : "";
+    }
+    return (v.solana?.amount_atomic ?? null) === (f.body.solana?.amount_atomic ?? null) ? "" : "it has another amount";
+  }
+  const steps = f.then ? stepsProblem(f.then, v.steps) : Array.isArray(v.steps) && v.steps.length ? "steps that were not signed" : "";
+  if (steps) return `its wallet steps are not the ones signed (${steps})`;
+  if (f.body.expected_owner !== undefined && !same(v.expected_owner, f.body.expected_owner)) return "it does not name the owner recorded on this machine";
+  if (f.body.owner_proof_version === 2 && v.owner_proof_version !== 2) return "it does not ask for the owner proof that names the account";
   return "";
 }

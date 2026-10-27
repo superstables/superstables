@@ -60,6 +60,14 @@ export const HOLDER_ENV = "SUPERSTABLES_BUDGET_HOLDER";
 export const RESUME_ENV = "SUPERSTABLES_BUDGET_RESUME";
 /** The restart a worker is: the record's `resumes` as it was when this worker was started. Only the newest restart marks or relies on a takeover. */
 export const RESUME_GENERATION_ENV = "SUPERSTABLES_BUDGET_RESUME_GENERATION";
+/** Set in the rail script environment of an owner command run with --sign-only: the id of the approval that keeps the signed request. */
+export const SIGN_ONLY_ENV = "SUPERSTABLES_BUDGET_SIGN_ONLY";
+/** Set in the owner command that `wait --site-request` runs to check a site request against a signed approval: that approval's id. */
+export const ADOPT_ENV = "SUPERSTABLES_BUDGET_ADOPT";
+/** With ADOPT_ENV: the request id, link and match code the connector returned, as JSON { requestId, link, matchCode }. */
+export const ADOPT_REQUEST_ENV = "SUPERSTABLES_BUDGET_ADOPT_REQUEST";
+/** The site takes an agent proof only within 300 seconds of its timestamp: a signed request is sendable that long after signing. */
+export const SIGNED_WINDOW_MS = 300_000;
 /** How long the owner page keeps a link open after the wallet was asked to send (owner-approval-server.ts). */
 const SENDING_GRACE_S = 120;
 /** Reading the chain after the wallet sent: readSent waits up to 180 s, then the allowance reads. */
@@ -837,7 +845,55 @@ export function linkGate(id, { waitMs = LINK_TEXT_WAIT_MS, record = recordLink }
 export function recordHosted(id, hosted) {
   if (!isApprovalId(id)) return null;
   // a final approval keeps no access token: checked and written under the record's lock, in one step
-  return update(id, (record) => record.final ? null : { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}), ...(hosted.resumable ? { resumable: true, intent: hosted.intent, expiresAt: hosted.expiresAt, deadline: hosted.deadline, ...(hosted.proofVersion ? { proofVersion: hosted.proofVersion } : {}) } : {}) } });
+  return update(id, (record) => record.final ? null : { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}), ...(hosted.resumable ? { resumable: true, intent: hosted.intent, expiresAt: hosted.expiresAt, deadline: hosted.deadline, ...(hosted.proofVersion ? { proofVersion: hosted.proofVersion } : {}) } : {}), ...(hosted.signed ? { signed: hosted.signed } : {}) } });
+}
+
+// ── requests signed here and sent by the connector (--sign-only, then wait --site-request) ──────────────────────────────────
+// The owner command signs its request and keeps it in an approval record that has no request id, token or match code yet, then
+// exits; nothing holds the chain. `wait --site-request` checks the site request made from it (hosted.ts adopt) and records it here,
+// after which the record is an ordinary resumable hosted approval: wait starts its worker again, and the worker takes it over.
+
+/**
+ * An owner command run with --sign-only: its record, made like a background approval's (startDetached), so that once a request is
+ * adopted a later wait can start the same worker from `workerArgs`. This process holds the chain until it ends.
+ */
+export function startSigning({ id, command, rail, chain, workerArgs, timeoutS }) {
+  saveApproval({ id, command, rail, chain, state: "signing", createdAt: new Date().toISOString(), pid: process.pid, ...startOf(process.pid), deadline: null, workerArgs, timeoutS });
+}
+
+/** The rail script signed the request (hosted.ts SignedRecord): kept with the approval, mode 600, before it is shown. */
+export function recordSigned(id, s) {
+  const stored = update(id, (record) => (record.final || record.hosted ? null : { state: "signed", hosted: { site: s.site, kind: s.kind, ...(s.then?.length ? { then: s.then } : {}), resumable: true, intent: s.intent, ...(s.proofVersion ? { proofVersion: s.proofVersion } : {}), signed: s.signed } }));
+  if (stored?.hosted?.signed?.nonce !== s.signed.nonce) throw new Error(`approval ${id} could not keep the signed request; nothing was sent`);
+}
+
+/** A request signed here that no site request has been adopted for yet. */
+export const awaitingAdoption = (record) => Boolean(record && !record.final && isObject(record.hosted?.signed) && !record.hosted.requestId);
+
+/** A signed request older than the site's window, never adopted: the site no longer takes it, so it can never be sent. */
+export const signedExpired = (record, now = Date.now()) => awaitingAdoption(record) && now - Number(record.hosted.signed.signedAt) * 1000 > SIGNED_WINDOW_MS;
+
+/**
+ * The site request made from the signed request `nonce` passed every check (hosted.ts adopt): record it, its token included, in one
+ * locked step, only while the record still holds that signed request with nothing adopted. `shown` is what the owner was given (the
+ * link, its expiry, the terms) and the action, for message_for_owner. Throws when nothing was recorded.
+ */
+export function adoptSigned(id, nonce, hosted, shown) {
+  let taken = false;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
+    taken = true;
+    return {
+      state: "waiting_owner", action: shown.action, url: shown.url, expires: new Date(shown.expires).toISOString(), terms: shown.terms, matchCode: hosted.matchCode,
+      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline },
+    };
+  });
+  if (!taken) throw new Error(`approval ${id} no longer holds that signed request unadopted; nothing was recorded`);
+}
+
+/** End a signed request that was never adopted and is past the site's window (signedExpired), with the result `build` gives. */
+export function expireSigned(id, seen, build) {
+  return recordFinalWith(id, (before) => (signedExpired(before) ? build(before) : null), { strict: seen });
 }
 
 const bigintOut = (_key, value) => (typeof value === "bigint" ? { $bigint: value.toString() } : value);
