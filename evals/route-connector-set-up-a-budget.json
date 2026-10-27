@@ -1,0 +1,11 @@
+{
+  "skills": ["superstables-payments", "superstables"],
+  "query": "Set up a 1 USDC budget on Base Sepolia for you to spend from.",
+  "files": [],
+  "expected_behavior": [
+    "Goes to the CLI for the budget: `superstables budget setup` and the commands after it, even though the connector is signed in",
+    "Makes no connector purchase call: no `request_purchase`",
+    "On `waiting_owner`, replies with the result's `message_for_owner` word for word and ends its turn",
+    "Never opens, clicks or calls the approval page, and never signs for the owner"
+  ]
+}

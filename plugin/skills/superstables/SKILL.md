@@ -18,3 +18,8 @@ superstables.com. When `request_purchase` returns an approval link and match
 code, show both to the user and end your turn. Do not approve for them or poll
 while waiting. When they say they approved, call `get_purchase_status` and
 report what it establishes. If the payment outcome is unknown, say so.
+
+If these tools are missing, or a call fails because the connector is not signed
+in, ask the owner to connect it once. If they decline, use the
+`superstables-payments` skill and its CLI. Budgets (set up, grant, buy, revoke,
+recover) always go through that CLI.

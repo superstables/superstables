@@ -1,0 +1,13 @@
+{
+  "skills": ["superstables-payments", "superstables"],
+  "query": "Find BTC market data and buy it once. Don't spend more than 0.02.",
+  "files": [],
+  "expected_behavior": [
+    "With the Superstables connector signed in, calls `find_services`, then `request_purchase`; runs no `superstables` command and no `npx`",
+    "Checks the price against the 0.02 ceiling before it calls `request_purchase`, and stops and reports if it does not fit",
+    "Uses a new `operation_id` for the purchase",
+    "On an approval link and match code, shows both to the owner and ends its turn: no polling while it waits",
+    "Calls `get_purchase_status` only after the owner says they approved, and reports the payment status, the service response and the transaction it returns",
+    "Never approves for the owner, and never pays again after an unknown outcome"
+  ]
+}

@@ -16,6 +16,10 @@ The agent can ask for money to move; only the owner can approve it.
 
 Terms used below: the **owner** controls the wallet and approves; the **agent** is you. A **service** is a listing that `find` returns; the **seller** is whoever answers at its URL and gets paid. A **purchase** is one `budget buy`; a **payment** is one `pay`. The **ceiling** is the most the owner accepts for one call.
 
+## Use the connector when it is there
+
+When the Superstables connector tools (`find_services`, `request_purchase`, `get_purchase_status`, `get_my_account`) are available, use them to find services, make a single purchase and read a purchase's status. Use the CLI for budgets (set up, grant, buy, revoke, recover), and whenever the connector is missing or not signed in. When a connector call fails because it is not signed in, ask the owner to connect it once, and use the CLI if they decline.
+
 ## Running the CLI
 
 **This skill needs an agent that can run commands.** In a chat app without a terminal, use the Superstables tools from this plugin instead: the `superstables` skill.
