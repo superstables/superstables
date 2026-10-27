@@ -624,7 +624,7 @@ function lockHeld(lock) {
   // owner may approve it after its worker is gone, so nothing new is asked until `wait` or --replace has settled it. A
   // single purchase is its own record, read by buy-once itself.
   if (record?.hosted?.token && record.command !== "buy-once") return true;
-  // so does a request signed here whose site request could not be adopted (unsettledRequest): the owner may approve that one too
+  // so does a request signed here whose site request was given and is not adopted yet (unsettledRequest): the owner may approve that one too
   if (unsettledRequest(record)) return true;
   return Date.now() - Number(lock.createdAt ?? 0) < STARTUP_GRACE_MS;
 }
@@ -873,9 +873,9 @@ export function recordSigned(id, s) {
 export const awaitingAdoption = (record) => Boolean(record && !record.final && isObject(record.hosted?.signed) && !record.hosted.requestId);
 
 /**
- * A site request given for this signed request and not adopted, that the site did not say is another agent's or missing: its token
- * renewal or its read failed, or showed that the owner's wallet was asked. It may be this request, open on the site, so the record
- * holds the chain and reads unknown until a later wait adopts it.
+ * A site request given for this signed request and not adopted (yet): kept by `wait --site-request` before it asks the site or checks
+ * anything, and dropped only when the site's complete answer shows it is not this request (dropUnsettled). It may be this request,
+ * open on the site, so the record holds the chain and reads unknown until a later wait adopts it.
  */
 export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
 
@@ -906,8 +906,8 @@ export function adoptSigned(id, nonce, hosted, shown, walletAsked) {
 }
 
 /**
- * A site request given for the signed request `nonce` could not be adopted, and may be it (unsettledRequest): kept
- * under the record's lock before the refusal is reported. Evidence only grows: a request already kept stays, and once the wallet
+ * A site request given for the signed request `nonce`, which may be it (unsettledRequest): kept under the record's lock before
+ * anything is checked, and again with what a check saw. Evidence only grows: a request already kept stays, and once the wallet
  * was seen asked it stays asked. Throws when nothing was kept.
  */
 export function recordUnsettled(id, nonce, u) {
@@ -921,6 +921,21 @@ export function recordUnsettled(id, nonce, u) {
     return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: u.requestId, link: u.link, matchCode: u.matchCode }, ...(walletAsked ? { walletAsked: true } : {}) } } };
   });
   if (!kept) throw new Error(`approval ${id} could not keep ${u.requestId}; whether the owner's wallet was asked for it is unknown`);
+}
+
+/**
+ * The site's complete answer showed that `requestId`, kept for the signed request `nonce`, is not that request, and no wallet asked:
+ * dropped under the record's lock, unless the record holds evidence that the wallet was asked. Whether it was dropped.
+ */
+export function dropUnsettled(id, nonce, requestId) {
+  let dropped = false;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce || unsettledRequest(before)?.requestId !== requestId || before.hosted.signed.walletAsked) return null;
+    dropped = true;
+    const { submitted: _dropped, ...signed } = before.hosted.signed;
+    return { hosted: { ...before.hosted, signed } };
+  });
+  return dropped;
 }
 
 const bigintOut = (_key, value) => (typeof value === "bigint" ? { $bigint: value.toString() } : value);

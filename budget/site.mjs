@@ -256,6 +256,28 @@ export function mismatchPage(problems, siteFailed, hash, { what = "transaction",
 export const isSiteRequestId = (id) => typeof id === "string" && /^b[la]_[A-Za-z0-9_-]{4,128}$/.test(id);
 /** An agent access token: ssbt_... */
 export const isSiteToken = (t) => typeof t === "string" && /^ssbt_[A-Za-z0-9_-]{8,256}$/.test(t);
+/** A link with control characters, spaces or invisible characters in it is never shown or recorded. */
+export const UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
+/** The part of an approval link after #: the site's code for the owner's page. */
+export const LINK_FRAGMENT = /^#[A-Za-z0-9_-]{8,256}$/;
+/** A match code as the site gives it, for the owner to pick on the page. */
+export const MATCH_CODE = /^[A-Z0-9]{2,8}(-[A-Z0-9]{2,8}){0,3}$/;
+
+/**
+ * Why the request id, approval link and match code submit_budget_request returned cannot be the site's own for a request of
+ * `kind` on `site`, or "": an id of that kind, the link `site`/approve/budget/<id>#<code>, a match code as the site gives it.
+ */
+export function siteRequestProblem(site, kind, { requestId, link, matchCode }) {
+  const prefix = kind === "link" ? "bl_" : "ba_";
+  if (!isSiteRequestId(requestId) || !requestId.startsWith(prefix)) return `the id of a ${kind === "link" ? "request to add an agent" : "wallet approval"} starts with ${prefix}`;
+  let url = null;
+  try {
+    url = typeof link === "string" && !UNSAFE_URL.test(link) ? new URL(link) : null;
+  } catch {}
+  if (!url || url.origin !== site || url.pathname !== `/approve/budget/${requestId}` || url.search || !LINK_FRAGMENT.test(url.hash)) return `the link is not ${site}/approve/budget/${requestId} with the site's code after #`;
+  if (typeof matchCode !== "string" || !MATCH_CODE.test(matchCode)) return "the match code is not one the site gives";
+  return "";
+}
 
 export const SITE_MAX_BYTES = 1_000_000;
 

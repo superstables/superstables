@@ -324,7 +324,8 @@ export function ownerPageFor(rail: OwnerRail) {
       process.exit(rail.emit(action, 5, { state: "unknown", reason: err.message, next: `${rail.statusCommand}: read whether it landed before running this again` }));
     }
     console.log(`REFUSED: ${err.message}`);
-    process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: err.message, next: err.next }));
+    // notAdopted: the only refusal of wait --site-request that lets the dispatcher drop the request it kept and free the chain
+    process.exit(rail.emit(action, 3, { state: "refused_precheck", reason: err.message, next: err.next, ...(err.notAdopted ? { notAdopted: true } : {}) }));
   }
 
   return {

@@ -70,10 +70,11 @@
 // connector returned and checks them before anything is recorded: the command still builds the same body, the link is the site's own
 // for that id, the site gives this agent's key a fresh token for it (another agent's request is refused there), and the site's read of
 // it shows this agent, rail, chain and the exact transaction or steps that were signed. Only then is the request recorded
-// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over. A request the site did
-// not say is another agent's or missing, whose token or read failed or showed the owner's wallet was asked, is kept first
-// (`onUnsettled`): it may be this one, so it is unknown, never "nothing sent", and a read showing the wallet was asked is kept with
-// an adopted request too.
+// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over. The connector may have
+// sent the signed request whatever adopt is given, so only the site's complete answer that the given id is not it (another agent's,
+// none, or this agent's with other terms), with no wallet asked, is a refusal (`notAdopted`). Anything else is kept (`onUnsettled`):
+// it may be this one, so it is unknown, never "nothing sent", and a read showing the wallet was asked is kept with an adopted
+// request too.
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as signBytes, verify as verifyBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -83,7 +84,7 @@ import { WALLET_STATES, sentEvidence, viewEvidence } from "./site.mjs";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
 import { readCapped } from "./response.mjs";
-import { BUDGET_API, SITE_MAX_BYTES, accountRefusalNext, call, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteText, siteWord } from "./site.mjs";
+import { BUDGET_API, LINK_FRAGMENT, MATCH_CODE, SITE_MAX_BYTES, UNSAFE_URL, accountRefusalNext, call, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteRequestProblem, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
 
@@ -334,8 +335,8 @@ export interface HostedSettings {
   /**
    * wait --site-request: the request the connector created from `signed`, as it returned it. Checked (see the header), then
    * handed to onAdopt to record; nothing is polled and nothing is created. `walletAsked`: the read showed the owner's wallet was asked.
-   * A request that may be this agent's and is not adopted, because its token or read failed or showed the wallet was asked, goes to
-   * onUnsettled before the refusal: it may be this request, open on the site.
+   * A request that is not adopted and that the site did not show is another one goes to onUnsettled, with what was seen, before
+   * the refusal: it may be this request, open on the site.
    */
   adopt?: {
     signed: SignedRecord; requestId: string; link: string; matchCode: string;
@@ -409,15 +410,20 @@ export class HostedRefusal extends Error {
   readonly next: string;
   /** The site reports the owner's wallet was asked: the outcome is unknown (exit 5), never "nothing sent". */
   readonly sending: boolean;
-  constructor(message: string, next: string, opts: { sending?: boolean } = {}) {
+  /** adopt: the site's well-formed answer shows the request given is not the one signed here, and no wallet was asked for it. */
+  readonly notAdopted: boolean;
+  constructor(message: string, next: string, opts: { sending?: boolean; notAdopted?: boolean } = {}) {
     super(scrub(message));
     this.next = scrub(next);
     this.sending = opts.sending === true;
+    this.notAdopted = opts.notAdopted === true;
   }
 }
 
 /** The next step after a refusal whose outcome is unknown (the dispatcher names the rail's own status command). */
 const CHECK_CHAIN = "read whether anything landed (superstables budget status) before running this again";
+/** The site's refusals of a token renewal (renewAccess): 403 another agent's key made the request, 404 there is no such request. */
+const RENEW_REFUSED: Record<number, string> = { 403: "not_your_request", 404: "not_found" };
 /**
  * What the client has seen of a request so far, from every answer: the creation, the first reads, each poll and the cancel.
  * It only grows: once an answer showed the wallet was asked, or a transaction, no later answer takes it back.
@@ -481,12 +487,6 @@ function siteReason(site: string, v: any): string {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** A link with control characters, spaces or invisible characters in it is never shown or recorded. */
-const UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
-/** The part of an approval link after #: the site's code for the owner's page. */
-const LINK_FRAGMENT = /^#[A-Za-z0-9_-]{8,256}$/;
-/** A match code as the site gives it, for the owner to pick on the page. */
-const MATCH_CODE = /^[A-Z0-9]{2,8}(-[A-Z0-9]{2,8}){0,3}$/;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
 /**
@@ -857,23 +857,25 @@ export class HostedApprovals {
   }
 
   /**
-   * renew(), with the site's answer when it gave no token: its status (0 for none), the reason in words, and whether the answer
-   * showed the owner's wallet was asked (an error's `money_moved`, say).
+   * renew(), with the site's answer when it gave no token: its status (0 for none), the reason in words, whether the answer
+   * showed the owner's wallet was asked (an error's `money_moved`, say), and `notOurs`: the answer is the site's own complete
+   * refusal that this agent made no request with that id (RENEW_REFUSED), and shows no wallet asked.
    */
-  private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string; asked: boolean }> {
+  private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string; asked: boolean; notOurs: boolean }> {
     const path = `${BUDGET_API}/requests/${id}/token`;
     const raw = JSON.stringify({ agent: agentAddressOf(this.s.agentKey) });
     try {
       const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
       const res = await (this.s.fetchImpl ?? fetch)(`${this.s.site}${path}`, { method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(20_000) });
       const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
-      if (truncated) return { status: res.status, why: "an answer that was cut off", asked: false };
+      if (truncated) return { status: res.status, why: "an answer that was cut off", asked: false, notOurs: false };
       let json: any = null;
       try { json = JSON.parse(bytes.toString("utf8")); } catch {}
-      if (!res.ok) return { status: res.status, why: siteFailure(res.status, json), asked: viewEvidence(json) };
-      return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request", asked: viewEvidence(json) };
+      const asked = viewEvidence(json);
+      if (!res.ok) return { status: res.status, why: siteFailure(res.status, json), asked, notOurs: !asked && RENEW_REFUSED[res.status] !== undefined && json?.error?.code === RENEW_REFUSED[res.status] };
+      return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request", asked, notOurs: false };
     } catch (err) {
-      return { status: 0, why: `no answer (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message, 120)})`, asked: false };
+      return { status: 0, why: `no answer (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message, 120)})`, asked: false, notOurs: false };
     }
   }
 
@@ -888,46 +890,42 @@ export class HostedApprovals {
     throw new HostedSigned(request);
   }
 
-  /** wait --site-request: check the request the connector created from the signed record, then record it (see the header). */
+  /**
+   * wait --site-request: check the request the connector created from the signed record, then record it (see the header). A
+   * refusal is `notAdopted` only on the site's complete answer that the id is not this agent's request, or is this agent's with
+   * other terms, and no wallet asked. Any other refusal after the values check out keeps the request (onUnsettled): it may be
+   * this one.
+   */
   private async adopt(a: NonNullable<HostedSettings["adopt"]>, ask: { path: string; raw: string; body: Record<string, unknown>; kind: HostedRecord["kind"]; intent: string; then?: HostedStep[]; terms: OwnerTerms; timeoutMs: number }): Promise<never> {
     const id = a.requestId;
-    const refuse = (why: string, sending = false, kept = false): never => {
-      throw new HostedRefusal(`${isSiteRequestId(id) ? id : "that request"} was not adopted: ${why}. ${kept ? `It is kept with this approval as a request that may be this one${sending ? ", and the owner's wallet may have sent its transaction" : ""}; a later wait checks it again` : "Nothing was recorded"}`, sending || kept ? CHECK_CHAIN : "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request", { sending: sending || kept });
+    const values = siteRequestProblem(this.s.site, ask.kind, a);
+    if (values) throw new HostedRefusal(`that request was not adopted: ${values}. Nothing was recorded`, "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request");
+    const link = new URL(a.link);
+    const notAdopted = (why: string): never => {
+      throw new HostedRefusal(`${id} was not adopted: ${why}. Nothing was recorded`, "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request", { notAdopted: true });
+    };
+    const kept = (why: string, walletAsked: boolean): never => {
+      a.onUnsettled({ requestId: id, link: link.href, matchCode: a.matchCode, walletAsked });
+      throw new HostedRefusal(`${id} was not adopted: ${why}. It is kept with this approval as a request that may be this one${walletAsked ? ", and the owner's wallet may have sent its transaction" : ""}; a later wait checks it again`, CHECK_CHAIN, { sending: true });
     };
     const s = a.signed;
-    if (s.site !== this.s.site) return refuse("the signed request is for another site");
-    if (s.kind !== ask.kind || s.intent !== ask.intent || s.signed.path !== ask.path || s.signed.body !== ask.raw) return refuse("this command no longer asks for what was signed");
-    const prefix = ask.kind === "link" ? "bl_" : "ba_";
-    if (!isSiteRequestId(id) || !id.startsWith(prefix)) return refuse(`the id of a ${ask.kind === "link" ? "request to add an agent" : "wallet approval"} starts with ${prefix}`);
-    let link: URL | null = null;
-    try {
-      link = !UNSAFE_URL.test(a.link) ? new URL(a.link) : null;
-    } catch {}
-    if (!link || link.origin !== this.s.site || link.pathname !== `/approve/budget/${id}` || link.search || !LINK_FRAGMENT.test(link.hash)) return refuse(`the link is not ${this.s.site}/approve/budget/${id} with the site's code after #`);
-    if (!MATCH_CODE.test(a.matchCode)) return refuse("the match code is not one the site gives");
+    if (s.site !== this.s.site) return kept("the signed request is for another site", false);
+    if (s.kind !== ask.kind || s.intent !== ask.intent || s.signed.path !== ask.path || s.signed.body !== ask.raw) return kept("this command no longer asks for what was signed", false);
     // the site gives a token only to the key that made the request: another agent's request ends here
     const renewed = await this.renewToken(id);
     if (!("token" in renewed)) {
-      const why = renewed.status === 403 ? "another agent's key made that request" : renewed.status === 404 ? `${this.name} has no request with that id` : `${this.name} gave this agent no token for it (${renewed.why})`;
-      if ((renewed.status === 403 || renewed.status === 404) && !renewed.asked) return refuse(why);
-      // any other answer (none, a 5xx, money_moved) leaves open that this is the request, sent and maybe approved: kept first
-      a.onUnsettled({ requestId: id, link: link.href, matchCode: a.matchCode, walletAsked: renewed.asked });
-      return refuse(why, renewed.asked, true);
+      if (renewed.notOurs) return notAdopted(renewed.status === 403 ? "another agent's key made that request" : `${this.name} has no request with that id`);
+      return kept(`${this.name} gave this agent no token for it (${renewed.why})`, renewed.asked);
     }
     const token = renewed.token;
-    if (carriesToken(link, token)) return refuse("the link carries the request's access token");
+    if (carriesToken(link, token)) return kept("the link carries the request's access token", false);
     const r = await readSiteRequest({ site: this.s.site, id, token, wait: 0, own: true, fetchImpl: this.s.fetchImpl });
-    const walletAsked = r.ok ? viewEvidence(r.view) : r.asked === true;
-    const problem = r.ok ? signedProblem(r.view, { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then }, this.w.same) : `it could not be read back (${r.reason})`;
-    if (problem) {
-      // this agent's key made it (the site renewed its token): unless its read shows other terms and no wallet asked, it may be this
-      // request, so it is kept before anything is answered, and the evidence with it
-      if (!r.ok || walletAsked) {
-        a.onUnsettled({ requestId: id, link: link.href, matchCode: a.matchCode, walletAsked });
-        return refuse(problem, walletAsked, true);
-      }
-      return refuse(problem);
-    }
+    if (!r.ok) return kept(`it could not be read back (${r.reason})`, r.asked === true);
+    const walletAsked = viewEvidence(r.view);
+    const want = { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then };
+    const problem = signedProblem(r.view, want, this.w.same);
+    if (problem && !readComplete(r.view, want)) return kept("the site's read of it leaves out, or garbles, what was signed", walletAsked);
+    if (problem) return walletAsked ? kept(problem, true) : notAdopted(problem);
     const now = Date.now();
     const siteExpiry = Date.parse(typeof r.view.expires_at === "string" ? r.view.expires_at : "");
     const expiresAt = Number.isFinite(siteExpiry) ? siteExpiry : now + ask.timeoutMs;
@@ -1613,12 +1611,13 @@ export function stepsProblem(sent: HostedStep[], got: unknown[] | undefined): st
   return "";
 }
 
+/** A transaction in the site's format: to, data and value each 0x hex. */
+const isTx = (t: any): boolean => !!t && typeof t === "object" && typeof t.to === "string" && /^0x[0-9a-fA-F]{40}$/.test(t.to) && typeof t.data === "string" && /^0x([0-9a-fA-F]{2})*$/.test(t.data) && typeof t.value === "string" && /^0x[0-9a-fA-F]{1,64}$/.test(t.value);
+
 /** Why the site's transaction `t` is not `want`, or "": each of to, data and value present, in the site's format, and the same. */
 function txProblem(want: { to: string; data: string; value: string }, t: any): string {
   if (!t || typeof t !== "object") return "no transaction";
-  if (typeof t.to !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(t.to) || typeof t.data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(t.data) || typeof t.value !== "string" || !/^0x[0-9a-fA-F]{1,64}$/.test(t.value)) {
-    return "an incomplete transaction (to, data and value must each be 0x hex)";
-  }
+  if (!isTx(t)) return "an incomplete transaction (to, data and value must each be 0x hex)";
   return t.to.toLowerCase() !== want.to.toLowerCase() || t.data.toLowerCase() !== want.data.toLowerCase() || BigInt(t.value) !== BigInt(want.value) ? "another transaction" : "";
 }
 
@@ -1627,7 +1626,8 @@ function txProblem(want: { to: string; data: string; value: string }, t: any): s
  * kind, this agent, rail and chain, and the exact transaction (or Solana amount), or for a link the same steps, the owner it
  * names and the owner-proof version it asks for. A field the read leaves out is a mismatch: it cannot be checked.
  */
-function signedProblem(v: any, f: { id: string; kind: string; rail: HostedRail; chain: string; agent: string; body: Record<string, any>; then?: HostedStep[] }, same: (a?: string | null, b?: string | null) => boolean): string {
+type SignedWant = { id: string; kind: string; rail: HostedRail; chain: string; agent: string; body: Record<string, any>; then?: HostedStep[] };
+function signedProblem(v: any, f: SignedWant, same: (a?: string | null, b?: string | null) => boolean): string {
   if (!v || typeof v !== "object" || v.id !== f.id) return "the site's answer is about another request";
   if (v.kind !== f.kind) return "it is another kind of request";
   if (!same(v.agent, f.agent)) return "it is another agent's request";
@@ -1644,4 +1644,19 @@ function signedProblem(v: any, f: { id: string; kind: string; rail: HostedRail; 
   if (f.body.expected_owner !== undefined && !same(v.expected_owner, f.body.expected_owner)) return "it does not name the owner recorded on this machine";
   if (f.body.owner_proof_version === 2 && v.owner_proof_version !== 2) return "it does not ask for the owner proof that names the account";
   return "";
+}
+
+/**
+ * Whether the site's read carries every field signedProblem compares, each in the site's format. Only then does a difference
+ * show another request; a read that leaves one out, or garbles it, shows nothing.
+ */
+function readComplete(v: any, f: SignedWant): boolean {
+  if (!v || typeof v !== "object" || v.id !== f.id || typeof v.kind !== "string" || typeof v.agent !== "string" || typeof v.rail !== "string") return false;
+  if (typeof (v.chain && typeof v.chain === "object" ? v.chain.key : v.chain) !== "string") return false;
+  const amount = (x: any) => typeof x?.solana?.amount_atomic === "string" && /^\d+$/.test(x.solana.amount_atomic);
+  if (f.kind !== "link") return f.body.transaction ? isTx(v.transaction) : amount(v);
+  const then = f.then ?? [];
+  if (then.length && !(Array.isArray(v.steps) && v.steps.every((g: any, i: number) => g && typeof g === "object" && typeof g.kind === "string" && (g.kind !== then[i]?.kind || (then[i].transaction ? isTx(g.transaction) : !then[i].solana || amount(g)))))) return false;
+  if (f.body.expected_owner !== undefined && typeof v.expected_owner !== "string") return false;
+  return f.body.owner_proof_version !== 2 || typeof v.owner_proof_version === "number";
 }
