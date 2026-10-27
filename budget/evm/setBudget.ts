@@ -43,8 +43,9 @@ await assertRpcChain();
 const beforeAllow = await allowanceOf(pub.owner, pub.agent);
 // only shown: --sign-only leaves it out, and the adoption that shows the owner the approval reads it then
 const ownerBal = signingOnly() ? null : await usdcBalance(pub.owner);
-const ownerGas = await nativeBalance(pub.owner);
-console.log(`owner ${pub.owner}${ownerBal === null ? "" : ` ${SYM} ${usdc(ownerBal)},`} ${GAS.symbol} (native) ${gasFmt(ownerGas)}; agent ${pub.agent}; allowance now ${usdc(beforeAllow)} ${SYM}`);
+// read for the fee check below, which a chain whose gas is USDC skips: there --sign-only leaves it out too
+const ownerGas = signingOnly() && GAS.isUsdc ? null : await nativeBalance(pub.owner);
+console.log(`owner ${pub.owner}${ownerBal === null ? "" : ` ${SYM} ${usdc(ownerBal)},`}${ownerGas === null ? "" : ` ${GAS.symbol} (native) ${gasFmt(ownerGas)};`} agent ${pub.agent}; allowance now ${usdc(beforeAllow)} ${SYM}`);
 const liveRefusal = () => {
   const reason = `an allowance of ${usdc(beforeAllow)} ${SYM} is already live for this agent. approve overwrites it in place, and an agent that sees the pending transaction can spend the old amount and then the new one. Revoke first, then grant again.`;
   console.log(`REFUSED: ${reason}`);
