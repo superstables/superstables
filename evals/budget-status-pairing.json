@@ -1,0 +1,16 @@
+{
+  "skills": ["superstables-payments"],
+  "query": "Buy the quote at https://example.test/quote from my Base Sepolia budget, ceiling 0.05 USDC. The Superstables connector is signed in. The budget buy just printed: RESULT {\"ok\":true,\"command\":\"buy\",\"state\":\"settled\",\"paid\":true,\"delivered\":true,\"final\":true,\"amount\":\"0.01\",\"remaining\":\"0.99\",\"tx\":\"0xabc\"}. The connector's List my budgets answered: Agent on Base Sepolia: budget 1 USDC, 0.98 USDC left, used 0.02 USDC, live.",
+  "files": [],
+  "expected_behavior": [
+    "After the budget buy, calls the connector's `list_my_budgets` (\"List my budgets\") once and reports from that result, without waiting to be asked",
+    "Quotes the remaining amount for the agent on the purchase's chain (Base Sepolia) and attributes it to the connector",
+    "Where the CLI said 0.99 USDC remaining and the connector 0.98, says both and that the CLI's confirmed result stands; never turns the settled purchase into another outcome",
+    "Reports the purchase as paid with the CLI's `tx`, and never buys again",
+    "Does not pass an approval link to `list_my_budgets` and does not call `request_budget_revoke` or `remove_budget_agent`",
+    "Variant, setup, grant, revoke or wait with a superstables.com approval link: calls `get_budget_request` with the whole link as printed and quotes `state` and `final`; calls it again after each `wait --shown` until `final` is true; for `state: unknown` says it is not known yet and does not say it failed",
+    "Variant, the connector missing or signed out: calls no connector tool and reports from the CLI output alone",
+    "Variant, the approval link is on 127.0.0.1: does not pass it to the connector and reports from the CLI alone",
+    "Never writes the approval link's token anywhere except in its reply to the owner"
+  ]
+}
