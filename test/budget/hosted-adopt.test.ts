@@ -219,6 +219,27 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     expect((await adopt(KEY, record, given, grant(AGENT, 10000n))).asked).toBe(false);
   });
 
+  it("a token renewal the site does not answer as another agent's or missing keeps the request before the refusal, with the answer's evidence", async () => {
+    const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+    const given = await submit(request);
+    const cases: [{ status: number; body: unknown }, object[]][] = [
+      [{ status: 404, body: { error: { code: "not_found" } } }, []],
+      [{ status: 403, body: { error: { code: "not_your_request" } } }, []],
+      [{ status: 503, body: { error: { code: "unavailable" } } }, [{ requestId: given.requestId, link: given.link, matchCode: given.matchCode, walletAsked: false }]],
+      [{ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }, [{ requestId: given.requestId, walletAsked: true }]],
+      [{ status: 403, body: { error: { code: "not_your_request", money_moved: true } } }, [{ requestId: given.requestId, walletAsked: true }]],
+    ];
+    for (const [answer, kept] of cases) {
+      site.renewAnswer = () => answer;
+      const out = await adopt(KEY, record, given, grant(AGENT, 10000n));
+      expect(out.err, JSON.stringify(answer)).toBeInstanceOf(HostedRefusal);
+      expect(out.adopted).toBeUndefined();
+      expect(out.kept, JSON.stringify(answer)).toMatchObject(kept);
+      expect((out.err as HostedRefusal).sending).toBe(kept.length > 0);
+      if (kept.length) expect((out.err as HostedRefusal).message).not.toMatch(/Nothing was recorded/);
+    }
+  });
+
   it("confirmed basis: once adopted, a restarted worker parks on anything the site did not confirm, and settles on a final read", async () => {
     const { request, record } = await sign(KEY, grant(AGENT, 10000n));
     const given = await submit(request);
@@ -249,6 +270,8 @@ let home: string;
 let rpc: TestServer | undefined;
 let tree: EndpointTree;
 const chain = { approved: false };
+/** Every call the fake chain answered, in order. */
+const rpcCalls: { method: string; params: any[] }[] = [];
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
 const outputs: string[] = [];
@@ -302,6 +325,7 @@ async function fakeChain(allowanceAfter: bigint) {
   const blockHash = `0x${"ef".repeat(32)}`;
   await rpc?.close();
   rpc = await startFakeRpc(84532, (method, params) => {
+    rpcCalls.push({ method, params });
     if (method === "eth_blockNumber") return chain.approved ? "0x20" : "0x10";
     const t = txs[params[0]];
     if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };
@@ -352,7 +376,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("expired: grant --sign-only prints one signed request, keeps it mode 600 and sends nothing; wait says signed, then expired with nothing sent", async () => {
+  it("expired: grant --sign-only prints one signed request, keeps it mode 600 and sends nothing; wait says signed, then expired with nothing sent from here, unknown", async () => {
     onRecord(true);
     const signed = await budget([...grantArgs, "--sign-only"]);
     expect(signed.code, signed.stderr).toBe(0);
@@ -378,9 +402,10 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     r.hosted.signed.signedAt -= 301;
     writeFileSync(recordPath(id), JSON.stringify(r));
     const late = await budget(["wait", "--id", id, "--shown"]);
-    expect(late.code, late.stderr).toBe(3);
-    expect(late.result).toMatchObject({ command: "grant", state: "refused_precheck", final: false, id });
-    expect(late.result.reason).toMatch(/expired.*Nothing was sent from this machine/);
+    // this machine cannot tell whether the connector sent it in time: unknown, never refused
+    expect(late.code, late.stderr).toBe(5);
+    expect(late.result).toMatchObject({ command: "grant", state: "unknown", final: false, id });
+    expect(late.result.reason).toMatch(/expired.*Nothing was sent from this machine, but if submit_budget_request sent it in time/);
     expect(late.result.next).toContain("--sign-only");
     expect(late.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
     // not final: had the connector sent it in time, --site-request would still adopt that request
@@ -390,6 +415,21 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     const again = await budget([...grantArgs, "--sign-only"]);
     expect(again.result).toMatchObject({ state: "signed" });
     expect(again.result.id).not.toBe(id);
+  }, 120_000);
+
+  it("--sign-only reads the chain only for its checks and the facts it keeps, and sends nothing to the site and no transaction", async () => {
+    onRecord(true);
+    for (const args of [[...grantArgs, "--sign-only"], ["revoke", "--rail", "evm", "--sign-only"], ["fund-agent", "--rail", "evm", "--sign-only"]]) {
+      rpcCalls.length = 0;
+      const out = await budget(args);
+      expect(out.code, out.stderr).toBe(0);
+      expect(out.result).toMatchObject({ command: args[0], state: "signed" });
+      expect(new Set(rpcCalls.map((c) => c.method)), args[0]).toEqual(new Set(rpcCalls.map((c) => c.method).filter((m) => ["eth_chainId", "eth_call", "eth_getBalance", "eth_getBlockByNumber", "eth_blockNumber"].includes(m))));
+      // a grant shows the owner's token balance (balanceOf) and checks nothing with it: it is read when the request is adopted
+      if (args[0] === "grant") expect(rpcCalls.filter((c) => c.method === "eth_call" && String(c.params[0]?.data).startsWith("0x70a08231"))).toEqual([]);
+    }
+    expect(site.posts).toEqual([]);
+    expect(site.requests).toEqual([]);
   }, 120_000);
 
   it("refuses --sign-only where nothing could adopt it, and with flags that send or wait", async () => {
@@ -546,12 +586,41 @@ describe("signed here, adopted by id (the dispatcher)", () => {
         const { id, v, r } = await signAndSend();
         askedThenDown();
         pastWindow(id);
-        // no site request was given: this machine sent nothing, and the record stays open for the one the connector sent
-        const late = await budget(["wait", "--shown", "--id", id]);
-        expect(late.result).toMatchObject({ state: "refused_precheck", final: false });
+        // no site request was given: this machine sent nothing, but the connector did, so the expiry is unknown and the record stays open
+        unknown(await budget(["wait", "--shown", "--id", id]), "a wait past the window with no id given");
         expect(record(id).final).toBeUndefined();
         unknown(await budget(adoptArgs(id, v)), "the adoption after the window");
         unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a later wait");
+        await settles(id, r);
+      },
+    },
+    {
+      path: "the token renewal answers 503 with money_moved, past the window, then renewed and adopted",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        site.renewAnswer = () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } });
+        unknown(await budget(adoptArgs(id, v)), "the adoption");
+        expect(record(id).hosted.signed).toMatchObject({ walletAsked: true, submitted: { requestId: v.request_id, link: v.approval_link, matchCode: v.match_code } });
+        expect(existsSync(lockPath())).toBe(true);
+        pastWindow(id);
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a wait past the window");
+        site.renewAnswer = undefined;
+        unknown(await budget(["wait", "--id", id, "--timeout", "0"]), "the adoption on a later wait");
+        expect(record(id).hosted).toMatchObject({ requestId: v.request_id, signed: { walletAsked: true } });
+        await settles(id, r);
+      },
+    },
+    {
+      path: "the token renewal gets no answer, then a read shows the wallet asked",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        site.renewAnswer = () => ({ status: 502, body: "" });
+        unknown(await budget(adoptArgs(id, v)), "the adoption");
+        expect(record(id).hosted.signed).toMatchObject({ submitted: { requestId: v.request_id } });
+        site.renewAnswer = undefined;
+        askedThenDown();
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "the adoption on a later wait");
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a wait after it");
         await settles(id, r);
       },
     },
