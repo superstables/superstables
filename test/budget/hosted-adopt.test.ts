@@ -4,8 +4,10 @@
 // or redirect it; the client reports an outcome only from a confirmed basis, never from what the connector says.
 //
 // The paths that can break it on this side, each covered below:
-//   - a signed record that was never adopted and is past the site's window: expired, nothing sent ("expired")
+//   - a signed record that no site request was given for, past the site's window: expired, nothing sent, still adoptable ("expired")
 //   - adopting a request another agent made, or one for other terms: refused before any record changes ("another agent", "other terms")
+//   - a read during adoption that fails or shows the owner's wallet was asked, before or after adopting, then reads that fail, the
+//     window passing after the connector sent it, and a killed wait: unknown until the outcome is final ("wallet maybe asked")
 //   - settling an adopted request without a confirmed basis: the sink parks it ("confirmed basis")
 //   - a wait killed while it reads an adopted request: the next one resumes it and settles once ("killed wait")
 //   - the access token anywhere but the approval record, mode 600 ("token")
@@ -71,9 +73,11 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
   }
   async function adopt(key: typeof KEY, signed: SignedRecord, given: { requestId: string; link: string; matchCode: string }, ask: Ask) {
     let adopted: HostedRecord | undefined;
-    const c = new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: key, adopt: { signed, ...given, onAdopt: (r) => { adopted = r; } } });
+    let asked: boolean | undefined;
+    const kept: { requestId: string; walletAsked: boolean }[] = [];
+    const c = new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: key, adopt: { signed, ...given, onAdopt: (r, _shown, walletAsked) => { adopted = r; asked = walletAsked; }, onUnsettled: (u) => { kept.push(u); } } });
     const err = await ask(c).catch((e) => e);
-    return { err, adopted };
+    return { err, adopted, asked, kept };
   }
 
   it("--sign-only signs the body the create path sends, with the four agent proof headers, and sends nothing", async () => {
@@ -156,10 +160,11 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       (v: any) => { const { agent: _drop, ...rest } = v; return rest; },
     ]) {
       site.readAnswer = (_r, v) => ({ status: 200, body: change(v) });
-      const { err, adopted } = await adopt(KEY, record, given, bundle(AGENT));
+      const { err, adopted, kept } = await adopt(KEY, record, given, bundle(AGENT));
       expect(err).toBeInstanceOf(HostedRefusal);
       expect((err as HostedRefusal).message).toMatch(/not adopted: .*Nothing was recorded/);
       expect(adopted).toBeUndefined();
+      expect(kept).toEqual([]);
     }
   });
 
@@ -185,17 +190,33 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     expect(site.requests[0].renewals).toBeUndefined();
   });
 
-  it("a read that fails records nothing; one that shows the wallet was asked is unknown, never nothing sent", async () => {
+  it("this agent's request whose read fails, or shows the wallet was asked, is kept before the refusal and is unknown, never nothing sent; an adopted one keeps the evidence", async () => {
     const { request, record } = await sign(KEY, grant(AGENT, 10000n));
     const given = await submit(request);
     site.readAnswer = () => ({ status: 503, body: { error: { code: "unavailable" } } });
     const a = await adopt(KEY, record, given, grant(AGENT, 10000n));
-    expect((a.err as HostedRefusal).message).toMatch(/could not be read back/);
-    expect((a.err as HostedRefusal).sending).toBe(false);
+    expect((a.err as HostedRefusal).message).toMatch(/could not be read back.*It is kept with this approval/);
+    expect((a.err as HostedRefusal).message).not.toMatch(/Nothing was recorded|nothing was sent/i);
+    expect((a.err as HostedRefusal).sending).toBe(true);
+    expect(a.kept).toMatchObject([{ requestId: given.requestId, link: given.link, matchCode: given.matchCode, walletAsked: false }]);
     site.readAnswer = () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } });
     const b = await adopt(KEY, record, given, grant(AGENT, 10000n));
     expect((b.err as HostedRefusal).sending).toBe(true);
     expect(b.adopted).toBeUndefined();
+    expect(b.kept).toMatchObject([{ requestId: given.requestId, walletAsked: true }]);
+    // other terms, but the wallet was asked: kept too
+    site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, transaction: grantTx(AGENT, 20000n), state: "sending", wallet_asked: true } });
+    const c = await adopt(KEY, record, given, grant(AGENT, 10000n));
+    expect((c.err as HostedRefusal).message).toMatch(/another transaction.*may have sent/);
+    expect(c.kept).toMatchObject([{ walletAsked: true }]);
+    // adopted while the wallet is asked: the evidence goes with it
+    site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, state: "sending", wallet_asked: true } });
+    const d = await adopt(KEY, record, given, grant(AGENT, 10000n));
+    expect(d.err).toBeInstanceOf(HostedAdopted);
+    expect(d.asked).toBe(true);
+    expect(d.kept).toEqual([]);
+    site.readAnswer = undefined;
+    expect((await adopt(KEY, record, given, grant(AGENT, 10000n))).asked).toBe(false);
   });
 
   it("confirmed basis: once adopted, a restarted worker parks on anything the site did not confirm, and settles on a final read", async () => {
@@ -358,10 +379,12 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     writeFileSync(recordPath(id), JSON.stringify(r));
     const late = await budget(["wait", "--id", id, "--shown"]);
     expect(late.code, late.stderr).toBe(3);
-    expect(late.result).toMatchObject({ command: "grant", state: "refused_precheck", final: true, id });
+    expect(late.result).toMatchObject({ command: "grant", state: "refused_precheck", final: false, id });
     expect(late.result.reason).toMatch(/expired.*Nothing was sent from this machine/);
     expect(late.result.next).toContain("--sign-only");
-    expect(record(id).final.code).toBe(3);
+    expect(late.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
+    // not final: had the connector sent it in time, --site-request would still adopt that request
+    expect(record(id).final).toBeUndefined();
     expect(site.posts).toEqual([]);
     // the next owner command signs afresh
     const again = await budget([...grantArgs, "--sign-only"]);
@@ -445,6 +468,113 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(own.code, own.stderr).toBe(0);
     expect(own.result).toMatchObject({ state: "waiting_owner", id });
   }, 240_000);
+
+  // Once the owner's wallet may have been asked, the outcome is unknown, never "nothing sent", "refused" or "failed", until the site or
+  // the chain gives a final answer: every path below that saw a site request reads unknown, and each ends settled once the owner's
+  // transaction is on the site and the chain.
+  const unknown = (out: Run, what: string) => {
+    expect(out.code, `${what}: ${out.stderr}`).toBe(5);
+    expect(out.result, what).toMatchObject({ state: "unknown", final: false });
+  };
+  const signAndSend = async () => {
+    const signed = await budget([...grantArgs, "--sign-only"]);
+    expect(signed.code, signed.stderr).toBe(0);
+    const v = await connector(signed.result.request);
+    return { id: signed.result.id as string, v, r: site.requests.at(-1)! };
+  };
+  const pastWindow = (id: string) => {
+    const r = record(id);
+    r.hosted.signed.signedAt -= 301;
+    writeFileSync(recordPath(id), JSON.stringify(r));
+  };
+  /** The first read shows the wallet asked, every later one fails. */
+  const askedThenDown = () => {
+    let reads = 0;
+    site.readAnswer = (_r, v) => (++reads === 1 ? { status: 200, body: { ...v, state: "sending", wallet_asked: true, final: false } } : { status: 503, body: { error: { code: "unavailable" } } });
+  };
+  async function settles(id: string, r: { state?: string }) {
+    site.readAnswer = undefined;
+    Object.assign(r, { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    chain.approved = true;
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ command: "grant", state: "settled", final: true, tx: { grant: GRANT_HASH } });
+    expect(lines("B4_CAP")).toBe(1);
+    expect(site.posts.filter((p) => p.path === "/api/v1/budget/approvals")).toHaveLength(1);
+    expect(existsSync(lockPath())).toBe(false);
+  }
+  it.each([
+    {
+      path: "adopted while the wallet is asked, then every read fails",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        askedThenDown();
+        unknown(await budget([...adoptArgs(id, v), "--timeout", "0"]), "the adoption");
+        expect(record(id).hosted).toMatchObject({ requestId: v.request_id, signed: { walletAsked: true } });
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a later wait");
+        await settles(id, r);
+      },
+    },
+    {
+      path: "refused with money_moved, past the window, read failing again, then read and adopted",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        site.readAnswer = () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } });
+        const first = await budget(adoptArgs(id, v));
+        unknown(first, "the adoption");
+        expect(first.result.next).toContain(`superstables budget wait --id ${id} --shown`);
+        expect(record(id).hosted.signed).toMatchObject({ walletAsked: true, submitted: { requestId: v.request_id, link: v.approval_link, matchCode: v.match_code } });
+        // the chain stays held: no other owner command starts while the wallet may be sending
+        expect(existsSync(lockPath())).toBe(true);
+        expect((await budget([...grantArgs, "--sign-only"])).code).toBe(3);
+        pastWindow(id);
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a wait past the window");
+        expect(record(id).final).toBeUndefined();
+        // another request id is not taken in its place
+        unknown(await budget(adoptArgs(id, { ...v, request_id: "ba_other0001" })), "another id");
+        // the site answers again: wait adopts the kept request with the values kept for it, and the evidence stays
+        site.readAnswer = undefined;
+        unknown(await budget(["wait", "--id", id, "--timeout", "0"]), "the adoption on a later wait");
+        expect(record(id).hosted).toMatchObject({ requestId: v.request_id, signed: { walletAsked: true } });
+        expect(record(id).hosted.signed.submitted).toBeUndefined();
+        await settles(id, r);
+      },
+    },
+    {
+      path: "sent in time, the window passes before any id is given, then adopted while the wallet is asked",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        askedThenDown();
+        pastWindow(id);
+        // no site request was given: this machine sent nothing, and the record stays open for the one the connector sent
+        const late = await budget(["wait", "--shown", "--id", id]);
+        expect(late.result).toMatchObject({ state: "refused_precheck", final: false });
+        expect(record(id).final).toBeUndefined();
+        unknown(await budget(adoptArgs(id, v)), "the adoption after the window");
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "a later wait");
+        await settles(id, r);
+      },
+    },
+    {
+      path: "a wait killed while it reads a request adopted with the wallet asked",
+      run: async () => {
+        const { id, v, r } = await signAndSend();
+        askedThenDown();
+        unknown(await budget([...adoptArgs(id, v), "--timeout", "0"]), "the adoption");
+        const reading = start(["wait", "--shown", "--id", id, "--timeout", "60"]);
+        await new Promise((x) => setTimeout(x, 3000));
+        reading.child.kill("SIGKILL");
+        await reading.done;
+        await endEveryProcess(id);
+        expect(record(id).final).toBeUndefined();
+        unknown(await budget(["wait", "--shown", "--id", id, "--timeout", "0"]), "the wait after the kill");
+        await settles(id, r);
+      },
+    },
+  ])("wallet maybe asked: $path reads unknown until the outcome is final", async ({ run }) => {
+    onRecord(true);
+    await run();
+  }, 300_000);
 
   it("killed wait: a wait killed while it reads an adopted request is resumed by the next one, which settles once", async () => {
     onRecord(true);
