@@ -1280,12 +1280,11 @@ function run(spec) {
 function handedOver(code, stdout, stderrTail) {
   const rr = railResult(stdout);
   if (ADOPTING) {
-    // a check that ended without a RESULT may have stopped after the site's read: wait answers from what the record kept. One that
-    // stopped on a check of this machine first (its last words a REFUSED: or error: line, not a crash's trace: the RPC's chain, the
-    // public file) is named as such, so wait says what to fix
-    const why = lastError(stderrTail) ?? `the owner script exited ${code}`;
-    const local = /^(?:REFUSED|error):/.test(String(stderrTail).trim().split("\n").at(-1)?.trim() ?? "");
-    writeResult(rr ?? { ok: false, state: local ? "refused_precheck" : "unknown", final: false, reason: why });
+    // a check that ended without a RESULT may have stopped after the site's read: wait answers from what the record kept. Every
+    // site answer ends in a RESULT, so one with words and none stopped on this machine (a refusal, the RPC's chain, the public
+    // file, a crash): named as such, so wait says what to fix
+    const why = lastError(stderrTail);
+    writeResult(rr ?? { ok: false, state: why ? "refused_precheck" : "unknown", final: false, reason: why ?? `the owner script exited ${code}` });
     process.exit(code ?? 1);
   }
   const line = stdout.split("\n").find((l) => l.startsWith("SIGNED {"));

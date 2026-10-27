@@ -772,6 +772,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
       fault: () => ({
         on: () => { script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
         off: () => writeFileSync(railScript(), script),
+        local: /injected crash after the write-ahead/,
       }),
     },
   ])("after a possible send: $path is unknown, keeps the request and holds the chain, inside and after the window", async ({ path, fault }) => {
@@ -786,7 +787,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
       if (f.local) {
         expect(adopted.result.next, path).toMatch(/This machine could not check it/);
         expect(adopted.result.reason, path).toMatch(f.local);
-      } else expect(adopted.result.next, path).not.toMatch(/This machine could not check it/);
+      } else expect(adopted.result.next, `${path}: ${adopted.result.reason}`).not.toMatch(/This machine could not check it/);
       expect(record(id).hosted.signed.submitted, path).toEqual({ requestId: v.request_id, link: v.approval_link, matchCode: v.match_code });
       expect(record(id).hosted.requestId, path).toBeUndefined();
       neverDefinite(await budget(["wait", "--id", id, "--shown", "--timeout", "0"], env), `${path}: a plain wait inside the window`);
