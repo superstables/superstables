@@ -14,6 +14,7 @@ The owner approves a spending cap once, in their own wallet. You then buy from s
 - The owner's steps per rail
 - Owner approvals in detail
 - Buying under a budget
+- Sending a budget request through the connector
 - Showing each result on screen
 - Reconcile
 - Recover (evm)
@@ -140,6 +141,23 @@ If the user says a budget exists but status finds none, it may be under another 
 On `evm`, before the agent signs anything, `buy` checks that the agent key can pay the gas, at the current fee, for the pull and for the cancel and return a failed purchase would need. When it cannot, `buy` exits 3 before signing and `next` names `fund-agent`: tell the owner. A gas shortage is not a refusal by the chain. `doctor` sizes its gas minimums from the current fee.
 
 A seller error after payment is `settled` with `delivered: false` (exit 4): never pay again.
+
+## Sending a budget request through the connector
+
+When the Superstables connector is signed in and offers `submit_budget_request` ("Send a budget request for approval"), send an approval on superstables.com through it, so the owner sees the request on screen. This covers `setup --hosted`, and `grant` and `revoke` on a chain with approvals on superstables.com. Your agent key signs on this machine; the connector only carries what you signed.
+
+1. **Sign, send nothing.** Run the same command with `--sign-only`, for example `superstables budget setup --rail evm --hosted --chain C --grant A --fund --sign-only`. It prints one JSON block (`method`, `path`, `headers`, `body`) and a `RESULT` line with the approval `id`. Nothing has reached the site yet.
+2. **Send the block as printed.** Call `submit_budget_request` once, with that block unchanged. Never edit, rebuild or re-type it, and never send it twice: the signature covers those exact bytes, and a second send is refused as reused. It returns `request_id`, `approval_link`, `match_code` and `expires_at`.
+3. **Reply to the owner and end your turn.** Give them the `approval_link` and `match_code` exactly as returned, `expires_at`, what they are approving (the amount and network you signed for), the testnet line, and "Tell me when you've approved". Use only the link and code the connector returned.
+4. **When the owner says they've approved**, run `superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE --shown`, with `ID` from the signing `RESULT` and the other three values from `submit_budget_request`. Then call `get_budget_request` with the whole `approval_link`, and again after each `wait` until `final` is `true`, as under "Showing each result on screen".
+
+When the connector is missing or signed out, when it does not offer `submit_budget_request` (a connector signed in before that tool existed may lack permission for it), or when the submit is refused, use the direct path in this file: the same command without `--sign-only`, which sends the request from this machine. Tell the owner which path you used.
+
+- **`request_open`**: an approval is already open for this agent. Do not sign again. Run `superstables budget status --rail R --chain C` for the pending `id`, follow it with `wait --id ID --shown`, or ask the owner whether to let it expire.
+- **`proof_reused`**: the block was already sent, so a request may exist. Do not sign or send again; find it with `budget status` and follow it as above.
+- **Any other refusal** (`agent_proof`, a stale request, a missing permission, a limit): nothing was created. Say what the connector answered, then run the command once without `--sign-only`.
+- A result is final only when the CLI says so. The connector's answer never turns a `refused_precheck`, `unknown` or `failed` result into another one: the CLI's confirmed result stands.
+- Never write the approval link's `#` token anywhere but in your reply to the owner. `fund-agent`, `recover` and `buy` do not use this path.
 
 ## Showing each result on screen
 
