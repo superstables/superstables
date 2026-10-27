@@ -14,7 +14,7 @@
 // First against HostedApprovals and a fake superstables.com, then through the real dispatcher and evm rail scripts with a fake
 // Base Sepolia RPC. No network, no real key.
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -126,6 +126,7 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     expect(err).toBeInstanceOf(HostedRefusal);
     expect((err as HostedRefusal).message).toMatch(/not adopted: another agent's key made that request\. Nothing was recorded/);
     expect((err as HostedRefusal).sending).toBe(false);
+    expect((err as HostedRefusal).notAdopted).toBe(true);
     expect(adopted).toBeUndefined();
     expect(site.requests[0].renewals).toBeUndefined();
     expect(site.requests[0].cancels).toBe(0);
@@ -148,23 +149,33 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     expect(site.requests[0].cancels).toBe(0);
   });
 
-  it("other terms on a link: other steps, no expected owner or no owner proof v2 in the site's read are refused", async () => {
+  it("other terms on a link: a complete read with other steps, owner proof or chain is refused; one that leaves a field out or garbles it is kept", async () => {
     const { request, record } = await sign(KEY, bundle(AGENT));
     const given = await submit(request);
-    for (const change of [
-      (v: any) => ({ ...v, steps: v.steps.slice(0, 1) }),
-      (v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: grantTx(AGENT, 20000n) }] }),
-      (v: any) => { const { expected_owner: _drop, ...rest } = v; return rest; },
-      (v: any) => ({ ...v, owner_proof_version: 1 }),
-      (v: any) => ({ ...v, chain: { key: "arc-testnet" } }),
-      (v: any) => { const { agent: _drop, ...rest } = v; return rest; },
-    ]) {
+    const drop = (key: string) => (v: any) => { const { [key]: _drop, ...rest } = v; return rest; };
+    for (const [change, refused] of [
+      [(v: any) => ({ ...v, steps: v.steps.slice(0, 1) }), true],
+      [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: grantTx(AGENT, 20000n) }] }), true],
+      [(v: any) => ({ ...v, owner_proof_version: 1 }), true],
+      [(v: any) => ({ ...v, chain: { key: "arc-testnet" } }), true],
+      [drop("expected_owner"), false],
+      [drop("agent"), false],
+      [drop("steps"), false],
+      [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: { to: "nope" } }] }), false],
+    ] as const) {
       site.readAnswer = (_r, v) => ({ status: 200, body: change(v) });
       const { err, adopted, kept } = await adopt(KEY, record, given, bundle(AGENT));
       expect(err).toBeInstanceOf(HostedRefusal);
-      expect((err as HostedRefusal).message).toMatch(/not adopted: .*Nothing was recorded/);
       expect(adopted).toBeUndefined();
-      expect(kept).toEqual([]);
+      expect((err as HostedRefusal).notAdopted, String(change)).toBe(refused);
+      if (refused) {
+        expect((err as HostedRefusal).message).toMatch(/not adopted: .*Nothing was recorded/);
+        expect(kept).toEqual([]);
+      } else {
+        expect((err as HostedRefusal).message).toMatch(/It is kept with this approval/);
+        expect((err as HostedRefusal).sending).toBe(true);
+        expect(kept).toMatchObject([{ requestId: given.requestId, walletAsked: false }]);
+      }
     }
   });
 
@@ -222,20 +233,34 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
   it("a token renewal the site does not answer as another agent's or missing keeps the request before the refusal, with the answer's evidence", async () => {
     const { request, record } = await sign(KEY, grant(AGENT, 10000n));
     const given = await submit(request);
+    const asked = [{ requestId: given.requestId, walletAsked: true }];
+    const notAsked = [{ requestId: given.requestId, link: given.link, matchCode: given.matchCode, walletAsked: false }];
+    // only the site's own refusals (renewAccess), complete and with no wallet asked, are a basis: every other answer keeps the request
     const cases: [{ status: number; body: unknown }, object[]][] = [
-      [{ status: 404, body: { error: { code: "not_found" } } }, []],
-      [{ status: 403, body: { error: { code: "not_your_request" } } }, []],
-      [{ status: 503, body: { error: { code: "unavailable" } } }, [{ requestId: given.requestId, link: given.link, matchCode: given.matchCode, walletAsked: false }]],
-      [{ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }, [{ requestId: given.requestId, walletAsked: true }]],
-      [{ status: 403, body: { error: { code: "not_your_request", money_moved: true } } }, [{ requestId: given.requestId, walletAsked: true }]],
+      [{ status: 404, body: { error: { code: "not_found", message: "there is no budget request with this id" } } }, []],
+      [{ status: 403, body: { error: { code: "not_your_request", message: "another agent's key made this request" } } }, []],
+      [{ status: 503, body: { error: { code: "unavailable" } } }, notAsked],
+      [{ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }, asked],
+      [{ status: 403, body: { error: { code: "not_your_request", money_moved: true } } }, asked],
+      [{ status: 404, body: { error: { code: "not_found", wallet_asked: true } } }, asked],
+      [{ status: 403, body: "upstream access denied" }, notAsked],
+      [{ status: 404, body: { error: { code: "upstream_unavailable" } } }, notAsked],
+      [{ status: 403, body: { code: "not_your_request" } }, notAsked],
+      [{ status: 404, body: "" }, notAsked],
+      [{ status: 403, body: { error: { code: "not_your_request", message: "x".repeat(1_100_000) } } }, notAsked],
+      [{ status: 404, body: { error: { code: "not_your_request" } } }, notAsked],
+      [{ status: 401, body: { error: { code: "agent_proof" } } }, notAsked],
+      [{ status: 200, body: { id: given.requestId } }, notAsked],
     ];
     for (const [answer, kept] of cases) {
+      const what = JSON.stringify(answer).slice(0, 120);
       site.renewAnswer = () => answer;
       const out = await adopt(KEY, record, given, grant(AGENT, 10000n));
-      expect(out.err, JSON.stringify(answer)).toBeInstanceOf(HostedRefusal);
+      expect(out.err, what).toBeInstanceOf(HostedRefusal);
       expect(out.adopted).toBeUndefined();
-      expect(out.kept, JSON.stringify(answer)).toMatchObject(kept);
-      expect((out.err as HostedRefusal).sending).toBe(kept.length > 0);
+      expect(out.kept, what).toMatchObject(kept);
+      expect((out.err as HostedRefusal).sending, what).toBe(kept.length > 0);
+      expect((out.err as HostedRefusal).notAdopted, what).toBe(kept.length === 0);
       if (kept.length) expect((out.err as HostedRefusal).message).not.toMatch(/Nothing was recorded/);
     }
   });
@@ -275,8 +300,8 @@ const rpcCalls: { method: string; params: any[] }[] = [];
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
 const outputs: string[] = [];
-function start(args: string[]): { child: ChildProcess; done: Promise<Run> } {
-  const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc!.url };
+function start(args: string[], extraEnv: Record<string, string> = {}): { child: ChildProcess; done: Promise<Run> } {
+  const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc!.url, ...extraEnv };
   for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
   tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }] });
   const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
@@ -294,7 +319,7 @@ function start(args: string[]): { child: ChildProcess; done: Promise<Run> } {
   });
   return { child, done };
 }
-const budget = (args: string[]) => start(args).done;
+const budget = (args: string[], extraEnv?: Record<string, string>) => start(args, extraEnv).done;
 
 const approvals = () => join(home, "budget", "approvals");
 const publicPath = () => join(home, "budget", "public", "evm-base-sepolia.env");
@@ -396,6 +421,10 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(early.code, early.stderr).toBe(0);
     expect(early.result).toMatchObject({ state: "signed", final: false, id, expires: signed.result.expires });
     expect(early.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
+    // the connector may already have sent it: never a bare "nothing was sent"
+    expect(early.result.next).toMatch(/Nothing was sent from this machine, but if submit_budget_request already sent it, the owner may be approving it now/);
+    expect(JSON.stringify(early.result)).not.toMatch(/nothing was sent(?! from this machine)/i);
+    expect(JSON.stringify(signed.result)).not.toMatch(/nothing was sent(?! from this machine)/i);
 
     // never adopted, and past the site's window
     const r = record(id);
@@ -430,6 +459,50 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     }
     expect(site.posts).toEqual([]);
     expect(site.requests).toEqual([]);
+  }, 120_000);
+
+  it("setup --hosted --sign-only reads the agent's balance only for a fund step, and the block for any step", async () => {
+    onRecord(false);
+    const agentBalance = () => rpcCalls.filter((c) => c.method === "eth_getBalance" && String(c.params[0]).toLowerCase() === AGENT.toLowerCase());
+    const rows: [string[], string[]][] = [[["--grant", "0.01"], ["grant"]], [["--fund"], ["fund_agent"]], [["--grant", "0.01", "--fund"], ["fund_agent", "grant"]], [[], []]];
+    for (const [extra, steps] of rows) {
+      rpcCalls.length = 0;
+      const out = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...extra, "--sign-only"]);
+      expect(out.code, out.stderr).toBe(0);
+      expect(out.result).toMatchObject({ command: "setup", state: "signed" });
+      expect((JSON.parse(out.result.request.body).then ?? []).map((t: { kind: string }) => t.kind)).toEqual(steps);
+      expect(agentBalance(), extra.join(" ")).toHaveLength(steps.includes("fund_agent") ? 1 : 0);
+      expect(rpcCalls.some((c) => c.method === "eth_blockNumber"), extra.join(" ")).toBe(steps.length > 0);
+    }
+    expect(site.posts).toEqual([]);
+  }, 180_000);
+
+  it("grant --sign-only on a chain whose gas is USDC reads no owner balance: no fee check needs it there", async () => {
+    onRecord(true);
+    const arcCalls: { method: string; params: any[] }[] = [];
+    const arc = await startFakeRpc(5042002, (method, params) => {
+      arcCalls.push({ method, params });
+      if (method === "eth_blockNumber") return "0x10";
+      if (method === "eth_call") return `0x${"0".repeat(64)}`;
+      return undefined;
+    });
+    try {
+      writeFileSync(join(home, "budget", "public", "evm-arc-testnet.env"), publicFile());
+      tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: arc.url, operator: "fake-a" }, { url: `${arc.url}/`, operator: "fake-b" }] });
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: arc.url };
+      for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
+      const out = await new Promise<{ code: number; stderr: string }>((ok) => {
+        const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...grantArgs, "--chain", "arc-testnet", "--sign-only"], { cwd: tree.root, env });
+        let stderr = "";
+        child.stderr!.on("data", (c) => (stderr += String(c)));
+        child.once("close", (code) => ok({ code: code ?? 0, stderr }));
+      });
+      expect(arcCalls.length, out.stderr).toBeGreaterThan(0);
+      expect(arcCalls.filter((c) => c.method === "eth_getBalance" && String(c.params[0]).toLowerCase() === OWNER.toLowerCase()), out.stderr).toEqual([]);
+    } finally {
+      await arc.close();
+    }
+    expect(site.posts).toEqual([]);
   }, 120_000);
 
   it("refuses --sign-only where nothing could adopt it, and with flags that send or wait", async () => {
@@ -643,6 +716,95 @@ describe("signed here, adopted by id (the dispatcher)", () => {
   ])("wallet maybe asked: $path reads unknown until the outcome is final", async ({ run }) => {
     onRecord(true);
     await run();
+  }, 300_000);
+
+  // One rule for every path after a possible send. From the moment a request is signed, this machine cannot know whether the
+  // connector sent it. wait --site-request keeps the id, link and match code with the approval before it asks the site or checks
+  // anything; from then on, whatever stops the check (any answer of the site but its complete "not this request", a check on this
+  // machine, a crash) and every plain wait after it, inside the window or after it, is unknown with the request kept and the chain
+  // held, never refused_precheck, failed, exit 3, "nothing was sent" or "sign again". Once the fault is gone, a plain wait adopts it.
+  const neverDefinite = (out: Run, what: string) => {
+    unknown(out, what);
+    expect(JSON.stringify(out.result), what).not.toMatch(/refused_precheck|"state":"failed"|--sign-only|sign (it )?again|sign a new|nothing was (signed or )?(sent|requested)(?! from this machine)/i);
+  };
+  /** The chain is held for `id`, even once its lock is older than the startup grace and no process of it runs. */
+  async function heldFor(id: string, what: string) {
+    expect(existsSync(lockPath()), what).toBe(true);
+    const lock = JSON.parse(readFileSync(lockPath(), "utf8"));
+    writeFileSync(lockPath(), JSON.stringify({ ...lock, createdAt: Date.now() - 31_000 }));
+    const other = await budget([...grantArgs, "--sign-only"]);
+    expect(other.code, `${what}: ${other.stderr}`).toBe(3);
+    expect(other.result.reason, what).toContain(id);
+  }
+  const keyFile = () => join(home, "keys", "budget", "evm-agent.env");
+  const railScript = () => join(tree.root, "budget", "evm", "setBudget.ts");
+  type Fault = { on: () => void | Promise<void>; off: () => void | Promise<void>; env?: () => Record<string, string>; local?: RegExp };
+  const answer = (status: number, body: unknown): Fault => ({ on: () => { site.renewAnswer = () => ({ status, body }); }, off: () => { site.renewAnswer = undefined; } });
+  let script = "";
+  it.each<{ path: string; fault: () => Fault }>([
+    { path: "the token renewal answers 403 with a plain-text body", fault: () => answer(403, "upstream access denied") },
+    { path: "the token renewal answers 404 with another code", fault: () => answer(404, { error: { code: "upstream_unavailable" } }) },
+    { path: "the token renewal answers 403 not_your_request, cut off", fault: () => answer(403, { error: { code: "not_your_request", message: "x".repeat(1_100_000) } }) },
+    { path: "the token renewal answers 401", fault: () => answer(401, { error: { code: "agent_proof" } }) },
+    { path: "the token renewal answers 502 with nothing", fault: () => answer(502, "") },
+    { path: "the token renewal answers 200 without a token", fault: () => answer(200, { id: "ba_other0001" }) },
+    {
+      path: "the read leaves out the agent",
+      fault: () => ({ on: () => { site.readAnswer = (_r, v) => { const { agent: _drop, ...rest } = v as Record<string, unknown>; return { status: 200, body: rest }; }; }, off: () => { site.readAnswer = undefined; } }),
+    },
+    { path: "a local check: the agent key file can be read by other users", fault: () => ({ on: () => chmodSync(keyFile(), 0o644), off: () => chmodSync(keyFile(), 0o600), local: /key file/ }) },
+    {
+      path: "a local check: the shell names an RPC of another chain",
+      fault: () => {
+        let other: TestServer | undefined;
+        return { on: async () => { other = await startFakeRpc(1); }, off: async () => { await other?.close(); }, env: () => ({ B4_RPC: other!.url }), local: /answers chain id 1/ };
+      },
+    },
+    {
+      path: "a local check: the public file is gone",
+      fault: () => {
+        let before = "";
+        return { on: () => { before = publicFile(); rmSync(publicPath()); }, off: () => writeFileSync(publicPath(), before), local: /no budget has been set up here/ };
+      },
+    },
+    {
+      path: "the check crashes after the request was kept",
+      fault: () => ({
+        on: () => { script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
+        off: () => writeFileSync(railScript(), script),
+      }),
+    },
+  ])("after a possible send: $path is unknown, keeps the request and holds the chain, inside and after the window", async ({ path, fault }) => {
+    onRecord(true);
+    const { id, v, r } = await signAndSend();
+    const f = fault();
+    await f.on();
+    try {
+      const env = f.env?.();
+      const adopted = await budget(adoptArgs(id, v), env);
+      neverDefinite(adopted, `${path}: the adoption`);
+      if (f.local) {
+        expect(adopted.result.next, path).toMatch(/This machine could not check it/);
+        expect(adopted.result.reason, path).toMatch(f.local);
+      } else expect(adopted.result.next, path).not.toMatch(/This machine could not check it/);
+      expect(record(id).hosted.signed.submitted, path).toEqual({ requestId: v.request_id, link: v.approval_link, matchCode: v.match_code });
+      expect(record(id).hosted.requestId, path).toBeUndefined();
+      neverDefinite(await budget(["wait", "--id", id, "--shown", "--timeout", "0"], env), `${path}: a plain wait inside the window`);
+      pastWindow(id);
+      neverDefinite(await budget(["wait", "--id", id, "--shown", "--timeout", "0"], env), `${path}: a plain wait after the window`);
+      expect(record(id).hosted.signed.submitted, path).toMatchObject({ requestId: v.request_id });
+      expect(record(id).final, path).toBeUndefined();
+    } finally {
+      await f.off();
+    }
+    await heldFor(id, path);
+    // nothing was cancelled, and the kept values adopt the request once the fault is gone
+    expect(r.cancels).toBe(0);
+    const later = await budget(["wait", "--id", id]);
+    expect(later.code, later.stderr).toBe(0);
+    expect(later.result).toMatchObject({ state: "waiting_owner", id, url: v.approval_link });
+    expect(record(id).hosted).toMatchObject({ requestId: v.request_id });
+    expect(record(id).hosted.signed.submitted).toBeUndefined();
   }, 300_000);
 
   it("killed wait: a wait killed while it reads an adopted request is resumed by the next one, which settles once", async () => {
