@@ -28,7 +28,7 @@ import {
 } from "../src/core/signer/owner-approval-server.ts";
 import { ownerApprovalsLog } from "./paths.mjs";
 import { bindingFacts } from "./page-facts.mjs";
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, SIGN_ONLY_ENV, adoptSigned, canResume, resumeGeneration, readApproval, readRequestFact, recordHosted, recordSigned, recordTakenOver, saveRequestFact } from "./approvals.mjs";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, SIGN_ONLY_ENV, adoptSigned, canResume, recordUnsettled, resumeGeneration, readApproval, readRequestFact, recordHosted, recordSigned, recordTakenOver, saveRequestFact } from "./approvals.mjs";
 import { sendBegan } from "./proof.mjs";
 import { HOSTED_KIND, HostedAdopted, HostedApprovals, HostedRefusal, HostedSigned, type HostedBundleOutcome, type HostedSettings, type HostedStep, type PriorLink } from "./hosted.ts";
 import { DEFAULT_SITE, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
@@ -129,7 +129,11 @@ function hostedFor(settings: Omit<HostedSettings, "auditPath" | "onRecord">, act
       const given = JSON.parse(process.env[ADOPT_REQUEST_ENV] ?? "{}");
       hostedClient = new HostedApprovals({
         ...settings,
-        adopt: { signed: hosted, requestId: String(given.requestId ?? ""), link: String(given.link ?? ""), matchCode: String(given.matchCode ?? ""), onAdopt: (record, shown) => adoptSigned(holder!, hosted.signed.nonce, record, { ...shown, action, terms: plainTerms(shown.terms) }) },
+        adopt: {
+          signed: hosted, requestId: String(given.requestId ?? ""), link: String(given.link ?? ""), matchCode: String(given.matchCode ?? ""),
+          onAdopt: (record, shown, walletAsked) => adoptSigned(holder!, hosted.signed.nonce, record, { ...shown, action, terms: plainTerms(shown.terms) }, walletAsked),
+          onUnsettled: (u) => recordUnsettled(holder!, hosted.signed.nonce, u),
+        },
         auditPath: ownerApprovalsLog(),
       });
       return hostedClient;

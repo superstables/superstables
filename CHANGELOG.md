@@ -7,7 +7,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- **Budget requests signed on your machine, sent through the connector:** on EVM chains whose approvals are on superstables.com, `superstables budget setup --hosted`, `grant`, `revoke` and `fund-agent` take `--sign-only`. The agent key signs the request and the command sends nothing; it prints the signed request for the connector's `submit_budget_request` tool to send unchanged within 5 minutes. `superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE` then adopts the request the tool created, only after checking with the site that this agent made it and that it asks for exactly what was signed, and finishes it as if the command had sent it. A signed request that is never adopted expires, and nothing is sent from your machine.
+- **Budget requests signed on your machine, sent through the connector:** on EVM chains whose approvals are on superstables.com, `superstables budget setup --hosted`, `grant`, `revoke` and `fund-agent` take `--sign-only`. The agent key signs the request, and the command sends nothing to the site and no transaction; it prints the signed request for the connector's `submit_budget_request` tool to send unchanged within 5 minutes. `superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE` then adopts the request the tool created, only after checking with the site that this agent made it and that it asks for exactly what was signed, and finishes it as if the command had sent it. A signed request that is never adopted expires, and nothing is sent from your machine.
 
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 

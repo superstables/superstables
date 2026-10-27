@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, expireSigned, release, signedExpired, startSigning, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -175,14 +175,15 @@ owner is signed in with their wallet, and the APPROVE line carries a matchCode t
 this machine).`,
   "Recovery always uses this machine's local approval page, including on a chain set up with --hosted.",
 ).replace(/ \(and the\smatch code\)/, "");
-const SIGN_ONLY_HELP = `--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): signs the request this
-command would send to the site with the agent key, keeps it in an approval record on this machine (mode 600), and
-sends nothing. It prints the request as one JSON block, then a RESULT with state signed, final false, id, request and
-expires. The connector's submit_budget_request tool sends that request, unchanged, before expires (5 minutes after
-signing; after that the site refuses its signature), and returns request_id, approval_link and match_code. Then
-superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE adopts it: the
-approval continues as if this command had sent the request itself. A signed request never adopted reads as expired
-once the 5 minutes pass, with nothing sent from this machine. Not with --owner-key-file, --yes, --wait or --detach.`;
+const SIGN_ONLY_HELP = `--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): runs this command's
+checks, which read the chain, then signs the request it would send to the site with the agent key and keeps it in an
+approval record on this machine (mode 600). It sends nothing to the site and no transaction. It prints the request as
+one JSON block, then a RESULT with state signed, final false, id, request and expires. The connector's
+submit_budget_request tool sends that request, unchanged, before expires (5 minutes after signing; after that the site
+refuses its signature), and returns request_id, approval_link and match_code. Then superstables budget wait --id ID
+--site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE adopts it: the approval continues as if this command
+had sent the request itself. Once the 5 minutes pass, wait on a signed request that no request was given for reads
+expired, with nothing sent from this machine. Not with --owner-key-file, --yes, --wait or --detach.`;
 const OWNER_PRINTS = "the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final\n  false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), tx, next.";
 const COMMANDS = {
   setup: {
@@ -489,11 +490,14 @@ anything is recorded, the command checks that it still asks for exactly what was
 own for that request, that the site gives this agent's key a fresh access token for it (it refuses one for another
 agent's request), and that the site shows this agent, rail, chain and the signed transaction or steps. A request that
 fails any check is refused (exit 3, final false) and nothing is recorded: the signed approval can still adopt its own
-request. Once adopted, the approval continues as if the owner command had sent the request: without --shown, wait
-returns waiting_owner with message_for_owner, as the owner command would have; with --shown, it waits as above. Run
-on a signed approval without --site-request, wait returns state signed (final false) until 5 minutes after signing,
-then refused_precheck (exit 3, final true): the signature expired, nothing was sent from this machine, and the owner
-command can be run again with --sign-only.`,
+request. A request this agent's key made whose read fails, or shows the owner's wallet was asked, is kept with the
+approval instead: state unknown (exit 5, final false), the chain stays held, and every later wait checks that request
+again until it is adopted. Once adopted, the approval continues as if the owner command had sent the request: without
+--shown, wait returns waiting_owner with message_for_owner, as the owner command would have; with --shown, it waits as
+above. Run on a signed approval that no request was given for, wait returns state signed (final false) until 5
+minutes after signing, then refused_precheck (exit 3, final false): the signature expired and nothing was sent from
+this machine. Run the owner command again with --sign-only to sign a new request, or adopt the request the connector
+sent in time with --site-request.`,
       money: "no. It never approves or sends anything. With --site-request, the agent key signs one request to the site for\n  a fresh access token.",
       who: "anyone, usually the agent that started the owner command, after the owner says they've approved.",
       example: "superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60",
@@ -1267,7 +1271,8 @@ function run(spec) {
 function handedOver(code, stdout, stderrTail) {
   const rr = railResult(stdout);
   if (ADOPTING) {
-    writeResult(rr ?? { ok: false, state: "failed", reason: lastError(stderrTail) ?? `the owner script exited ${code}` });
+    // a check that ended without a RESULT may have stopped after the site's read: wait answers from what the record kept
+    writeResult(rr ?? { ok: false, state: "unknown", final: false, reason: lastError(stderrTail) ?? `the owner script exited ${code}` });
     process.exit(code ?? 1);
   }
   const line = stdout.split("\n").find((l) => l.startsWith("SIGNED {"));
@@ -2220,11 +2225,14 @@ const notSentNext = (f) => walletFlow(f) ? undefined : "rerun the same command w
 // A refusal or an unknown from an owner script keeps the script's own next step (it knows whether the owner declined).
 const ownerNext = (o, rr, fallback) => (["refused_precheck", "unknown"].includes(o.state) && rr?.next ? rr.next : fallback);
 
+// --sign-only skips the plan's read of the budget: it only shows it. The owner script still reads what it checks before it signs.
+const planRead = (f) => (f["sign-only"] ? { ok: false } : readBudget(f));
+
 async function grant({ f, ctx }) {
   const retired = retiredAgentProblem(f);
   if (retired) return refuseRetired(ctx, f, retired, { amount: f.amount, tx: {} });
   const secs = f.expiry ? Math.ceil((Date.parse(f.expiry) - Date.now()) / 1000) : 86400;
-  const now = await readBudget(f);
+  const now = await planRead(f);
   const unit = unitOf(f);
   log(`\nPLAN grant on ${f.rail} (${f.chain}). ${waitLine(f)}`);
   log(ownerLine(recordedOwner(f)));
@@ -2263,7 +2271,7 @@ async function grant({ f, ctx }) {
 
 async function revoke({ f, ctx }) {
   // the rail decides whether to send: no read here skips the revoke
-  const now = await readBudget(f);
+  const now = await planRead(f);
   log(`\nPLAN revoke on ${f.rail} (${f.chain}). ${waitLine(f)}`);
   log(ownerLine(recordedOwner(f)));
   if (modeLine(f)) log(modeLine(f));
@@ -2913,8 +2921,11 @@ async function wait({ f }) {
   if (once?.hosted?.signed && !once.final) {
     if (given !== undefined && once.hosted.requestId && once.hosted.requestId !== given) return badInput({ command: "wait" }, `${f.id} has already adopted ${once.hosted.requestId}, not ${given}: leave out --site-request, --link and --match`);
     if (awaitingAdoption(once)) {
-      if (given === undefined) return signedWait(once);
-      once = await adoptRequest(f, once);
+      // a site request kept unsettled is the one this approval may have: every wait checks it again, with the values kept for it
+      const unsettled = unsettledRequest(once);
+      if (unsettled && given !== undefined && given !== unsettled.requestId) return badInput({ command: "wait" }, `${f.id} keeps ${unsettled.requestId}, which may be its request and is not settled: leave out --site-request, --link and --match, and wait checks that one again`);
+      if (given === undefined && !unsettled) return signedWait(once);
+      once = await adoptRequest(given === undefined ? { ...f, "site-request": unsettled.requestId, link: unsettled.link, match: unsettled.matchCode } : f, once);
       adoptedNow = true;
     }
   } else if (given !== undefined && !(once?.final && once.hosted?.requestId === given)) {
@@ -2967,47 +2978,49 @@ async function wait({ f }) {
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true) : stillWaiting(rec.id), reason: words });
 }
 
-/** wait on a signed request no site request was adopted for: sendable until the site's window ends, then expired, with nothing sent. */
+/**
+ * wait on a signed request no site request was given for: sendable until the site's window ends, then expired, with nothing sent from
+ * here. Not final: the connector may still have sent it in time, and wait --site-request adopts that request whenever it is given.
+ */
 function signedWait(record) {
   const expires = new Date(Number(record.hosted.signed.signedAt) * 1000 + SIGNED_WINDOW_MS).toISOString();
+  const fields = { command: record.command, rail: record.rail, chain: record.chain, final: false, id: record.id, expires };
   if (!signedExpired(record)) {
-    return emit(0, { command: record.command, rail: record.rail, chain: record.chain, state: "signed", final: false, id: record.id, expires, next: signedNext(record.id, expires), reason: "no request from the site has been adopted for this signed request, so there is nothing to read yet" });
+    return emit(0, { ...fields, state: "signed", next: signedNext(record.id, expires), reason: "no request from the site has been adopted for this signed request, so there is nothing to read yet" });
   }
   const again = `superstables budget ${record.workerArgs.filter((a) => a !== "--wait" && a !== "--no-open").map(shellWord).join(" ")} --sign-only`;
-  let out;
-  try {
-    out = expireSigned(record.id, record, (before) => ({ code: 3, result: {
-      ok: false, command: before.command, rail: before.rail, chain: before.chain, state: "refused_precheck", id: before.id,
-      reason: `the signed request expired: no request made from it was adopted within ${SIGNED_WINDOW_MS / 1000} seconds of signing, and the site no longer accepts its signature. Nothing was sent from this machine`,
-      next: `to ask again, sign a new request: ${again}. If submit_budget_request did send this one, the site refuses a new request for this agent (request_open) until that one ends`,
-    } }));
-  } catch (err) {
-    if (err?.code !== RECORD_GONE) throw err;
-    out = { record: null };
-  }
-  const final = out.record?.final;
-  if (!final) return waitUnknown(record.id, record, "the signed request's record changed while this wait read it; this command changed nothing", `run superstables budget wait --id ${record.id} --shown again`);
-  writeResult({ ...final.result, ok: false, final: true });
-  process.exit(final.code);
+  emit(3, {
+    ...fields, state: "refused_precheck",
+    reason: `the signed request expired: no request made from it was adopted within ${SIGNED_WINDOW_MS / 1000} seconds of signing, and the site no longer accepts its signature. Nothing was sent from this machine`,
+    next: `to ask again, sign a new request: ${again}. If submit_budget_request did send this one and returned request_id, approval_link and match_code, adopt that request instead: superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. Until it ends, the site refuses a new request for this agent (request_open)`,
+  });
 }
 
+/** What to do about a site request kept unsettled for a signed approval: its outcome is unknown until a later wait adopts it. */
+const unsettledNext = (record, u) => `${u.requestId} may be the request made from this signed one, and ${record.hosted.signed.walletAsked ? "the owner's wallet was asked for it" : "the owner may still approve it on the site"}. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. Later, run superstables budget wait --id ${record.id} --shown: it checks ${u.requestId} again. Do not approve for the owner`;
+
 /**
- * wait --site-request: adopt the request the connector made from a signed one. The chain is taken for the approval first; then the
- * approval's own command, resumed, checks the request (hosted.ts adopt) and records it, or records nothing. Returns the record with
- * the request in it; a refusal ends this command with the record as it was and the chain free.
+ * wait --site-request: adopt the request the connector made from a signed one. The chain is taken for the approval first (a request
+ * kept unsettled holds it already); then the approval's own command, resumed, checks the request (hosted.ts adopt) and records it, or
+ * keeps it unsettled, or records nothing. Returns the record with the request in it. Otherwise this command ends: unknown, with the
+ * chain held, when a request is kept unsettled; refused, with the record as it was and the chain free, when nothing was kept.
  */
 async function adoptRequest(f, record) {
   const ctx = { command: "wait", rail: record.rail, chain: record.chain };
-  const held = claim(record.rail, record.chain, record.id);
-  if (!held.ok) return refusePending(ctx, held.pending);
+  if (findPending(record.rail, record.chain)?.id !== record.id) {
+    const held = claim(record.rail, record.chain, record.id);
+    if (!held.ok) return refusePending(ctx, held.pending);
+  }
   const checked = await adoptCheck(record, f);
   const now = readStrict(record.id, record);
   if (now?.hosted?.requestId === f["site-request"] && now.hosted.token) return now;
-  if (!now?.hosted?.requestId) release(record.rail, record.chain, record.id);
+  const unsettled = unsettledRequest(now);
+  if (!now?.hosted?.requestId && !unsettled) release(record.rail, record.chain, record.id);
   if (!now) return waitUnknown(record.id, record, `the approval's record disappeared from ${approvalsDir()} (or is no longer a record of this approval) while the request was checked; whether it was adopted is unknown`, `${CHECK_APPROVAL(`approval ${record.id}`)}, and check which home this command ran under (${HOME})`);
   const r = checked.result ?? {};
   const reason = clean(r.reason ?? checked.error ?? `the check exited ${checked.code}`);
   log(`superstables budget: ${f["site-request"]} was not adopted: ${reason}`);
+  if (unsettled) return emit(5, { ...ctx, state: "unknown", final: false, id: record.id, next: unsettledNext(now, unsettled), reason });
   if (r.state === "unknown") return emit(5, { ...ctx, state: "unknown", final: false, id: record.id, next: r.next ?? `${statusCommand(record)}: read whether it landed before running this again`, reason });
   return emit(3, { ...ctx, state: "refused_precheck", final: false, id: record.id, next: `nothing was recorded, and ${record.id} still waits for its own request: run superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE with the values submit_budget_request returned for it. A request another agent made, or one made from another signature, is never adopted`, reason });
 }

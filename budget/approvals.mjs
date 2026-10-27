@@ -624,6 +624,8 @@ function lockHeld(lock) {
   // owner may approve it after its worker is gone, so nothing new is asked until `wait` or --replace has settled it. A
   // single purchase is its own record, read by buy-once itself.
   if (record?.hosted?.token && record.command !== "buy-once") return true;
+  // so does a request signed here whose site request could not be adopted (unsettledRequest): the owner may approve that one too
+  if (unsettledRequest(record)) return true;
   return Date.now() - Number(lock.createdAt ?? 0) < STARTUP_GRACE_MS;
 }
 
@@ -870,30 +872,55 @@ export function recordSigned(id, s) {
 /** A request signed here that no site request has been adopted for yet. */
 export const awaitingAdoption = (record) => Boolean(record && !record.final && isObject(record.hosted?.signed) && !record.hosted.requestId);
 
-/** A signed request older than the site's window, never adopted: the site no longer takes it, so it can never be sent. */
-export const signedExpired = (record, now = Date.now()) => awaitingAdoption(record) && now - Number(record.hosted.signed.signedAt) * 1000 > SIGNED_WINDOW_MS;
+/**
+ * A site request this agent's key made (the site renewed its token), given for this signed request and not adopted: its read failed,
+ * or showed that the owner's wallet was asked. It may be this request, open on the site, so the record holds the chain and reads
+ * unknown until a later wait adopts it.
+ */
+export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
+
+/** A signed request past the site's window that no site request was given for: the site no longer takes it, and nothing here sent it. */
+export const signedExpired = (record, now = Date.now()) => awaitingAdoption(record) && !unsettledRequest(record) && now - Number(record.hosted.signed.signedAt) * 1000 > SIGNED_WINDOW_MS;
 
 /**
  * The site request made from the signed request `nonce` passed every check (hosted.ts adopt): record it, its token included, in one
- * locked step, only while the record still holds that signed request with nothing adopted. `shown` is what the owner was given (the
- * link, its expiry, the terms) and the action, for message_for_owner. Throws when nothing was recorded.
+ * locked step, only while the record still holds that signed request with nothing adopted (or with this request unsettled). `shown`
+ * is what the owner was given (the link, its expiry, the terms) and the action, for message_for_owner. `walletAsked`: the read showed
+ * the owner's wallet was asked; kept, like any earlier evidence, so every later reader reports the outcome unknown until it is final.
+ * Throws when nothing was recorded.
  */
-export function adoptSigned(id, nonce, hosted, shown) {
+export function adoptSigned(id, nonce, hosted, shown, walletAsked) {
   let taken = false;
   update(id, (before) => {
     if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
+    const unsettled = unsettledRequest(before);
+    if (unsettled && unsettled.requestId !== hosted.requestId) return null;
     taken = true;
+    const { submitted: _adopted, ...signed } = before.hosted.signed;
     return {
       state: "waiting_owner", action: shown.action, url: shown.url, expires: new Date(shown.expires).toISOString(), terms: shown.terms, matchCode: hosted.matchCode,
-      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline },
+      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline, signed: { ...signed, ...(walletAsked ? { walletAsked: true } : {}) } },
     };
   });
   if (!taken) throw new Error(`approval ${id} no longer holds that signed request unadopted; nothing was recorded`);
 }
 
-/** End a signed request that was never adopted and is past the site's window (signedExpired), with the result `build` gives. */
-export function expireSigned(id, seen, build) {
-  return recordFinalWith(id, (before) => (signedExpired(before) ? build(before) : null), { strict: seen });
+/**
+ * A site request this agent's key made could not be adopted for the signed request `nonce`, and may be it (unsettledRequest): kept
+ * under the record's lock before the refusal is reported. Evidence only grows: a request already kept stays, and once the wallet
+ * was seen asked it stays asked. Throws when nothing was kept.
+ */
+export function recordUnsettled(id, nonce, u) {
+  let kept = false;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
+    const earlier = unsettledRequest(before);
+    if (earlier && earlier.requestId !== u.requestId) return null;
+    kept = true;
+    const walletAsked = before.hosted.signed.walletAsked === true || u.walletAsked;
+    return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: u.requestId, link: u.link, matchCode: u.matchCode }, ...(walletAsked ? { walletAsked: true } : {}) } } };
+  });
+  if (!kept) throw new Error(`approval ${id} could not keep ${u.requestId}; whether the owner's wallet was asked for it is unknown`);
 }
 
 const bigintOut = (_key, value) => (typeof value === "bigint" ? { $bigint: value.toString() } : value);
@@ -1252,10 +1279,12 @@ export function recordMayHaveSent(record, page = null) {
 
 /**
  * Whether the owner's wallet was asked to send for this approval: the page's state (pageStateOf) says so, or the page log
- * did earlier, on this page or an earlier one of the same approval. Without `page`, the log alone decides, and nothing is
+ * did earlier, on this page or an earlier one of the same approval. Without `page`, the record and the log decide, and nothing is
  * read over the network.
  */
 export function walletWasAsked(record, page = null) {
+  // a read made while adopting a request signed here (wait --site-request) showed it, before or after it was adopted
+  if (record?.hosted?.signed?.walletAsked === true) return true;
   if (page?.walletAsked === true || page?.sending === true) return true;
   if (["sending", "sent", "hosted:sending", "hosted:unknown", "hosted:sent", "hosted:confirmed", "hosted:failed"].includes(page?.status)) return true;
   return [record?.url, ...(record?.earlierUrls ?? [])].some((url) => lastPageStatus(url).sending);

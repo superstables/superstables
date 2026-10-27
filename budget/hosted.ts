@@ -70,7 +70,9 @@
 // connector returned and checks them before anything is recorded: the command still builds the same body, the link is the site's own
 // for that id, the site gives this agent's key a fresh token for it (another agent's request is refused there), and the site's read of
 // it shows this agent, rail, chain and the exact transaction or steps that were signed. Only then is the request recorded
-// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over.
+// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over. A request the site
+// renewed a token for whose read failed, or showed the owner's wallet was asked, is kept first (`onUnsettled`): it may be this one,
+// so it is unknown, never "nothing sent", and a read showing the wallet was asked is kept with an adopted request too.
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as signBytes, verify as verifyBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -274,7 +276,7 @@ export type HostedRail = "evm" | "tempo" | "solana";
 /** A request signed here for someone else to send (--sign-only), as submit_budget_request takes it: header names lowercased, `body` the exact bytes signed. */
 export type SignedRequest = { method: "POST"; path: string; headers: Record<string, string>; body: string };
 /** What the approval record keeps of a signed request: its route and exact body, the proof's nonce and timestamp (unix seconds). */
-export type SignedFacts = { path: string; body: string; nonce: string; signedAt: number };
+export type SignedFacts = { path: string; body: string; nonce: string; signedAt: number; /** a read while adopting it showed the owner's wallet was asked */ walletAsked?: true };
 /** The approval record's request before a site request is adopted for it: no id, token or match code yet. */
 export type SignedRecord = Pick<HostedRecord, "site" | "kind" | "then" | "intent" | "proofVersion"> & { resumable: true; signed: SignedFacts };
 
@@ -330,9 +332,15 @@ export interface HostedSettings {
   signOnly?: (request: SignedRequest, record: SignedRecord) => void;
   /**
    * wait --site-request: the request the connector created from `signed`, as it returned it. Checked (see the header), then
-   * handed to onAdopt to record; nothing is polled and nothing is created.
+   * handed to onAdopt to record; nothing is polled and nothing is created. `walletAsked`: the read showed the owner's wallet was asked.
+   * A request this agent's key made that is not adopted, because its read failed or showed the wallet was asked, goes to onUnsettled
+   * before the refusal: it may be this request, open on the site.
    */
-  adopt?: { signed: SignedRecord; requestId: string; link: string; matchCode: string; onAdopt: (record: HostedRecord, shown: { url: string; expires: number; terms: OwnerTerms }) => void };
+  adopt?: {
+    signed: SignedRecord; requestId: string; link: string; matchCode: string;
+    onAdopt: (record: HostedRecord, shown: { url: string; expires: number; terms: OwnerTerms }, walletAsked: boolean) => void;
+    onUnsettled: (u: { requestId: string; link: string; matchCode: string; walletAsked: boolean }) => void;
+  };
 }
 
 /**
@@ -652,7 +660,8 @@ export class HostedApprovals {
     if (this.s.signOnly) return this.signOnly(path, JSON.stringify(body), { site: this.s.site, kind, ...(then ? { then: then.map((t) => t.kind) } : {}), intent, ...(proofAsked ? { proofVersion: proofAsked } : {}) });
     if (this.s.adopt) return this.adopt(this.s.adopt, { path, raw: JSON.stringify(body), body, kind, intent, then, terms: input.terms, timeoutMs: input.timeoutMs });
     const answer = taken
-      ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: NOT_SEEN, answer: undefined as unknown }
+      // a read made while adopting it may already have shown the wallet asked (adopt): a worker that takes it over starts from that
+      ? { linked: false as const, id: taken.requestId, token: taken.token, url: "", matchCode: taken.matchCode, expiresAt: taken.expiresAt ?? Date.now(), steps: undefined, seen: taken.signed?.walletAsked ? { asked: true, hash: null } : NOT_SEEN, answer: undefined as unknown }
       : await this.create(path, body, kind === "link" ? "bl_" : "ba_");
     if (answer.linked && then) {
       // the site must refuse a link with steps for an agent it already linked (409); a 200 here would skip every step
@@ -878,8 +887,8 @@ export class HostedApprovals {
   /** wait --site-request: check the request the connector created from the signed record, then record it (see the header). */
   private async adopt(a: NonNullable<HostedSettings["adopt"]>, ask: { path: string; raw: string; body: Record<string, unknown>; kind: HostedRecord["kind"]; intent: string; then?: HostedStep[]; terms: OwnerTerms; timeoutMs: number }): Promise<never> {
     const id = a.requestId;
-    const refuse = (why: string, sending = false): never => {
-      throw new HostedRefusal(`${isSiteRequestId(id) ? id : "that request"} was not adopted: ${why}. Nothing was recorded`, sending ? CHECK_CHAIN : "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request", { sending });
+    const refuse = (why: string, sending = false, kept = false): never => {
+      throw new HostedRefusal(`${isSiteRequestId(id) ? id : "that request"} was not adopted: ${why}. ${kept ? `It is kept with this approval as a request that may be this one${sending ? ", and the owner's wallet may have sent its transaction" : ""}; a later wait checks it again` : "Nothing was recorded"}`, sending || kept ? CHECK_CHAIN : "use the request_id, approval_link and match_code that submit_budget_request returned for this signed request", { sending: sending || kept });
     };
     const s = a.signed;
     if (s.site !== this.s.site) return refuse("the signed request is for another site");
@@ -898,15 +907,24 @@ export class HostedApprovals {
     const token = renewed.token;
     if (carriesToken(link, token)) return refuse("the link carries the request's access token");
     const r = await readSiteRequest({ site: this.s.site, id, token, wait: 0, own: true, fetchImpl: this.s.fetchImpl });
-    if (!r.ok) return refuse(`it could not be read back (${r.reason})`, r.asked === true);
-    const problem = signedProblem(r.view, { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then }, this.w.same);
-    if (problem) return refuse(problem, viewEvidence(r.view));
+    const walletAsked = r.ok ? viewEvidence(r.view) : r.asked === true;
+    const problem = r.ok ? signedProblem(r.view, { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then }, this.w.same) : `it could not be read back (${r.reason})`;
+    if (problem) {
+      // this agent's key made it (the site renewed its token): unless its read shows other terms and no wallet asked, it may be this
+      // request, so it is kept before anything is answered, and the evidence with it
+      if (!r.ok || walletAsked) {
+        a.onUnsettled({ requestId: id, link: link.href, matchCode: a.matchCode, walletAsked });
+        return refuse(problem, walletAsked, true);
+      }
+      return refuse(problem);
+    }
     const now = Date.now();
     const siteExpiry = Date.parse(typeof r.view.expires_at === "string" ? r.view.expires_at : "");
     const expiresAt = Number.isFinite(siteExpiry) ? siteExpiry : now + ask.timeoutMs;
     a.onAdopt(
       { site: this.s.site, requestId: id, token, kind: ask.kind, matchCode: a.matchCode, ...(s.then ? { then: s.then } : {}), resumable: true, intent: ask.intent, expiresAt, deadline: Math.min(expiresAt, now + ask.timeoutMs), ...(s.proofVersion ? { proofVersion: s.proofVersion } : {}), signed: s.signed },
       { url: link.href, expires: expiresAt, terms: ask.terms },
+      walletAsked,
     );
     throw new HostedAdopted();
   }
