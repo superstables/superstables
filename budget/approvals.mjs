@@ -873,9 +873,9 @@ export function recordSigned(id, s) {
 export const awaitingAdoption = (record) => Boolean(record && !record.final && isObject(record.hosted?.signed) && !record.hosted.requestId);
 
 /**
- * A site request this agent's key made (the site renewed its token), given for this signed request and not adopted: its read failed,
- * or showed that the owner's wallet was asked. It may be this request, open on the site, so the record holds the chain and reads
- * unknown until a later wait adopts it.
+ * A site request given for this signed request and not adopted, that the site did not say is another agent's or missing: its token
+ * renewal or its read failed, or showed that the owner's wallet was asked. It may be this request, open on the site, so the record
+ * holds the chain and reads unknown until a later wait adopts it.
  */
 export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
 
@@ -906,7 +906,7 @@ export function adoptSigned(id, nonce, hosted, shown, walletAsked) {
 }
 
 /**
- * A site request this agent's key made could not be adopted for the signed request `nonce`, and may be it (unsettledRequest): kept
+ * A site request given for the signed request `nonce` could not be adopted, and may be it (unsettledRequest): kept
  * under the record's lock before the refusal is reported. Evidence only grows: a request already kept stays, and once the wallet
  * was seen asked it stays asked. Throws when nothing was kept.
  */

@@ -92,7 +92,7 @@ async function page(): Promise<OwnerApprovalServer> {
  */
 export const resuming = (): boolean => Boolean(process.env[RESUME_ENV]) && process.env[RESUME_ENV] === process.env[HOLDER_ENV];
 /** --sign-only (cli.mjs): the hosted request is signed and kept with the approval, and nothing is sent. */
-const signingOnly = (): boolean => Boolean(process.env[SIGN_ONLY_ENV]) && process.env[SIGN_ONLY_ENV] === process.env[HOLDER_ENV];
+export const signingOnly = (): boolean => Boolean(process.env[SIGN_ONLY_ENV]) && process.env[SIGN_ONLY_ENV] === process.env[HOLDER_ENV];
 /** wait --site-request (cli.mjs): a resumed command that checks the site request made from the signed one and records it; it polls nothing. */
 const adopting = (): boolean => resuming() && process.env[ADOPT_ENV] === process.env[HOLDER_ENV];
 

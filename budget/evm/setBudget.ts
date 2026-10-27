@@ -24,7 +24,7 @@ import "./cli-guard.mjs";
 // exactly the cap), 5 the wallet may have sent it but no hash came back, 1 anything else that failed.
 import { type Hex } from "viem";
 import { SYM, CFG, emit, arg, flag, posInt, toUsdc, usdc, gasFmt, GAS, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, readUntil, send, writePublic, USDC, publicClient, assertRpcChain, tx, allowanceAgreed, agreementWords, finalityOf, usuallyWords, sleep, publicEnv } from "./lib.ts";
-import { requestFact, resuming } from "../owner-page.ts";
+import { requestFact, resuming, signingOnly } from "../owner-page.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, approveShows, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -41,9 +41,10 @@ const result = (exit: number, o: Record<string, unknown>) => emit("setBudget", e
 const pub = await ownerPlanCtx(); // public addresses, checked against the owner's setup signature
 await assertRpcChain();
 const beforeAllow = await allowanceOf(pub.owner, pub.agent);
-const ownerBal = await usdcBalance(pub.owner);
+// only shown: --sign-only leaves it out, and the adoption that shows the owner the approval reads it then
+const ownerBal = signingOnly() ? null : await usdcBalance(pub.owner);
 const ownerGas = await nativeBalance(pub.owner);
-console.log(`owner ${pub.owner} ${SYM} ${usdc(ownerBal)}, ${GAS.symbol} (native) ${gasFmt(ownerGas)}; agent ${pub.agent}; allowance now ${usdc(beforeAllow)} ${SYM}`);
+console.log(`owner ${pub.owner}${ownerBal === null ? "" : ` ${SYM} ${usdc(ownerBal)},`} ${GAS.symbol} (native) ${gasFmt(ownerGas)}; agent ${pub.agent}; allowance now ${usdc(beforeAllow)} ${SYM}`);
 const liveRefusal = () => {
   const reason = `an allowance of ${usdc(beforeAllow)} ${SYM} is already live for this agent. approve overwrites it in place, and an agent that sees the pending transaction can spend the old amount and then the new one. Revoke first, then grant again.`;
   console.log(`REFUSED: ${reason}`);
@@ -133,7 +134,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
       { label: "Agent", value: pub.agent, mono: true },
       { label: "From your wallet", value: pub.owner, mono: true },
       tokenRow(),
-      { label: "Your balance", value: `${usdc(ownerBal)} ${SYM}` },
+      ...(ownerBal === null ? [] : [{ label: "Your balance", value: `${usdc(ownerBal)} ${SYM}` }]),
       approveRow(pub.agent, cap),
     ],
     enforced: grantEnforced(cap),
@@ -222,8 +223,9 @@ writePublic(
 );
 console.log(`budget: ${usdc(cap)} ${SYM}, allowance == cap on chain.${approveTx ? ` ${tx(approveTx)}` : ""}`);
 console.log(`no on-chain expiry and no on-chain period: the allowance stays until the agent spends it or someone revokes it${expiry ? `; advisory expiry ${new Date(expiry * 1000).toISOString()} is enforced only by buy's precheck, not by the chain` : ""}.`);
-console.log(`maximum that can move: ${usdc(cap < ownerBal ? cap : ownerBal)} ${SYM} (min of the cap and the owner's balance ${usdc(ownerBal)}), to ANY address the agent names, until the owner revokes.`);
+const ownerHas = ownerBal ?? (await usdcBalance(pub.owner));
+console.log(`maximum that can move: ${usdc(cap < ownerHas ? cap : ownerHas)} ${SYM} (min of the cap and the owner's balance ${usdc(ownerHas)}), to ANY address the agent names, until the owner revokes.`);
 if (!final) console.log(`the approve is in a block and the allowance reads ${usdc(cap)} ${SYM}, but the chain has not made it final yet${usuallyWords()}`);
 finishPage?.({ outcome: "confirmed", message: final ? `Done. The chain shows a budget of ${capWords(cap)} for your agent. You can close this page. To end it: ${REVOKE_HINT}` : landedGrant(cap), hash: approveTx ?? undefined });
 await closeOwnerPage();
-process.exit(result(0, { state: final ? "set" : "landed", final, tx: approveTx, cap: usdc(cap), allowance: usdc(allowance), maxMovable: usdc(cap < ownerBal ? cap : ownerBal), expiry: expiry ? new Date(expiry * 1000).toISOString() : null, enforcedOnChain: { expiry: false, period: false, sellers: false }, next: final ? "agent: buy" : `superstables budget status --rail evm${chainFlag} later: the grant is final when status says so${usuallyWords()}` }));
+process.exit(result(0, { state: final ? "set" : "landed", final, tx: approveTx, cap: usdc(cap), allowance: usdc(allowance), maxMovable: usdc(cap < ownerHas ? cap : ownerHas), expiry: expiry ? new Date(expiry * 1000).toISOString() : null, enforcedOnChain: { expiry: false, period: false, sellers: false }, next: final ? "agent: buy" : `superstables budget status --rail evm${chainFlag} later: the grant is final when status says so${usuallyWords()}` }));

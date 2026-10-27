@@ -70,9 +70,10 @@
 // connector returned and checks them before anything is recorded: the command still builds the same body, the link is the site's own
 // for that id, the site gives this agent's key a fresh token for it (another agent's request is refused there), and the site's read of
 // it shows this agent, rail, chain and the exact transaction or steps that were signed. Only then is the request recorded
-// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over. A request the site
-// renewed a token for whose read failed, or showed the owner's wallet was asked, is kept first (`onUnsettled`): it may be this one,
-// so it is unknown, never "nothing sent", and a read showing the wallet was asked is kept with an adopted request too.
+// (`onAdopt`, mode 600), and a restarted worker finishes it through the sink like any request it takes over. A request the site did
+// not say is another agent's or missing, whose token or read failed or showed the owner's wallet was asked, is kept first
+// (`onUnsettled`): it may be this one, so it is unknown, never "nothing sent", and a read showing the wallet was asked is kept with
+// an adopted request too.
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as signBytes, verify as verifyBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -333,8 +334,8 @@ export interface HostedSettings {
   /**
    * wait --site-request: the request the connector created from `signed`, as it returned it. Checked (see the header), then
    * handed to onAdopt to record; nothing is polled and nothing is created. `walletAsked`: the read showed the owner's wallet was asked.
-   * A request this agent's key made that is not adopted, because its read failed or showed the wallet was asked, goes to onUnsettled
-   * before the refusal: it may be this request, open on the site.
+   * A request that may be this agent's and is not adopted, because its token or read failed or showed the wallet was asked, goes to
+   * onUnsettled before the refusal: it may be this request, open on the site.
    */
   adopt?: {
     signed: SignedRecord; requestId: string; link: string; matchCode: string;
@@ -855,21 +856,24 @@ export class HostedApprovals {
     return "token" in r ? r.token : null;
   }
 
-  /** renew(), with the site's answer when it gave no token: its status (0 for none) and the reason in words. */
-  private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string }> {
+  /**
+   * renew(), with the site's answer when it gave no token: its status (0 for none), the reason in words, and whether the answer
+   * showed the owner's wallet was asked (an error's `money_moved`, say).
+   */
+  private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string; asked: boolean }> {
     const path = `${BUDGET_API}/requests/${id}/token`;
     const raw = JSON.stringify({ agent: agentAddressOf(this.s.agentKey) });
     try {
       const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
       const res = await (this.s.fetchImpl ?? fetch)(`${this.s.site}${path}`, { method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(20_000) });
       const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
-      if (truncated) return { status: res.status, why: "an answer that was cut off" };
+      if (truncated) return { status: res.status, why: "an answer that was cut off", asked: false };
       let json: any = null;
       try { json = JSON.parse(bytes.toString("utf8")); } catch {}
-      if (!res.ok) return { status: res.status, why: siteFailure(res.status, json) };
-      return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request" };
+      if (!res.ok) return { status: res.status, why: siteFailure(res.status, json), asked: viewEvidence(json) };
+      return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request", asked: viewEvidence(json) };
     } catch (err) {
-      return { status: 0, why: `no answer (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message, 120)})` };
+      return { status: 0, why: `no answer (${siteText((err as { cause?: { code?: string } }).cause?.code ?? (err as Error).message, 120)})`, asked: false };
     }
   }
 
@@ -903,7 +907,13 @@ export class HostedApprovals {
     if (!MATCH_CODE.test(a.matchCode)) return refuse("the match code is not one the site gives");
     // the site gives a token only to the key that made the request: another agent's request ends here
     const renewed = await this.renewToken(id);
-    if (!("token" in renewed)) return refuse(renewed.status === 403 ? "another agent's key made that request" : renewed.status === 404 ? `${this.name} has no request with that id` : `${this.name} gave this agent no token for it (${renewed.why})`);
+    if (!("token" in renewed)) {
+      const why = renewed.status === 403 ? "another agent's key made that request" : renewed.status === 404 ? `${this.name} has no request with that id` : `${this.name} gave this agent no token for it (${renewed.why})`;
+      if ((renewed.status === 403 || renewed.status === 404) && !renewed.asked) return refuse(why);
+      // any other answer (none, a 5xx, money_moved) leaves open that this is the request, sent and maybe approved: kept first
+      a.onUnsettled({ requestId: id, link: link.href, matchCode: a.matchCode, walletAsked: renewed.asked });
+      return refuse(why, renewed.asked, true);
+    }
     const token = renewed.token;
     if (carriesToken(link, token)) return refuse("the link carries the request's access token");
     const r = await readSiteRequest({ site: this.s.site, id, token, wait: 0, own: true, fetchImpl: this.s.fetchImpl });
