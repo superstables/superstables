@@ -35,10 +35,13 @@ owner's link on superstables.com and signs nothing).
 
 Set-up, grant, buy and recover are signed on the CLI, because they need a
 signature from this machine. When the connector offers `submit_budget_request`,
-send `budget setup --hosted` and `grant` on the `evm` rail through it: sign with
-`--sign-only`, send the block with `submit_budget_request`, then follow it with
-`budget wait --site-request`, as "Sending a budget request through the
-connector" in [references/budget.md](references/budget.md) describes. `budget find` and `budget preflight` also stay on
+use it for `budget setup --hosted` and grants approved on superstables.com, on
+the `evm` rail only. Sign with `--sign-only` and send the block unchanged with
+`submit_budget_request`. Show the owner the approval details and end your turn.
+When they say they've approved, run `budget wait --site-request`. Follow
+"Sending a budget request through the connector" in
+[references/budget.md](references/budget.md) for the full steps and command
+arguments. `budget find` and `budget preflight` also stay on
 the CLI today, because the connector has no tool for them yet. `budget wait` and
 `budget status` stay on it for a request this machine signed. Read
 [references/cli.md](references/cli.md) before you run any CLI command. Write
