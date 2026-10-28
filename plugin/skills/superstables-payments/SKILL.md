@@ -260,6 +260,8 @@ Exit codes share one table, but a missing budget shows differently per command:
 | any | 4 | Paid, not delivered: never pay again; report the `tx` or receipt |
 | any | 5 | Unknown, it may have paid. Busy reconcile includes `op`, `reason: "op_in_progress"` and guidance in `next`. Purchase: `budget reconcile --rail R --chain C --op ID`. `pay`: `status ATTEMPT_ID`, `receipts`. Owner action (also one whose transaction differs from the plan, or that stopped after the wallet was asked): `budget status`, wallet activity, and `steps` and `tx` when present. With `final: false` and `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: reply with `message_for_owner` and end your turn, as for `waiting_owner` |
 
+After each `budget` owner command or `buy`, show the result from the connector when it is signed in, and keep the CLI's result when the two disagree: see "Showing each result on screen" in [references/budget.md](references/budget.md).
+
 ## Discovery configuration (optional)
 
 The defaults work. Change them only when the user asks:

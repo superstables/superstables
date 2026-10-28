@@ -14,6 +14,7 @@ The owner approves a spending cap once, in their own wallet. You then buy from s
 - The owner's steps per rail
 - Owner approvals in detail
 - Buying under a budget
+- Showing each result on screen
 - Reconcile
 - Recover (evm)
 - Revoke, and what it does not cover
@@ -139,6 +140,23 @@ If the user says a budget exists but status finds none, it may be under another 
 On `evm`, before the agent signs anything, `buy` checks that the agent key can pay the gas, at the current fee, for the pull and for the cancel and return a failed purchase would need. When it cannot, `buy` exits 3 before signing and `next` names `fund-agent`: tell the owner. A gas shortage is not a refusal by the chain. `doctor` sizes its gas minimums from the current fee.
 
 A seller error after payment is `settled` with `delivered: false` (exit 4): never pay again.
+
+## Showing each result on screen
+
+When the Superstables connector is signed in, its budget tools show on the owner's screen what the CLI just did. After each `budget setup`, `grant`, `revoke`, `buy` or `wait`, make one call and report from what it returns:
+
+| After | Call | Pass it | Quote |
+| --- | --- | --- | --- |
+| `setup`, `grant`, `revoke`, `wait` | `get_budget_request` ("Get a budget approval's status") | The approval link the CLI printed (`url`), as printed | `state`, `final`, `reason`, and each step's `state` and `tx_hash` |
+| `buy` | `list_my_budgets` ("List my budgets") | Nothing | The `remaining` and `state` of the entry whose `chain.key` and `agent` address match the CLI's purchasing agent. Use the agent address recorded by setup or read from CLI status; never guess from the chain alone. If no unique match is available, say so and report the CLI's result without attributing another entry's balance to this purchase. |
+
+- `get_budget_request` reads an approval on superstables.com, so it takes the link of a `setup --hosted` or of a grant or revoke approved there. The page on this machine has a link on `127.0.0.1`: the connector cannot read it, so report from the CLI alone.
+- Call `get_budget_request` again after each `wait --shown` until `final` is `true`. While `final` is `false` and the owner's wallet was asked, say the outcome is not final yet. If `state` is `unknown`, say it is not known yet; do not say it failed.
+- `list_my_budgets` reads the chain now. `remaining` can trail a purchase that has just landed, so quote it as what the connector shows.
+- The connector tools only read. They do not approve, sign, revoke or move funds; the owner does that in their wallet.
+- When the connector is missing or signed out, call nothing and report from the CLI output alone.
+- The CLI's result stands. A connector answer never turns a `paid`, `unknown`, `refused_precheck` or `failed` result into another one. When the two disagree, say both and that the CLI's confirmed result stands.
+- Never write the approval link's `#` token anywhere but in your reply to the owner.
 
 ## Reconcile
 
