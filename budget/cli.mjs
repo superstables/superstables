@@ -496,12 +496,14 @@ refused before anything is recorded or asked (state unknown, exit 5, final false
 with the approval, and the chain is held for it, before anything else is checked: the request may be the signed one.
 The command then checks that it still asks for exactly what was signed, that the site gives this agent's key a fresh
 access token for the request, and that the site shows this agent, rail, chain and the signed transaction or steps.
-Only the site's exact refusal of that token, 403 not_your_request (another agent's request) or 404 not_found (no such
-request), with no sign so far that the owner's wallet was asked, refuses it (exit 3, final false): the kept values are
-dropped, the chain is freed, and the signed approval can still adopt its own request. Anything else (a request for
-other terms, another answer from the site, no answer, a check on this machine that fails, a crash) is unknown (exit 5,
-final false): the request stays kept, the chain stays held, next names anything to fix here first, and every later wait
-checks that request again until it is adopted.
+Two kinds of answer refuse it, and only while no answer so far showed that the owner's wallet was asked: the site's
+exact refusal of that token, 403 not_your_request (another agent's request) or 404 not_found (no such request), and its
+read of a request for other terms that is final as expired, rejected or cancelled with the wallet never asked (reason
+names that state). Either refuses it (exit 3, final false): the kept values are dropped, the chain is freed, and the
+signed approval can still adopt its own request. Anything else (a request for other terms in any other state, another
+answer from the site, no answer, a check on this machine that fails, a crash) is unknown (exit 5, final false): the
+request stays kept, the chain stays held, next names anything to fix here first, and every later wait checks that
+request again until it is adopted.
 Once adopted, the approval continues as if the owner command had sent the request: without --shown, wait returns
 waiting_owner with message_for_owner, as the owner command would have; with --shown, it waits as above. Run on a signed
 approval that no request was given for, wait returns state signed (final false) until 5 minutes after signing, then
@@ -3022,9 +3024,10 @@ const unsettledNext = (record, requestId, fix) => `${requestId} may be the reque
  * approval first (mergeEvidence), under its lock, before the site is asked or anything is checked, and the chain is taken for it.
  * Then the approval's own command, resumed, checks the request (hosted.ts adopt), merging what each answer shows, and records it.
  * Returns the record with the request in it. Otherwise this command ends unknown, with the request kept and the chain held, whatever
- * stopped the check (a refusal on this machine, a crash, a timeout, any answer of the site, other terms included), except one: the
- * site's exact 403 not_your_request or 404 not_found for it (notAdopted), while the record holds no evidence that the wallet was
- * asked (dropUnsettled). Only that drops what was kept, frees the chain, and is refused.
+ * stopped the check (a refusal on this machine, a crash, a timeout, any answer of the site, other terms included), except: the
+ * site's exact 403 not_your_request or 404 not_found for it, or its read of it with other terms, final as expired, rejected or
+ * cancelled with no wallet asked (hosted.ts givesUp, notAdopted), while the record holds no evidence that the wallet was asked
+ * (dropUnsettled). Only those drop what was kept, free the chain, and are refused.
  */
 async function adoptRequest(f, record) {
   const ctx = { command: "wait", rail: record.rail, chain: record.chain };

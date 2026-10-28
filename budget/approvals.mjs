@@ -874,7 +874,7 @@ export const awaitingAdoption = (record) => Boolean(record && !record.final && i
 
 /**
  * A site request given for this signed request and not adopted (yet): kept by `wait --site-request` before it asks the site or checks
- * anything, and dropped only on the site's exact answer that it is not this agent's request (dropUnsettled). It may be this request,
+ * anything, and dropped only on an answer of the site that gives it up (dropUnsettled). It may be this request,
  * open on the site, so the record holds the chain and reads unknown until a later wait adopts it.
  */
 export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
@@ -927,9 +927,8 @@ export function mergeEvidence(id, nonce, e) {
 }
 
 /**
- * The site answered exactly that `requestId`, kept for the signed request `nonce`, is not this agent's request (hosted.ts
- * notThisRequest): dropped under the record's lock, unless the merged record holds any evidence that the wallet was asked.
- * Whether it was dropped.
+ * The site gave up `requestId`, kept for the signed request `nonce` (hosted.ts givesUp): dropped under the record's lock, unless
+ * the merged record holds any evidence that the wallet was asked. Whether it was dropped.
  */
 export function dropUnsettled(id, nonce, requestId) {
   let dropped = false;
