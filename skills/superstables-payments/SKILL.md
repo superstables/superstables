@@ -18,7 +18,18 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 
 ## Use the connector when it is there
 
-When the Superstables connector tools (`find_services`, `request_purchase`, `get_purchase_status`, `get_my_account`) are available, use them to find services, make a single purchase and read a purchase's status. Use the CLI for budgets (set up, grant, buy, revoke, recover), and whenever the connector tools are missing. When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. Use the CLI if they decline.
+Only operations that need a local signature go through the CLI. Everything else goes through the connector when it is signed in.
+
+When the Superstables connector tools (`find_services`, `request_purchase`, `get_purchase_status`, `get_my_account`, `list_my_budgets`, `get_budget_request`, `request_budget_revoke`) are available, use them to:
+
+- find services, make a single purchase and read a purchase's status;
+- read a budget's status, what is left and whether it is ready: `list_my_budgets`;
+- follow an approval link until it is final, after set-up, grant or revoke: `get_budget_request`, with the link as printed;
+- revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. Then call `list_my_budgets` once the owner says they've revoked: the revoke has landed when `remaining` is 0 and `state` is no longer `live`. It does not say whether the revoke is final.
+
+Keep the CLI for what needs a signature or a file on this machine: creating the agent key, `budget setup` and `grant`, `budget buy` with the `budget preflight` just before it, and `recover`. `budget find` stays on the CLI. Use the CLI for everything else too, `budget status` and `budget revoke` included, whenever the connector tools are missing or signed out.
+
+When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. Use the CLI if they decline.
 
 ## Running the CLI
 
@@ -82,7 +93,7 @@ Copy this checklist and track it. Do the steps in this order: status, then price
 ```
 Payment progress:
 - [ ] 1. Find a service (or take the URL the user gave)
-- [ ] 2. Check for a budget: budget status
+- [ ] 2. Check for a budget: list_my_budgets (connector), else budget status
 - [ ] 3. Price it without paying, and compare with the ceiling (always)
 - [ ] 4. Choose how to pay
 - [ ] 5. Pay, keeping the command alive until it ends
@@ -120,9 +131,11 @@ If the user gave a URL, skip this step. Details: [references/discovery.md](refer
 
 ### 2. Check for a budget
 
-Run `superstables budget status --rail R --chain C`. `--rail` is required; `--chain` is needed unless it is the rail's default (`base-sepolia` on `evm`). The rail and chain come from `routes.budget` in `find --json`, or from `budget --help` for a URL. Exit 1 means no budget here: note it and go on to step 3. Do not decide or ask anything yet.
+With the connector signed in, call `list_my_budgets`. Find the entry whose `chain.key` and `agent` address match this machine's agent on the chain you need; never pick by chain alone. Read `cap`, `remaining`, `used` and `state`. No matching entry means no budget for this agent: note it and go on to step 3. Do not decide or ask anything yet.
 
-If `status` finds no budget, it names the home it checked (`home` in its result). If the user says a budget exists, say in your reply which home and chain you checked, and ask whether the budget is under another home or chain. Still price the seller first (step 3). Do not re-run `status` (or any command) with `SUPERSTABLES_HOME` set to another home, `~/.superstables` included, unless the user gives you that path (safety rule 9).
+With the connector missing or signed out, run `superstables budget status --rail R --chain C`. `--rail` is required; `--chain` is needed unless it is the rail's default (`base-sepolia` on `evm`). The rail and chain come from `routes.budget` in `find --json`, or from `budget --help` for a URL. Exit 1 means no budget here: note it and go on to step 3. Do not decide or ask anything yet.
+
+If the CLI's `status` finds no budget, it names the home it checked (`home` in its result). If the user says a budget exists, say in your reply which home and chain you checked, and ask whether the budget is under another home or chain. Still price the seller first (step 3). Do not re-run `status` (or any command) with `SUPERSTABLES_HOME` set to another home, `~/.superstables` included, unless the user gives you that path (safety rule 9).
 
 ### 3. Price it without paying
 
@@ -188,7 +201,7 @@ Read the final result (see [Reading results](#reading-results)). Report what was
 
 ## Owner requests
 
-When the owner asks for `setup`, `fund-agent`, `grant`, `revoke` or `recover`, you may start the command; only the owner approves. `rotate` (replace the agent key, `evm` and `solana`) is different: it stays in the foreground and asks for each approval in turn, so do not start it. Tell the owner to run `superstables budget rotate --rail R` in their own terminal (`--plan` first shows what it would do and sends nothing). The old address is retired first: from then on this machine never grants, funds, sets up or buys with it again. The owner's steps, in order, once per rail and chain:
+When the owner asks for `setup`, `fund-agent`, `grant` or `recover`, you may start the command; only the owner approves. When they ask for a revoke, use `request_budget_revoke` if the connector is signed in (see "Revoke, and what it does not cover" in [references/budget.md](references/budget.md#revoke-and-what-it-does-not-cover)), else `budget revoke`. `rotate` (replace the agent key, `evm` and `solana`) is different: it stays in the foreground and asks for each approval in turn, so do not start it. Tell the owner to run `superstables budget rotate --rail R` in their own terminal (`--plan` first shows what it would do and sends nothing). The old address is retired first: from then on this machine never grants, funds, sets up or buys with it again. The owner's steps, in order, once per rail and chain:
 
 - `evm` and `solana`: `setup`, `fund-agent`, `doctor`, `grant`. The owner first funds their own wallet from faucets; `doctor` names the minimums.
 - `tempo`: `setup`, `grant`.
@@ -199,21 +212,21 @@ Copy this checklist and track it:
 
 ```
 Owner request progress:
-- [ ] 1. budget status --rail R [--chain C]: which steps are already done
+- [ ] 1. list_my_budgets (connector), else budget status --rail R [--chain C]: which steps are already done
 - [ ] 2. On superstables.com: one approval link for the whole set-up (setup --hosted --grant A --fund). Local: tell the owner every remaining step, up front
 - [ ] 3. Start only the next owner step; write the approval link in a reply and end your turn (checklist below)
 - [ ] 4. When the owner says they've approved: budget wait --id ID --shown; report; then the next step
-- [ ] 5. After grant: budget status, report remaining and the owner on record
+- [ ] 5. After grant: get_budget_request until final (connector), else budget status; report remaining and the owner on record
 ```
 
-1. **Status first.** `superstables budget status --rail R [--chain C]`. Exit 1 with "no budget has been set up here" is the normal answer before `setup`, not an error. Status and `doctor` show the owner on record and what is missing; skip steps already done.
+1. **Read what is done first.** With the connector signed in, `list_my_budgets` shows each agent's budget, what is left and its state; `doctor` shows what is missing on this machine. Skip steps already done. With the connector missing or signed out, run `superstables budget status --rail R [--chain C]` instead. Exit 1 with "no budget has been set up here" is the normal answer before `setup`, not an error. Status and `doctor` show the owner on record.
 2. **With `--hosted`, one approval link does the whole set-up**: `setup --rail evm --hosted --chain C --grant A --fund`. Before you run it, price what the owner wants to buy (`budget preflight`) and say whether the amount covers it; if it covers fewer purchases than they asked for, say so in the same reply. On this machine (no `--hosted`), list the remaining steps up front, with what each does (see [references/budget.md](references/budget.md#the-owners-steps-per-rail)), so the owner knows how many approval links to expect.
 3. **Start only the next step**, for example `superstables budget setup --rail evm` (or `--hosted`). Run by an agent, it returns in seconds with `APPROVE {...}` and `RESULT {"state":"waiting_owner","final":false,"chain_final":null,"id","url","matchCode",...}`, exit 0. That is not approval. `recover` that already sent the agent's own revoke returns `unknown`, `final: false`, exit 5, with the same fields: that is not approval either, and you reply the same way (step 4). One owner approval per rail and chain can be pending: a second one is refused with the pending `id`; follow that one instead. `setup` creates the agent key on this machine before the owner approves; that is expected.
 4. **Reply with `message_for_owner` and end your turn** (safety rule 10). The page itself shows the terms and what the chain enforces and what it does not. `message_for_owner` is the whole reply: it already has the account note, what the chain enforces, the expiry and, for a page on this machine, where to open it and the SSH port forward. You may put one short line before it, with what the checklist below lists that it still lacks. The owner does not see your tool output, so an approval link that is only in the command's output never reaches them. On a machine with a desktop, the command also opens the page in the default browser by itself (not over SSH): say so, and still give the approval link, in case it opened in a browser without their wallet.
 5. **When the owner says they've approved**, run `superstables budget wait --id ID --shown` (it waits up to 30 seconds; `--timeout` up to 300). If it is still `waiting_owner` (`final: false`), say so in one line and end your turn again. If it is `unknown` with `final: false` (exit 5) and has `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: send the new `message_for_owner` if `url` changed, and end your turn. If it is `unknown` with `final: false` and no `message_for_owner`, the owner's wallet was asked to send and the outcome is not known yet: tell the owner so, start no other owner command, end your turn, and run `wait --shown` again later. If `url` changes (`recover` can ask twice), send the new `message_for_owner` first. After `expires`, if the wallet was not asked to send, the command ends `refused_precheck` and that approval sent nothing; if it was asked and no transaction came back, the result is `unknown` (exit 5). In a setup on superstables.com with `--grant` or `--fund`, or in `recover`, an earlier step may have completed. Check any `steps` and `tx` in the result, and run `superstables budget status`. Run the same command again for a new approval link only if the owner asks (`setup` reuses the agent key).
 6. **Stop when `final` is `true`** (or at `landed`) and report the state:
    - `landed` (exit 0, `final: false`): a grant, a revoke or a gas transfer is in a block, but the chain has not made that block final. Say so and start no other owner step. Do not rely on a grant yet, and count a revoked budget as still live, until `superstables budget status` shows the action final (`lastOwnerAction.final: true`). On `evm` and `solana`, a new grant is refused (exit 3) while the previous revoke is not final.
-   - `ok` (setup) or `settled`: done. After a grant (or a set-up on superstables.com with `--grant`), confirm with `budget status`, then carry on with the purchases the owner already asked for, without asking again. Start another owner step only if the owner asked for it.
+   - `ok` (setup) or `settled`: done. After a grant (or a set-up on superstables.com with `--grant`), confirm with `list_my_budgets` (connector signed in) or `budget status`, then carry on with the purchases the owner already asked for, without asking again. Start another owner step only if the owner asked for it.
    - `refused_precheck` (exit 3): rejected, the approval link expired, or the chain did not match the plan. Read `reason`. A no is final: start a new approval only if the owner asks.
    - `unknown` (exit 5): the wallet may have sent. Run `budget status` and ask the owner to check wallet activity before anything else.
 
@@ -260,7 +273,7 @@ Exit codes share one table, but a missing budget shows differently per command:
 | any | 4 | Paid, not delivered: never pay again; report the `tx` or receipt |
 | any | 5 | Unknown, it may have paid. Busy reconcile includes `op`, `reason: "op_in_progress"` and guidance in `next`. Purchase: `budget reconcile --rail R --chain C --op ID`. `pay`: `status ATTEMPT_ID`, `receipts`. Owner action (also one whose transaction differs from the plan, or that stopped after the wallet was asked): `budget status`, wallet activity, and `steps` and `tx` when present. With `final: false` and `message_for_owner` (`recover`, after the agent's own revoke), the owner still has to approve: reply with `message_for_owner` and end your turn, as for `waiting_owner` |
 
-After each `budget` owner command or `buy`, show the result from the connector when it is signed in, and keep the CLI's result when the two disagree: see "Showing each result on screen" in [references/budget.md](references/budget.md).
+After each `budget` owner command or `buy`, show the result from the connector when it is signed in, and keep the CLI's result when the two disagree: see "Showing each result on screen" in [references/budget.md](references/budget.md). To revoke, use `request_budget_revoke` when the connector is signed in, and `budget revoke` when it is not.
 
 ## Discovery configuration (optional)
 

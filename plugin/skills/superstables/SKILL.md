@@ -12,6 +12,9 @@ Testnet only: test tokens, no real money.
 - `find_services`: find services, prices, chains and required inputs. No sign-in needed. This pays nothing.
 - `request_purchase`: request a service by its `service_id` and inputs. Use a new `operation_id` for each purchase; reuse it when retrying the same request on the same connection.
 - `get_purchase_status`: read the purchase's payment status, service response and receipt using its `purchase_id`.
+- `list_my_budgets`: read each agent's budget, what is left and its state.
+- `get_budget_request`: read a budget approval from the link the CLI printed.
+- `request_budget_revoke`: get the owner's link to revoke an agent's budget. The owner signs the revoke in their wallet.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
@@ -22,4 +25,8 @@ report what it establishes. If the payment outcome is unknown, say so.
 If these tools are missing, use the `superstables-payments` skill and its CLI.
 If a call fails because the connector is not signed in, ask the owner to connect
 it once and end your turn. If they decline, use that skill and its CLI.
-Budgets (set up, grant, buy, revoke, recover) always go through that CLI.
+Budgets: read their status with `list_my_budgets`, follow an approval link with
+`get_budget_request`, and revoke with `request_budget_revoke` (it returns the
+owner's link on superstables.com and signs nothing). Set-up, grant, buy and
+recover go through the CLI, because they need a signature from this machine.
+When these tools are missing or signed out, the CLI does all of it.
