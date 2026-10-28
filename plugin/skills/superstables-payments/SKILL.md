@@ -18,16 +18,16 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 
 ## Use the connector when it is there
 
-Only operations that need a local signature go through the CLI. Everything else goes through the connector when it is signed in.
+Only operations needing a local signature go through the CLI; everything else goes through the connector.
 
 When the Superstables connector tools (`find_services`, `request_purchase`, `get_purchase_status`, `get_my_account`, `list_my_budgets`, `get_budget_request`, `request_budget_revoke`) are available, use them to:
 
 - find services, make a single purchase and read a purchase's status;
-- read a budget's status, what is left and whether it is ready: `list_my_budgets`;
-- follow an approval link until it is final, after set-up, grant or revoke: `get_budget_request`, with the link as printed;
-- revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. Then call `list_my_budgets` once the owner says they've revoked: the revoke has landed when `remaining` is 0 and `state` is no longer `live`. It does not say whether the revoke is final.
+- read the linked agent's budget amounts and current state: `list_my_budgets`. This does not establish approval finality or readiness on this machine;
+- read an approval on superstables.com with `get_budget_request`, passing its complete approval link. This does not accept a local approval page or the account link returned by `request_budget_revoke`;
+- revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. When the owner says they've revoked, call `list_my_budgets` and quote the matching entry's `remaining` and `state`. These fields show the current budget state; they do not identify a revoke transaction or establish its finality. If `remaining` is zero and `state` is no longer `live`, report that the connector shows no spending balance. This alone proves neither that a revoke landed nor that it is final. Count the revoke as unresolved until confirmed evidence establishes its outcome.
 
-Keep the CLI for what needs a signature or a file on this machine: creating the agent key, `budget setup` and `grant`, `budget buy` with the `budget preflight` just before it, and `recover`. `budget find` stays on the CLI. Use the CLI for everything else too, `budget status` and `budget revoke` included, whenever the connector tools are missing or signed out.
+Local signatures: creating the agent key, `budget setup` and `grant`, `budget buy` and `recover`. Two more things stay on the CLI today, because the connector has no tool for them yet: `budget find` and `budget preflight`. `budget wait` and `budget status` also stay on the CLI for a request this machine signed, because they settle this machine's own record, and the CLI reports an outcome only from a confirmed basis. Use the CLI for everything else too, `budget revoke` included, whenever the connector tools are missing or signed out.
 
 When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. Use the CLI if they decline.
 
@@ -131,7 +131,7 @@ If the user gave a URL, skip this step. Details: [references/discovery.md](refer
 
 ### 2. Check for a budget
 
-With the connector signed in, call `list_my_budgets`. Find the entry whose `chain.key` and `agent` address match this machine's agent on the chain you need; never pick by chain alone. Read `cap`, `remaining`, `used` and `state`. No matching entry means no budget for this agent: note it and go on to step 3. Do not decide or ask anything yet.
+With the connector signed in, call `list_my_budgets`. Find the entry whose `chain.key` and `agent` address match this machine's agent on the chain you need; never pick by chain alone. Read `cap`, `remaining`, `used` and `state`. No matching entry means this connector cannot show a budget for this agent on the signed-in account. It does not prove that no budget exists. Note the missing match, price the service, and report that the budget could not be confirmed. Do not buy or start a replacement budget on that basis.
 
 With the connector missing or signed out, run `superstables budget status --rail R --chain C`. `--rail` is required; `--chain` is needed unless it is the rail's default (`base-sepolia` on `evm`). The rail and chain come from `routes.budget` in `find --json`, or from `budget --help` for a URL. Exit 1 means no budget here: note it and go on to step 3. Do not decide or ask anything yet.
 
@@ -216,7 +216,7 @@ Owner request progress:
 - [ ] 2. On superstables.com: one approval link for the whole set-up (setup --hosted --grant A --fund). Local: tell the owner every remaining step, up front
 - [ ] 3. Start only the next owner step; write the approval link in a reply and end your turn (checklist below)
 - [ ] 4. When the owner says they've approved: budget wait --id ID --shown; report; then the next step
-- [ ] 5. After grant: get_budget_request until final (connector), else budget status; report remaining and the owner on record
+- [ ] 5. After a grant approved on superstables.com: check its outcome and finality with get_budget_request, then read remaining and owner from the matching list_my_budgets entry; else budget status
 ```
 
 1. **Read what is done first.** With the connector signed in, `list_my_budgets` shows each agent's budget, what is left and its state; `doctor` shows what is missing on this machine. Skip steps already done. With the connector missing or signed out, run `superstables budget status --rail R [--chain C]` instead. Exit 1 with "no budget has been set up here" is the normal answer before `setup`, not an error. Status and `doctor` show the owner on record.
