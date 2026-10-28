@@ -303,8 +303,9 @@ describe("Tempo memo search", () => {
   function chainAt(head: number, edgeTime: number, logs: unknown = []) {
     return rpcStub((c) => {
       if (c.method === "eth_getBlockByNumber") {
-        const latest = c.params[0] === "latest" || c.params[0] === "finalized";
-        return ok(c, latest ? { number: "0x" + head.toString(16), timestamp: "0xf423f" } : { number: c.params[0], hash: "0x" + "ab".repeat(32), timestamp: "0x" + edgeTime.toString(16) });
+        // The head is one block: asked for by tag or by its number it has the same hash and time (the agreement engine compares them).
+        const atHead = c.params[0] === "latest" || c.params[0] === "finalized" || c.params[0] === "0x" + head.toString(16);
+        return ok(c, atHead ? { number: "0x" + head.toString(16), hash: "0x" + "cd".repeat(32), timestamp: "0xf423f" } : { number: c.params[0], hash: "0x" + "ab".repeat(32), timestamp: "0x" + edgeTime.toString(16) });
       }
       if (c.method === "eth_chainId") return ok(c, "0xa5bf"); // the endpoints that confirm an expired payment are asked which chain they are on
       if (c.method === "eth_getLogs") return ok(c, logs);
