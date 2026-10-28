@@ -1,5 +1,5 @@
 {
-  "skills": ["superstables-payments"],
+  "skills": ["superstables"],
   "query": "Set up a 1 USDC budget on Base Sepolia that I can approve from my phone. Three variants of the same request, one per run. Variant A: the Superstables connector is signed in and offers `submit_budget_request` (\"Send a budget request for approval\"). Variant B: the connector is not installed, or is signed out. Variant C: the connector is signed in, and `submit_budget_request` answers `request_open`.",
   "files": [],
   "expected_behavior": [

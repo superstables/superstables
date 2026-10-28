@@ -83,7 +83,7 @@ Use no `--wait`, or a long one, when the owner is present. A short `--wait` ends
 
 ## States
 
-Apply SKILL.md's safety rule 12 before this table: a state alone does not outweigh a transaction or other payment evidence in the result.
+Apply cli.md's safety rule 12 before this table: a state alone does not outweigh a transaction or other payment evidence in the result.
 
 | State | Final | Money moved | Meaning | Exit |
 | --- | --- | --- | --- | --- |
@@ -94,7 +94,7 @@ Apply SKILL.md's safety rule 12 before this table: a state alone does not outwei
 | `denied` | yes | no | The owner rejected it, on the approval page or in their wallet, before anything was signed or sent | 3 |
 | `expired` | yes | no | Nobody approved within the approval window | 1 |
 | `abandoned` | yes | no | The wait ended before anyone decided; `abandoned_by` says how. Not a rejection | 1 |
-| `failed` | yes | no, when it names no transaction or `chain` is `unpaid` | Nothing was paid: the payment never left this machine (for example the seller or the wallet could not be reached, or the approval page could not start), or `chain: "unpaid"`, the chain shows it was never made and can no longer be. With a transaction (`receipt.transaction` or `transaction`) and no `chain: "unpaid"`, follow SKILL.md's safety rule 12 | 1 |
+| `failed` | yes | no, when it names no transaction or `chain` is `unpaid` | Nothing was paid: the payment never left this machine (for example the seller or the wallet could not be reached, or the approval page could not start), or `chain: "unpaid"`, the chain shows it was never made and can no longer be. With a transaction (`receipt.transaction` or `transaction`) and no `chain: "unpaid"`, follow cli.md's safety rule 12 | 1 |
 | `uncertain` | yes | maybe | The payment may or may not have settled, including after the seller said it did not. `superstables status` searches the chain for it | 5 |
 
 After `settled` or `paid_service_failed`, `chain` says how far the payment is checked. `verified`: the client read the transaction on chain and it is this payment. `unchecked`: it rests on the seller's report so far; say that the seller reported it paid and the chain has not confirmed it yet, never call it confirmed, and `superstables status` checks again. After removal of an earlier matching inclusion, report that the inclusion was removed and the outcome is unknown; do not say the chain has not confirmed it yet. A transaction that is not this payment makes the attempt `uncertain` with `chain: "mismatch"`. A later check that shows the payment was never made, and can no longer be, makes it `failed` with `chain: "unpaid"`. Never pay again after `settled`, `paid_service_failed` or `uncertain`. Toward the owner's daily cap, a payment counts on the day it ended and on every day while it can still move money: waiting for the owner, signed and in flight, `uncertain`, or with a receipt the chain has not confirmed (an EVM authorization until it expires; a Tempo transfer or a Solana transaction until `superstables status` resolves it). So a second payment can be refused while the first is unresolved.

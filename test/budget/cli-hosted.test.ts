@@ -942,8 +942,8 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const blockHash = `0x${"ef".repeat(32)}`;
     await rpc.close();
     rpc = await startFakeRpc(84532, (method, params) => {
-      // a chain whose final head is still below the owner's block
-      if (finalHead && method === "eth_getBlockByNumber" && params[0] === "finalized") return { number: finalHead, hash: `0x${"cd".repeat(32)}`, timestamp: "0x7d0", transactions: [] };
+      // a chain whose final head is still below the owner's block; the head is one block, so asked for by its number it answers the same
+      if (finalHead && method === "eth_getBlockByNumber" && (params[0] === "finalized" || params[0] === finalHead)) return { number: finalHead, hash: `0x${"cd".repeat(32)}`, timestamp: "0x7d0", transactions: [] };
       if (method === "eth_blockNumber") return funded || granted ? "0x20" : "0x10";
       const t = txs[params[0]];
       if (method === "eth_getTransactionByHash" && t) return { hash: params[0], blockHash, blockNumber: "0x20", from: OWNER, to: t.to, input: t.input, value: `0x${t.value.toString(16)}`, gas: "0x10000", gasPrice: "0x1", nonce: "0x0", transactionIndex: "0x0", type: "0x0", v: "0x1b", r: "0x1", s: "0x1", chainId: "0x14a34" };

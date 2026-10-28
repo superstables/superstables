@@ -2,7 +2,9 @@
 // and only with a Confirmed basis: a terminal read of the request under its own id, the site's confirmed cancel, or the site's own
 // refusal to know it under that id. Anything else parks the client and calls onUnresolved. Against a fake superstables.com.
 //
-// Every path that can settle a poll is listed below, and a static check fails if code outside the sink resolves one.
+// Every path that can settle a poll is listed below, and a static check fails if code outside the sink resolves one. A request the
+// connector created from one signed here (adopt, wait --site-request) is no exception: adopt() only checks and records it, and the
+// restarted worker that finishes it is a taken-over request like any other (test/budget/hosted-adopt.test.ts drives it end to end).
 import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -100,6 +102,18 @@ describe("the sink is the only place a poll is settled", () => {
     const bundle = text.slice(text.indexOf("private async pollBundle("), text.indexOf("private audit("));
     expect(poll).not.toMatch(/Confirmed\.ofWhole\(/);
     expect(bundle).not.toMatch(/Confirmed\.ofView\(/);
+  });
+
+  it("the adopt path settles nothing: it checks the connector's request, records it, and leaves the outcome to a restarted worker", () => {
+    const text = code.join("\n");
+    const from = text.indexOf("private async adopt(");
+    const adopt = text.slice(from, text.indexOf("\n  }\n", from) + 4);
+    expect(adopt.length).toBeGreaterThan(500);
+    expect(adopt).not.toMatch(/\bresolve\(|\bsettle\(|settleOne|settleBundle|Confirmed\.|\bpoll(?:Bundle)?\(/);
+    expect(adopt).toMatch(/a\.onAdopt\(/);
+    expect(adopt.trimEnd()).toMatch(/throw new HostedAdopted\(\);\s*}$/);
+    // and a request taken over carries no shortcut for one that was adopted: the restarted worker polls it as it polls any other
+    expect(text.slice(text.indexOf("private async poll("), text.indexOf("private audit("))).not.toMatch(/signed|adopt/);
   });
 
   it("a client that finishes a recorded request is refused without the sink's exit", () => {

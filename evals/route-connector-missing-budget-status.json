@@ -1,0 +1,12 @@
+{
+  "skills": ["superstables"],
+  "query": "How much is left in my budget on Base Sepolia?",
+  "files": [],
+  "expected_behavior": [
+    "This run has no Superstables connector tools. It runs `superstables budget status --rail evm --chain base-sepolia` (or without `--chain`, the evm default) and calls no connector tool",
+    "Reports `remaining` and the state from the CLI's result",
+    "On exit 1 (no budget here), says which home and chain it checked, from `home` in the result, and does not set or change `SUPERSTABLES_HOME` or look in another home",
+    "Does not tell the owner to install or connect anything before using the CLI, and does not stop because the connector is absent",
+    "Starts no owner step and buys nothing: the owner only asked what is left"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "skills": ["superstables"],
+  "query": "How much is left in my budget on Base Sepolia?",
+  "files": [],
+  "expected_behavior": [
+    "This run has the Superstables connector, but it is not signed in, so `list_my_budgets` fails with a sign-in error",
+    "Stops after the sign-in failure and asks the owner, in one short reply, to connect the connector once, then ends its turn",
+    "Does not repeat the failing call in a loop, and does not run the CLI before the owner has answered",
+    "If the owner declines to connect it, runs `superstables budget status --rail evm --chain base-sepolia` (or without `--chain`), says it is using the CLI, and reports `remaining` and the state from its result",
+    "Starts no owner step and buys nothing"
+  ]
+}

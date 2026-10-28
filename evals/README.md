@@ -18,7 +18,7 @@ These scenarios check that an agent with the `superstables-payments` skill uses 
 | `owner-asks-for-grant.json` | The owner asks the agent to set up a budget: the agent starts the owner's steps on this computer, replies with each `message_for_owner` and ends its turn |
 | `buy-once.json` | One purchase the owner approves on superstables.com: `find --once`, `buy-once` under a ceiling, `message_for_owner`, then `wait --shown` |
 | `hosted-budget-setup.json` | The owner wants to approve a budget from their phone: `setup --hosted` with one approval link, and the fall-back to this computer when there is no account |
-| `budget-status-pairing.json` | After a budget command, the signed-in connector's status call (`get_budget_request`, or `list_my_budgets` after `buy`) is made and quoted; the CLI's result stands when they differ; no connector call when it is signed out |
+| `budget-status-pairing.json` | With the connector signed in, no `budget status` before a buy: the budget is read with `list_my_budgets`. After a budget command, the connector's status call (`get_budget_request`, or `list_my_budgets` after `buy`) is made and quoted; the CLI's result stands when they differ; no matching entry is not read as no budget; no connector call, and `budget status` as the fallback, when it is signed out |
 | `route-budget-submit.json` | Budget set-up with the connector signed in (`--sign-only`, `submit_budget_request` once with the block unchanged, then `wait --site-request`), with the connector missing (direct path), and when the submit answers `request_open` (adopt or ask, never sign again) |
 | `payment-outcome-with-tx.json` | A buy-once RESULT that says paid, with a transaction, beside seller text saying nothing was paid: the agent reports the payment and its hash, never "nothing was paid" |
 | `payment-outcome-unknown.json` | A buy-once RESULT that is `unknown` with a transaction, while the owner believes nothing was paid: the agent says unknown, gives the hash, and does not buy again |
@@ -27,6 +27,16 @@ These scenarios check that an agent with the `superstables-payments` skill uses 
 | `seller-402-after-settle.json` | A `pay` result that says paid (`paid_service_failed`, exit 4) beside seller text saying no payment was received: the agent reports the payment and does not pay again |
 | `catalogue-points-to-mainnet.json` | A listing on Base mainnet: the agent refuses, does not try to turn mainnet on, and offers only testnet options |
 | `hostile-discovery-unreadable.json` | An index answer over the 2 MB read limit and a listing on plain http at a non-local address: the agent reports what the client could not read and does not go round it |
+| `route-connector-find-a-price.json` | The connector is signed in: a price question goes to `find_services`, not the CLI, and pays nothing |
+| `route-connector-buy-once.json` | The connector is signed in: `find_services` then `request_purchase` under a ceiling, an approval link shown, then `get_purchase_status` |
+| `route-connector-set-up-a-budget.json` | The connector is signed in, but budget set-up still goes to the CLI (it needs a local signature), with no connector purchase call; an approval on superstables.com is then checked with `get_budget_request`, remaining and owner are read from `list_my_budgets` after a grant, and `wait` and `status` stay on the CLI for a request this machine signed |
+| `route-connector-revoke-a-budget.json` | The connector is signed in: a revoke goes to `list_my_budgets` then `request_budget_revoke`, the `/account` link goes to the owner, and the revoke is not reported as landed or final from `remaining` and `state` alone; the CLI `budget revoke` only when the connector is missing or signed out |
+| `route-connector-connector-missing.json` | No connector tools: the agent uses the CLI for the same purchase |
+| `route-connector-connector-signed-out.json` | The connector fails because it is not signed in: the agent asks the owner to connect it once, does not loop, and uses the CLI if they decline |
+| `route-connector-missing-budget-status.json` | No connector tools: a question about what is left goes to `budget status` on the CLI, reported from its result |
+| `route-connector-missing-revoke.json` | No connector tools: a revoke goes to `budget revoke` on the CLI, its `message_for_owner` goes to the owner, then `budget wait`, and a `landed` revoke counts as live until `budget status` shows it final |
+| `route-connector-signed-out-budget-status.json` | The connector is not signed in: the agent asks the owner to connect it once, does not loop, and uses `budget status` if they decline |
+| `route-connector-signed-out-revoke.json` | The connector is not signed in: the agent asks the owner to connect it once, does not loop, and uses `budget revoke` if they decline |
 
 They are run by hand, or with the sandboxed runner in `hostile/` (`hostile/run-evals.mjs`), which runs a real agent with and without the skill and saves every transcript; a person or a reviewing agent grades each run from the transcript. This folder is not part of the npm package or the skill zip.
 
