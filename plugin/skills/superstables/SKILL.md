@@ -36,7 +36,9 @@ Set-up, grant, buy and recover go through the CLI, because they need a
 signature from this machine. `budget find` and `budget preflight` also stay on
 the CLI today, because the connector has no tool for them yet. `budget wait` and
 `budget status` stay on it for a request this machine signed. Read
-[references/cli.md](references/cli.md) before you run any CLI command.
+[references/cli.md](references/cli.md) before you run any CLI command. Write
+each command out in full, as it shows them: never put the client command in a
+shell variable or alias, which the host cannot check before it runs.
 
 ## When the connector is missing or signed out
 
