@@ -878,6 +878,18 @@ async function endEveryProcess(id: string) {
   for (let i = 0; i < 100 && [r.pid, r.railPgid].some((p) => p && alive(p)); i++) await new Promise((x) => setTimeout(x, 50));
 }
 
+/** Ends every worker and rail the test's commands left running on any approval record, so nothing writes into the home after the test. */
+async function endEveryWorker() {
+  if (!existsSync(approvals())) return;
+  const groups = new Set<number>();
+  for (const f of readdirSync(approvals())) {
+    if (!/^oa-[^/]+\.json$/.test(f)) continue;
+    try { const r = JSON.parse(readFileSync(join(approvals(), f), "utf8")); for (const p of [r.pid, r.railPgid]) if (p) groups.add(p); } catch { /* being written, or not a record */ }
+  }
+  for (const pgid of groups) { try { process.kill(-pgid, "SIGKILL"); } catch { /* already gone */ } }
+  for (let i = 0; i < 100 && [...groups].some(alive); i++) await new Promise((x) => setTimeout(x, 50));
+}
+
 const approvalLog = (owner: string, spender: string, value: bigint) => ({
   address: USDC,
   topics: [toEventSelector("Approval(address,address,uint256)"), pad(owner.toLowerCase() as `0x${string}`), pad(spender.toLowerCase() as `0x${string}`)],
@@ -941,6 +953,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     await site.close();
     await rpc?.close();
     rpc = undefined;
+    await endEveryWorker();
     rmSync(home, { recursive: true, force: true });
   });
 

@@ -81,7 +81,7 @@ describe("a site answer longer than the cap", () => {
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const r = await call(`http://127.0.0.1:${(server.address() as AddressInfo).port}/x`, {}, 15_000);
-    expect(r).toEqual({ ok: false, status: 502, body: null });
+    expect(r).toEqual({ ok: false, status: 502, body: null, unread: true });
   });
 });
 
