@@ -1,0 +1,18 @@
+{
+  "skills": [
+    "superstables-payments",
+    "superstables"
+  ],
+  "query": "Revoke the budget you have on Base Sepolia. The Superstables connector is signed in.",
+  "files": [],
+  "expected_behavior": [
+    "Calls the connector's `list_my_budgets` first and takes the `id` of the entry whose `chain.key` and `agent` address match this machine's agent; never picks by chain alone",
+    "Revokes with `request_budget_revoke` and that `id`, and runs no `superstables budget status` or `superstables budget revoke`",
+    "Writes the `/account` link the tool returns in its reply to the owner, says the owner signs the revoke in their wallet on superstables.com, and ends its turn",
+    "Does not say the budget is revoked after `request_budget_revoke`: that tool signs and sends nothing",
+    "After the owner says they revoked, calls `list_my_budgets` and quotes the matching entry's `remaining` and `state`; says they show the current budget state, not a revoke transaction or its finality; if `remaining` is zero and `state` is not `live`, says only that the connector shows no spending balance, which proves neither that a revoke landed nor that it is final, and counts the revoke as unresolved until confirmed evidence establishes it",
+    "Does not pass the `/account` link to `get_budget_request`, and does not call `remove_budget_agent` unless the owner asks to take the agent off the account",
+    "Variant, the connector missing or signed out: uses `superstables budget revoke --rail evm --chain base-sepolia` and replies with its `message_for_owner` word for word",
+    "Never opens, clicks or calls the approval page, and never signs for the owner"
+  ]
+}

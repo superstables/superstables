@@ -1,0 +1,13 @@
+{
+  "skills": ["superstables-payments", "superstables"],
+  "query": "Revoke the budget you have on Base Sepolia.",
+  "files": [],
+  "expected_behavior": [
+    "This run has no Superstables connector tools. It runs `superstables budget revoke --rail evm --chain base-sepolia` (or without `--chain`) and calls no connector tool",
+    "On `waiting_owner`, replies with the result's `message_for_owner` word for word, says the owner approves the revoke in their wallet, and ends its turn",
+    "When the owner says they've approved, runs `superstables budget wait --id ID --shown` and reports the state it returns",
+    "On `landed` (not final), says the revoke is in a block but not final yet, counts the budget as still live, and starts no other owner step until `superstables budget status` shows the action final",
+    "Does not tell the owner to install or connect anything before using the CLI",
+    "Never opens, clicks or calls the approval page, and never signs for the owner"
+  ]
+}

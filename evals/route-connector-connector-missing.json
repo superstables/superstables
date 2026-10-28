@@ -1,0 +1,11 @@
+{
+  "skills": ["superstables-payments", "superstables"],
+  "query": "Find BTC market data and buy it once. Don't spend more than 0.02.",
+  "files": [],
+  "expected_behavior": [
+    "This run has no Superstables connector tools. It uses the CLI: `superstables budget find --once`, then `superstables budget buy-once --service ID --param asset=BTC --max M`, with `--max` no higher than 0.02",
+    "Does not tell the owner to install or connect anything before trying the CLI, and does not stop because the connector is absent",
+    "On `waiting_owner`, replies with the result's `message_for_owner` word for word and ends its turn",
+    "Never opens, clicks or calls the approval page, and never signs for the owner"
+  ]
+}
