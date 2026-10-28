@@ -19,6 +19,7 @@ Only operations needing a local signature go through the CLI; everything else go
 - `list_my_budgets`: read each agent's budget, what is left and its state.
 - `get_budget_request`: read a budget approval on superstables.com from its complete approval link.
 - `request_budget_revoke`: get the owner's link to revoke an agent's budget. The owner signs the revoke in their wallet.
+- `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
@@ -32,8 +33,12 @@ owner's link on superstables.com and signs nothing).
 
 ## What stays on the CLI
 
-Set-up, grant, buy and recover go through the CLI, because they need a
-signature from this machine. `budget find` and `budget preflight` also stay on
+Set-up, grant, buy and recover are signed on the CLI, because they need a
+signature from this machine. When the connector offers `submit_budget_request`,
+send `budget setup --hosted` and `grant` on the `evm` rail through it: sign with
+`--sign-only`, send the block with `submit_budget_request`, then follow it with
+`budget wait --site-request`, as "Sending a budget request through the
+connector" in [references/budget.md](references/budget.md) describes. `budget find` and `budget preflight` also stay on
 the CLI today, because the connector has no tool for them yet. `budget wait` and
 `budget status` stay on it for a request this machine signed. Read
 [references/cli.md](references/cli.md) before you run any CLI command. Write
