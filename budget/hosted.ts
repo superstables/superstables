@@ -84,6 +84,7 @@ import { WALLET_STATES, sentEvidence, viewEvidence } from "./site.mjs";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
 import { readCapped } from "./response.mjs";
+import { EVM_CHAIN_KEYS } from "./evm/chains.mjs";
 import { BUDGET_API, LINK_FRAGMENT, MATCH_CODE, SITE_MAX_BYTES, UNSAFE_URL, accountRefusalNext, call, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteRequestProblem, siteText, siteWord } from "./site.mjs";
 
 export { scrub, siteFailedWords, siteWord };
@@ -859,7 +860,7 @@ export class HostedApprovals {
   /**
    * renew(), with the site's answer when it gave no token: its status (0 for none), the reason in words, whether the answer
    * showed the owner's wallet was asked (an error's `money_moved`, say), and `notOurs`: the answer is the site's own complete
-   * refusal that this agent made no request with that id (RENEW_REFUSED), and shows no wallet asked.
+   * refusal that this agent made no request with that id (RENEW_REFUSED), names no other request, and shows no wallet asked.
    */
   private async renewToken(id: string): Promise<{ token: string } | { status: number; why: string; asked: boolean; notOurs: boolean }> {
     const path = `${BUDGET_API}/requests/${id}/token`;
@@ -872,6 +873,8 @@ export class HostedApprovals {
       let json: any = null;
       try { json = JSON.parse(bytes.toString("utf8")); } catch {}
       const asked = viewEvidence(json);
+      // a refusal that names an id (itself or in its error) other than this one is about another request, as readSiteRequest `own`
+      if ([json?.id, json?.error?.id].some((x) => x !== undefined && x !== null && x !== id)) return { status: res.status, why: "an answer about another request", asked, notOurs: false };
       if (!res.ok) return { status: res.status, why: siteFailure(res.status, json), asked, notOurs: !asked && RENEW_REFUSED[res.status] !== undefined && json?.error?.code === RENEW_REFUSED[res.status] };
       return json && json.id === id && isSiteToken(json.access_token) ? { token: json.access_token as string } : { status: res.status, why: "an answer with no token for that request", asked, notOurs: false };
     } catch (err) {
@@ -924,7 +927,7 @@ export class HostedApprovals {
     const walletAsked = viewEvidence(r.view);
     const want = { id, kind: ask.kind, rail: this.s.rail, chain: this.s.chain, agent: agentAddressOf(this.s.agentKey), body: ask.body, then: ask.then };
     const problem = signedProblem(r.view, want, this.w.same);
-    if (problem && !readComplete(r.view, want)) return kept("the site's read of it leaves out, or garbles, what was signed", walletAsked);
+    if (problem && !readComplete(r.view, want, this.w.owner)) return kept("the site's read of it leaves out, or garbles, what was signed", walletAsked);
     if (problem) return walletAsked ? kept(problem, true) : notAdopted(problem);
     const now = Date.now();
     const siteExpiry = Date.parse(typeof r.view.expires_at === "string" ? r.view.expires_at : "");
@@ -1646,13 +1649,18 @@ function signedProblem(v: any, f: SignedWant, same: (a?: string | null, b?: stri
   return "";
 }
 
+/** The request kinds, rails and chain keys the site's budget API sends, so a read naming anything else is garbled, not other terms. */
+const SITE_KINDS = new Set(["link", "grant", "revoke", "fund_agent"]);
+const SITE_CHAINS: Record<string, readonly string[]> = { evm: EVM_CHAIN_KEYS, tempo: ["moderato"], solana: ["devnet"] };
+
 /**
- * Whether the site's read carries every field signedProblem compares, each in the site's format. Only then does a difference
- * show another request; a read that leaves one out, or garbles it, shows nothing.
+ * Whether the site's read carries every field signedProblem compares, each in the site's format: a kind, rail and chain the API
+ * sends, an agent address of this rail (`address`). Only then does a difference show another request; a read that leaves one out,
+ * or garbles it, shows nothing.
  */
-function readComplete(v: any, f: SignedWant): boolean {
-  if (!v || typeof v !== "object" || v.id !== f.id || typeof v.kind !== "string" || typeof v.agent !== "string" || typeof v.rail !== "string") return false;
-  if (typeof (v.chain && typeof v.chain === "object" ? v.chain.key : v.chain) !== "string") return false;
+function readComplete(v: any, f: SignedWant, address: (v: unknown) => string | null): boolean {
+  if (!v || typeof v !== "object" || v.id !== f.id || !SITE_KINDS.has(v.kind) || !address(v.agent) || !Object.hasOwn(SITE_CHAINS, v.rail)) return false;
+  if (!SITE_CHAINS[v.rail].includes(v.chain && typeof v.chain === "object" ? v.chain.key : v.chain)) return false;
   const amount = (x: any) => typeof x?.solana?.amount_atomic === "string" && /^\d+$/.test(x.solana.amount_atomic);
   if (f.kind !== "link") return f.body.transaction ? isTx(v.transaction) : amount(v);
   const then = f.then ?? [];

@@ -1,4 +1,4 @@
-// The EVM chain table. The only place that names a chain: chains.ts (the rail), doctor.mjs and cli.mjs read it.
+// The EVM chain table. The only place that names a chain: chains.ts (the rail), doctor.mjs, cli.mjs and hosted.ts read it.
 // Plain data, no imports, so the CLI and doctor load it without the rail's dependencies.
 // Adding a chain is one entry here, after grant, buy, reconcile and revoke were proven on its testnet
 // against a third-party seller.

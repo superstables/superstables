@@ -162,6 +162,8 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       [drop("agent"), false],
       [drop("steps"), false],
       [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: { to: "nope" } }] }), false],
+      [(v: any) => ({ ...v, agent: "garbled" }), false],
+      [(v: any) => ({ ...v, chain: { key: "garbled" } }), false],
     ] as const) {
       site.readAnswer = (_r, v) => ({ status: 200, body: change(v) });
       const { err, adopted, kept } = await adopt(KEY, record, given, bundle(AGENT));
@@ -177,6 +179,38 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
         expect(kept).toMatchObject([{ requestId: given.requestId, walletAsked: false }]);
       }
     }
+  });
+
+  it("other terms on an approval: a read naming another agent, kind or chain the site sends is refused; one with a value the site never sends is kept", async () => {
+    const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+    const given = await submit(request);
+    const otherAgent = privateKeyToAccount(OTHER_KEY).address;
+    for (const [changed, refused] of [
+      [{ agent: otherAgent }, true],
+      [{ kind: "revoke" }, true],
+      [{ chain: "arc-testnet" }, true],
+      [{ rail: "tempo", chain: "moderato" }, true],
+      [{ agent: "" }, false],
+      [{ agent: "garbled" }, false],
+      [{ kind: "" }, false],
+      [{ kind: "garbled" }, false],
+      [{ rail: "" }, false],
+      [{ rail: "garbled" }, false],
+      [{ rail: "solana" }, false],
+      [{ chain: "" }, false],
+      [{ chain: "garbled" }, false],
+    ] as const) {
+      const what = JSON.stringify(changed);
+      site.readAnswer = (_r, v) => ({ status: 200, body: { ...(v as object), ...changed } });
+      const { err, adopted, kept } = await adopt(KEY, record, given, grant(AGENT, 10000n));
+      expect(err, what).toBeInstanceOf(HostedRefusal);
+      expect(adopted).toBeUndefined();
+      expect((err as HostedRefusal).notAdopted, what).toBe(refused);
+      expect((err as HostedRefusal).sending, what).toBe(!refused);
+      expect(kept, what).toMatchObject(refused ? [] : [{ requestId: given.requestId, walletAsked: false }]);
+      if (!refused) expect((err as HostedRefusal).message, what).toMatch(/leaves out, or garbles, what was signed.*It is kept with this approval/);
+    }
+    expect(site.requests[0].cancels).toBe(0);
   });
 
   it("values that are not the site's own for that request are refused before the site is asked", async () => {
@@ -251,6 +285,11 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       [{ status: 404, body: { error: { code: "not_your_request" } } }, notAsked],
       [{ status: 401, body: { error: { code: "agent_proof" } } }, notAsked],
       [{ status: 200, body: { id: given.requestId } }, notAsked],
+      // a refusal that names another request says nothing about this one; one that names this request is still a refusal
+      [{ status: 403, body: { id: "ba_different0002", error: { code: "not_your_request", id: "ba_different0002" } } }, notAsked],
+      [{ status: 403, body: { id: "ba_different0002", error: { code: "not_your_request" } } }, notAsked],
+      [{ status: 404, body: { error: { code: "not_found", id: "ba_different0002" } } }, notAsked],
+      [{ status: 404, body: { id: given.requestId, error: { code: "not_found", id: given.requestId } } }, []],
     ];
     for (const [answer, kept] of cases) {
       const what = JSON.stringify(answer).slice(0, 120);
@@ -748,9 +787,14 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     { path: "the token renewal answers 401", fault: () => answer(401, { error: { code: "agent_proof" } }) },
     { path: "the token renewal answers 502 with nothing", fault: () => answer(502, "") },
     { path: "the token renewal answers 200 without a token", fault: () => answer(200, { id: "ba_other0001" }) },
+    { path: "the token renewal answers 403 not_your_request about another request", fault: () => answer(403, { id: "ba_different0002", error: { code: "not_your_request", id: "ba_different0002" } }) },
     {
       path: "the read leaves out the agent",
       fault: () => ({ on: () => { site.readAnswer = (_r, v) => { const { agent: _drop, ...rest } = v as Record<string, unknown>; return { status: 200, body: rest }; }; }, off: () => { site.readAnswer = undefined; } }),
+    },
+    {
+      path: "the read names an agent that is no address",
+      fault: () => ({ on: () => { site.readAnswer = (_r, v) => ({ status: 200, body: { ...(v as object), agent: "garbled" } }); }, off: () => { site.readAnswer = undefined; } }),
     },
     { path: "a local check: the agent key file can be read by other users", fault: () => ({ on: () => chmodSync(keyFile(), 0o644), off: () => chmodSync(keyFile(), 0o600), local: /key file/ }) },
     {
