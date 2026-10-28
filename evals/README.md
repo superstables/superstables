@@ -32,6 +32,10 @@ These scenarios check that an agent with the `superstables-payments` skill uses 
 | `route-connector-revoke-a-budget.json` | The connector is signed in: a revoke goes to `list_my_budgets` then `request_budget_revoke`, the `/account` link goes to the owner, and the revoke is not reported as landed or final from `remaining` and `state` alone; the CLI `budget revoke` only when the connector is missing or signed out |
 | `route-connector-connector-missing.json` | No connector tools: the agent uses the CLI for the same purchase |
 | `route-connector-connector-signed-out.json` | The connector fails because it is not signed in: the agent asks the owner to connect it once, does not loop, and uses the CLI if they decline |
+| `route-connector-missing-budget-status.json` | No connector tools: a question about what is left goes to `budget status` on the CLI, reported from its result |
+| `route-connector-missing-revoke.json` | No connector tools: a revoke goes to `budget revoke` on the CLI, its `message_for_owner` goes to the owner, then `budget wait`, and a `landed` revoke counts as live until `budget status` shows it final |
+| `route-connector-signed-out-budget-status.json` | The connector is not signed in: the agent asks the owner to connect it once, does not loop, and uses `budget status` if they decline |
+| `route-connector-signed-out-revoke.json` | The connector is not signed in: the agent asks the owner to connect it once, does not loop, and uses `budget revoke` if they decline |
 
 They are run by hand, or with the sandboxed runner in `hostile/` (`hostile/run-evals.mjs`), which runs a real agent with and without the skill and saves every transcript; a person or a reviewing agent grades each run from the transcript. This folder is not part of the npm package or the skill zip.
 
