@@ -1,5 +1,5 @@
 {
-  "skills": ["superstables-payments", "superstables"],
+  "skills": ["superstables"],
   "query": "How much is left in my budget on Base Sepolia?",
   "files": [],
   "expected_behavior": [
