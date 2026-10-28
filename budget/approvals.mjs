@@ -909,21 +909,24 @@ export function adoptSigned(id, nonce, hosted, shown) {
  * The one way anything about a site request given for the signed request `nonce` reaches its record: the request itself
  * (unsettledRequest), kept before anything is checked, and then what every answer about it showed, merged under the record's lock
  * before the next contact. Evidence only grows: a request already kept stays, the wallet once seen asked stays asked, hashes are
- * added to, and an answer without them changes nothing. Throws when nothing was kept.
+ * added to, and an answer without them changes nothing. Returns the evidence the record holds then (hosted.ts givesUp reads only
+ * that); throws when nothing was kept.
  * @param {{ requestId: string, link: string, matchCode: string, walletAsked?: boolean, hashes?: string[] }} e
+ * @returns {{ walletAsked: boolean, hashes: string[] }}
  */
 export function mergeEvidence(id, nonce, e) {
-  let kept = false;
+  let kept = null;
   update(id, (before) => {
     if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
     const earlier = unsettledRequest(before);
     if (earlier && earlier.requestId !== e.requestId) return null;
-    kept = true;
     const hashes = [...new Set([...(before.hosted.signed.hashes ?? []), ...(e.hashes ?? [])])];
     const walletAsked = before.hosted.signed.walletAsked === true || e.walletAsked === true || hashes.length > 0;
+    kept = { walletAsked, hashes };
     return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: e.requestId, link: e.link, matchCode: e.matchCode }, ...(walletAsked ? { walletAsked: true } : {}), ...(hashes.length ? { hashes } : {}) } } };
   });
   if (!kept) throw new Error(`approval ${id} could not keep ${e.requestId}; whether the owner's wallet was asked for it is unknown`);
+  return kept;
 }
 
 /**

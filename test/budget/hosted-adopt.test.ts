@@ -12,6 +12,9 @@
 //   - an answer that shows the owner's wallet was asked (a renewal, a read, an error), before or after adopting, then answers without
 //     it, the window passing after the connector sent it, and a killed wait: the evidence is never lost, and the outcome is unknown
 //     until it is final ("wallet maybe asked", "the property")
+//   - a transaction any answer names, whatever its status or shape (a read, an error, a read about another request, a renewal), at
+//     the top, in its error, a step or next_action: kept, and no exit after it ("Sol's round 6 repros", "anywhere walletEvidence reads")
+//   - a final read whose reason code the site sets after a wallet handoff, or none: unknown, never given up ("reason code")
 //   - settling an adopted request without a confirmed basis: the sink parks it ("confirmed basis")
 //   - a wait killed while it reads an adopted request: the next one resumes it and settles once ("killed wait")
 //   - the access token anywhere but the approval record, mode 600 ("token")
@@ -27,6 +30,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { HostedAdopted, HostedApprovals, HostedRefusal, HostedSigned, givesUp, type Evidence, type HostedRecord, type SignedRecord, type SignedRequest } from "../../budget/hosted.js";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { evmOwner, startFakeRpc, startFakeSite, submitSigned, type FakeSite } from "../helpers/fake-site.js";
+import { SITE_WORDS, walletEvidence } from "../../budget/site.mjs";
 import type { TestServer } from "../helpers/servers.js";
 
 const KEY = `0x${"11".repeat(32)}` as const;
@@ -41,6 +45,13 @@ const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enf
 const erc20 = parseAbi(["function approve(address spender, uint256 value) returns (bool)"]);
 const approveData = (agent: string, value: bigint) => encodeFunctionData({ abi: erc20, functionName: "approve", args: [agent as `0x${string}`, value] });
 const grantTx = (agent: string, cap: bigint) => ({ to: USDC, data: approveData(agent, cap), value: "0x0" });
+const NONE: Evidence = { walletAsked: false, hashes: [] };
+const isEvmTx = (h: unknown) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
+/** The reason codes the site sets only before it asks the wallet (hosted.ts NEVER_SIGNED_CODES), and every other code it documents. */
+const NEVER_SIGNED_CODES = ["owner_rejected", "not_requested", "match_code_mismatch", "approval_expired", "agent_cancelled", "agent_removed", "cap_above_limit", "owner_frozen", "earlier_step", "link_not_done", "another_open"];
+const OTHER_CODES = [...SITE_WORDS.code].filter((c) => !NEVER_SIGNED_CODES.includes(c));
+/** The reasons the site gives a request or step it closed after the wallet was handed the transaction, or may have been (flow.ts REASONS), and partly_done. */
+const AFTER_HANDOFF_CODES = ["reverted", "mismatch", "no_start_block", "stale_tx", "not_found", "wallet_timeout", "owner_stopped", "page_stopped_before_send", "not_signed", "not_landed", "network_refused", "partly_done"];
 const PROOF_HEADERS = ["superstables-agent", "superstables-agent-nonce", "superstables-agent-signature", "superstables-agent-timestamp"];
 
 let site: FakeSite;
@@ -80,7 +91,14 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
   async function adopt(key: typeof KEY, signed: SignedRecord, given: Given, ask: Ask) {
     let adopted: HostedRecord | undefined;
     const kept: (Given & Evidence)[] = [];
-    const c = new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: key, adopt: { signed, ...given, onAdopt: (r) => { adopted = r; }, onEvidence: (e) => { kept.push(e); } } });
+    // the record's evidence as mergeEvidence keeps it: it only grows
+    let held: Evidence = { walletAsked: signed.signed.walletAsked === true, hashes: signed.signed.hashes ?? [] };
+    const onEvidence = (e: Given & Evidence) => {
+      kept.push(e);
+      const hashes = [...new Set([...held.hashes, ...e.hashes])];
+      return (held = { walletAsked: held.walletAsked || e.walletAsked || hashes.length > 0, hashes });
+    };
+    const c = new HostedApprovals({ site: site.url, rail: "evm", chain: "base-sepolia", agentKey: key, adopt: { signed, ...given, onAdopt: (r) => { adopted = r; }, onEvidence } });
     const err = await ask(c).catch((e) => e);
     return { err, adopted, kept, asked: kept.some((e) => e.walletAsked) };
   }
@@ -355,18 +373,37 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       [403, "not_your_request", false],
       [403, null, false],
     ];
-    for (const [status, body, exact] of rows) expect(givesUp(id, { renewal: { status, body } }), `${status} ${JSON.stringify(body)}`).toBe(exact ? (status === 403 ? "not_your_request" : "not_found") : null);
+    for (const [status, body, exact] of rows) expect(givesUp(id, { renewal: { status, body } }, NONE), `${status} ${JSON.stringify(body)}`).toBe(exact ? (status === 403 ? "not_your_request" : "not_found") : null);
+    // the record's evidence decides, never the answer alone: the exact refusal, once any answer recorded the wallet asked or a hash
+    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }]) expect(givesUp(id, { renewal: { status: 404, body: shape("not_found") } }, held)).toBeNull();
   });
 
   it("givesUp, read: only a well-formed final read in a state the owner never signed in, with no wallet asked, no transaction and no step asked", () => {
     const id = "bl_test0001";
     const view = (extra: Record<string, unknown> = {}) => ({ id, kind: "link", state: "expired", final: true, owner: null, owner_proof_version: 2, tx_hash: null, wallet_asked: false, reason: "words", reason_code: "approval_expired", next_action: { type: "none" }, ...extra });
     const step = (extra: Record<string, unknown> = {}) => ({ index: 0, kind: "grant", state: "skipped", tx_hash: null, wallet_asked: false, reason_code: "link_not_done", ...extra });
+    const linked = (state: string, steps: unknown[]) => view({ state, owner: OWNER, owner_proof: "0x" + "cd".repeat(65), link_state: "linked", reason_code: null, steps });
     const rows: [unknown, string | null][] = [
       [view(), "expired"],
       [view({ state: "rejected", reason_code: "owner_rejected" }), "rejected"],
       [view({ state: "cancelled", reason_code: "agent_cancelled" }), "cancelled"],
-      [view({ reason_code: null }), "expired"],
+      // a link the owner linked: its state is its steps', and it has no reason code of its own. Its steps the site closed when it was
+      // linked (owner_frozen, cap_above_limit) and skipped after: no transfer was asked for or signed
+      [linked("rejected", [step({ state: "rejected", reason_code: "owner_frozen" }), step({ index: 1, reason_code: "earlier_step" })]), "rejected"],
+      [linked("rejected", [step({ state: "rejected", reason_code: "cap_above_limit" }), step({ index: 1, reason_code: "earlier_step" })]), "rejected"],
+      [linked("rejected", [step({ state: "rejected", reason_code: "owner_rejected" })]), "rejected"],
+      [linked("expired", [step({ state: "expired", reason_code: "approval_expired" })]), "expired"],
+      [linked("rejected", [step({ state: "rejected", reason_code: "owner_frozen" }), step({ index: 1, reason_code: "not_signed" })]), null],
+      [linked("rejected", [step({ state: "rejected", reason_code: null })]), null],
+      [linked("rejected", []), null],
+      [{ ...linked("rejected", [step({ state: "rejected", reason_code: "owner_frozen" })]), link_state: "expired" }, null],
+      [{ ...linked("rejected", [step({ state: "rejected", reason_code: "owner_frozen" })]), reason_code: "partly_done" }, null],
+      // only a reason code the site sets before it asks the wallet: none, or any other, keeps the request
+      [view({ reason_code: null }), null],
+      [view({ reason_code: undefined }), null],
+      ...NEVER_SIGNED_CODES.map((reason_code): [unknown, string] => [view({ reason_code }), "expired"]),
+      ...OTHER_CODES.map((reason_code): [unknown, null] => [view({ reason_code }), null]),
+      ...OTHER_CODES.map((reason_code): [unknown, null] => [view({ steps: [step({ reason_code })] }), null]),
       [view({ steps: [step(), step({ index: 1, state: "cancelled" })] }), "expired"],
       [view({ steps: [] }), "expired"],
       // not final, or another state: approved, landed, failed after signing, garbled, undocumented
@@ -401,7 +438,10 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       ["expired", null],
       [null, null],
     ];
-    for (const [read, out] of rows) expect(givesUp(id, { read }), JSON.stringify(read)).toBe(out);
+    // as adopt calls it: with the evidence the record holds once this answer was merged into it
+    for (const [read, out] of rows) expect(givesUp(id, { read }, walletEvidence(read, isEvmTx)), JSON.stringify(read)).toBe(out);
+    // a clean final read, once an earlier answer recorded evidence
+    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }]) expect(givesUp(id, { read: view() }, held)).toBeNull();
   });
 
   it("a token renewal the site does not answer exactly as another agent's or missing keeps the request before the refusal, with the answer's evidence", async () => {
@@ -502,6 +542,12 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     /** A final read as the site sends it when the owner's wallet was never asked. */
     const never = (state: string, reason_code: string | null) => ({ state, final: true, wallet_asked: false, tx_hash: null, reason_code });
     const askedRenewal = (r: { id: string; token: string }) => ({ status: 200, body: { id: r.id, access_token: r.token, wallet_asked: true, money_moved: "unknown" } });
+    /** Sol's round 6 repros: a transaction only next_action names, on a read with other terms, a failed read, and a read about another request. */
+    const SOL: Shape[] = [
+      { name: "Sol's repro: read with another amount, its transaction only in next_action.tx_hash", read: read((v) => ({ ...otherAmount(v), next_action: { type: "verify_on_chain", tx_hash: GRANT_HASH } })), asked: true, hash: GRANT_HASH },
+      { name: "Sol's repro: read 503, its transaction only in error.next_action.tx_hashes", read: () => ({ status: 503, body: { error: { code: "chain_unavailable", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } } } }), asked: true, hash: GRANT_HASH },
+      { name: "Sol's repro: read about another request, its transaction only in next_action.tx_hashes", read: read((v) => ({ ...v, id: "ba_different0002", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } })), asked: true, hash: GRANT_HASH },
+    ];
     const SHAPES: Shape[] = [
       { name: "renewal 200 and the signed terms", adopts: true },
       { name: "renewal 200 with the wallet asked, and the signed terms", renew: askedRenewal, asked: true, adopts: true },
@@ -550,7 +596,10 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       { name: "read 503 with money_moved", read: () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }), asked: true },
       { name: "read cut off", read: read((v) => ({ ...v, reason: "x".repeat(1_100_000) })) },
       { name: "read times out", timeout: "read" },
+      ...SOL,
     ];
+    /** Every answer that gives the request up while the record holds no evidence. */
+    const EXITS = SHAPES.filter((x) => x.frees);
     /** A renewal that recorded the wallet asked, and a read that failed: the request is kept, with evidence. */
     const EVIDENCE: Shape = { name: "renewal 200 with the wallet asked, read 503", renew: askedRenewal, read: () => ({ status: 503, body: { error: { code: "unavailable" } } }), asked: true };
 
@@ -591,12 +640,12 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
         before = { walletAsked: now.signed.walletAsked === true, hashes: now.signed.hashes ?? [] };
         if (freed) {
           expect(now.signed.submitted, what).toBeUndefined();
-          return;
+          return now;
         }
         if (shape.adopts) {
           expect(err, what).toBeInstanceOf(HostedAdopted);
           expect(now, what).toMatchObject({ requestId: given.requestId, token: expect.any(String) });
-          return;
+          return now;
         }
         expect(err, what).toBeInstanceOf(HostedRefusal);
         expect((err as HostedRefusal).sending, what).toBe(true);
@@ -604,6 +653,7 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
         // with evidence, nothing drops it, whatever the check said
         if (before.walletAsked) expect(approvals.dropUnsettled(id, nonce, given.requestId), what).toBe(false);
       }
+      return approvals.readApproval(id).hosted;
     }
 
     it("frees the chain only on givesUp's answers with no recorded evidence, and never loses evidence: each answer alone, then in every order", async () => {
@@ -623,6 +673,70 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       for (const a of SHAPES) await through([EVIDENCE, a], record, given);
       for (const a of kept) for (const b of SHAPES) await through([EVIDENCE, a, b], record, given);
       expect(site.requests[0].cancels).toBe(0);
+    }, 600_000);
+
+    it("Sol's round 6 repros: a transaction next_action names, on any read, is kept, and no exit after it frees the chain", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      for (const sol of SOL) {
+        for (const exit of EXITS) {
+          const now = await through([sol, exit], record, given);
+          expect(now.signed, `${sol.name} → ${exit.name}`).toMatchObject({ walletAsked: true, hashes: [GRANT_HASH], submitted: given });
+        }
+      }
+    }, 600_000);
+
+    // Every place walletEvidence reads a transaction from: the answer, its error, a step of either; in tx_hash, tx_hashes, and
+    // next_action's tx_hash and tx_hashes (next_action of type none, so the hash alone is the evidence).
+    const SPOT = `0x${"c3".repeat(32)}`;
+    const FIELDS = ["tx_hash", "tx_hashes", "next_action.tx_hash", "next_action.tx_hashes"] as const;
+    const put = (o: any, field: (typeof FIELDS)[number]) =>
+      field === "tx_hash" ? { ...o, tx_hash: SPOT } : field === "tx_hashes" ? { ...o, tx_hashes: [SPOT] } : { ...o, next_action: field === "next_action.tx_hash" ? { type: "none", tx_hash: SPOT } : { type: "none", tx_hashes: [SPOT] } };
+    const quiet = { index: 0, kind: "grant", state: "skipped", tx_hash: null, wallet_asked: false, reason_code: "link_not_done" };
+    const PLACES: [string, (b: any) => any][] = FIELDS.flatMap((f): [string, (b: any) => any][] => [
+      [`the answer's ${f}`, (b) => put(b, f)],
+      [`the error's ${f}`, (b) => ({ ...b, error: put(b.error ?? { code: "unavailable" }, f) })],
+      [`a step's ${f}`, (b) => ({ ...b, steps: [put(quiet, f)] })],
+      [`a step of the error's ${f}`, (b) => ({ ...b, error: { ...(b.error ?? { code: "unavailable" }), steps: [put(quiet, f)] } })],
+    ]);
+    /** Answers that are not judged (no token, a failure, other terms, another request), and each exit, carrying the transaction. */
+    const carriers = (place: (b: any) => any): Shape[] => ([
+      { name: "renewal 200 without a token", renew: (r: { id: string }) => ({ status: 200, body: place({ id: r.id }) }) },
+      { name: "renewal 503", renew: () => ({ status: 503, body: place({ error: { code: "unavailable" } }) }) },
+      { name: "read with another amount", read: read((v) => place(otherAmount(v))) },
+      { name: "read 503", read: () => ({ status: 503, body: place({ error: { code: "chain_unavailable" } }) }) },
+      { name: "read about another request", read: read((v) => place({ ...v, id: "ba_different0002" })) },
+      ...EXITS.map((exit): Shape => ({
+        name: `${exit.name}, carrying it`,
+        ...(exit.renew ? { renew: (r: { id: string; token: string }) => { const x = exit.renew!(r); return { ...x, body: place(x.body) }; } } : {}),
+        ...(exit.read ? { read: (v: any) => { const x = exit.read!(v); return { ...x, body: place(x.body) }; } } : {}),
+      })),
+    ] as Shape[]).map((x) => ({ ...x, asked: true, hash: SPOT }));
+
+    it("a transaction anywhere walletEvidence reads is kept, and blocks every exit, in the answer that carries it and after it", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      for (const [where, place] of PLACES) {
+        for (const carrier of carriers(place)) {
+          const what = `${carrier.name}, in ${where}`;
+          const sequences = carrier.name.endsWith("carrying it") ? [[carrier]] : [[carrier], ...EXITS.map((exit) => [carrier, exit])];
+          for (const shapes of sequences) {
+            const now = await through(shapes.map((x) => ({ ...x, name: x === carrier ? what : x.name })), record, given);
+            expect(now.signed, what).toMatchObject({ walletAsked: true, hashes: [SPOT], submitted: given });
+          }
+        }
+      }
+    }, 600_000);
+
+    it("a final read whose reason code the site sets after the wallet may have been asked never gives the request up", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      for (const code of [...AFTER_HANDOFF_CODES, null]) {
+        for (const state of ["expired", "rejected", "cancelled"]) {
+          const now = await through([{ name: `read with another amount, final as ${state}, wallet never asked, reason ${code}`, read: read((v) => ({ ...otherAmount(v), ...never(state, code) })) }], record, given);
+          expect(now.signed.submitted).toEqual(given);
+        }
+      }
     }, 600_000);
 
     it("controls: with nothing given, no answer is asked for, nothing is kept and the chain is not held", async () => {

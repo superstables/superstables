@@ -298,12 +298,13 @@ export async function call(url, init, timeoutMs, fetchImpl = fetch) {
 
 /**
  * One read of a request: GET /api/v1/budget/requests/{id}?wait=N. { ok: true, view } or { ok: false, status, reason }.
- * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
+ * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked; `body`: that answer, for
+ * walletEvidence. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
  */
 /**
  * `own`: the answer must be about this request, and is checked here, once. A view is ok only when its `id` is this request's;
  * an answer (ok or an error) that names another request, in its own `id` or in `error.id`, is `{ ok: false, foreign: true }`:
- * nothing in it is an answer about this request but whether the wallet was asked (`asked`, evidence that is kept). A documented
+ * nothing in it is an answer about this request but its wallet evidence (`asked`, and `body` for walletEvidence: kept). A documented
  * error that names no id is accepted as the site's answer. Without `own` (a first worker, buy-once) the reader is as it was.
  * @param {{ site: string, id: string, token: string, wait?: number, own?: boolean, fetchImpl?: typeof fetch }} args
  */
@@ -314,33 +315,48 @@ export async function readSiteRequest({ site, id, token, wait = 0, own = false, 
   if (own) {
     const named = [r.body?.id, r.body?.error?.id].filter((x) => x !== undefined && x !== null);
     const foreign = named.some((x) => x !== id) || (r.ok && r.body?.id !== id);
-    if (foreign && !r.network) return { ok: false, status: r.status, foreign: true, asked: viewEvidence(r.body), reason: "the site's answer is about another request" };
+    if (foreign && !r.network) return { ok: false, status: r.status, foreign: true, asked: viewEvidence(r.body), body: r.body, reason: "the site's answer is about another request" };
   }
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
   const next = accountRefusalNext(code);
   // an error answer can show the wallet was asked (`error.money_moved`, even on a 429): the caller keeps that
-  return { ok: false, status: r.status, own: own || undefined, code: siteWord("code", code), asked: viewEvidence(r.body), reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
+  return { ok: false, status: r.status, own: own || undefined, code: siteWord("code", code), asked: viewEvidence(r.body), body: r.body, reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
 
 /** Site states that say the owner's wallet was asked, or a transaction exists. */
 export const WALLET_STATES = new Set(["sending", "sent", "confirmed", "failed", "unknown"]);
+const isObject = (x) => !!x && typeof x === "object";
+const named = (x) => x !== undefined && x !== null && x !== "";
+/**
+ * Every transaction one object of the site's answer names, whatever its type: its own `tx_hash` and `tx_hashes`, and those of
+ * its `next_action` (a request's verify_on_chain names `tx_hash`, a link's names `tx_hashes`).
+ */
+const namedTx = (o) => [o, o.next_action].filter(isObject).flatMap((x) => [x.tx_hash, ...(Array.isArray(x.tx_hashes) ? x.tx_hashes : [x.tx_hashes])]).filter(named);
 /**
  * Whether one object of the site's answer (a request, a step, an error) shows that the wallet was asked: wallet_asked, a
- * transaction, a state that may have sent, or money that may have moved (`money_moved` anything but false or absent).
+ * transaction (namedTx), a state that may have sent, a next step that reads the chain (`verify_on_chain`: the site names it
+ * only once something may have been sent), or money that may have moved (`money_moved` anything but false or absent).
  */
 export const sentEvidence = (v) =>
-  !!v && typeof v === "object" && (v.wallet_asked === true || (typeof v.tx_hash === "string" && v.tx_hash !== "") || WALLET_STATES.has(v.state) || (v.money_moved !== undefined && v.money_moved !== null && v.money_moved !== false));
+  isObject(v) && (v.wallet_asked === true || namedTx(v).length > 0 || WALLET_STATES.has(v.state) || v.next_action?.type === "verify_on_chain" || (v.money_moved !== undefined && v.money_moved !== null && v.money_moved !== false));
 
 /**
- * Whether an answer about a request shows that the wallet was asked, anywhere in it: the answer, its `error`, and the steps
- * of either. The one predicate for the first read, every poll and the answer to a cancel.
+ * The one collector of wallet evidence, for any answer of the site about a request, whatever its status or shape (a read, an
+ * error, a renewal, an answer about another request): whether the wallet was asked anywhere in it (sentEvidence over the
+ * answer, its `error`, and the steps of either), and the transactions it names there that `isTx` takes as this rail's.
+ * @param {unknown} v @param {(h: unknown) => boolean} [isTx]
+ * @returns {{ walletAsked: boolean, hashes: string[] }}
  */
-export const viewEvidence = (v) => {
-  if (!v || typeof v !== "object") return false;
-  const inner = v.error && typeof v.error === "object" ? v.error : undefined;
-  return [v, inner].some((x) => sentEvidence(x) || (Array.isArray(x?.steps) && x.steps.some(sentEvidence)));
-};
+export function walletEvidence(v, isTx = () => false) {
+  if (!isObject(v)) return { walletAsked: false, hashes: [] };
+  const objects = [v, v.error].filter(isObject).flatMap((x) => [x, ...(Array.isArray(x.steps) ? x.steps.filter(isObject) : [])]);
+  const hashes = [...new Set(objects.flatMap(namedTx).filter((h) => isTx(h)))];
+  return { walletAsked: objects.some(sentEvidence), hashes };
+}
+
+/** Whether an answer about a request shows that the wallet was asked, anywhere in it (walletEvidence). */
+export const viewEvidence = (v) => walletEvidence(v).walletAsked;
 
 /**
  * POST /api/v1/budget/requests/{id}/cancel. The site cancels only while the owner's wallet has not been asked.
