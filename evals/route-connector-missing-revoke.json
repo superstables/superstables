@@ -1,5 +1,5 @@
 {
-  "skills": ["superstables-payments", "superstables"],
+  "skills": ["superstables"],
   "query": "Revoke the budget you have on Base Sepolia.",
   "files": [],
   "expected_behavior": [

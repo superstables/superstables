@@ -1,8 +1,5 @@
 {
-  "skills": [
-    "superstables-payments",
-    "superstables"
-  ],
+  "skills": ["superstables"],
   "query": "Revoke the budget you have on Base Sepolia. The Superstables connector is signed in.",
   "files": [],
   "expected_behavior": [

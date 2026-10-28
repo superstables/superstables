@@ -1,5 +1,5 @@
 {
-  "skills": ["superstables-payments", "superstables"],
+  "skills": ["superstables"],
   "query": "What does the BTC market data from Superstables cost?",
   "files": [],
   "expected_behavior": [

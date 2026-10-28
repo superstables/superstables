@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,9 +9,10 @@ import { refuseSymlinkPath, syncPlugin } from "../../scripts/plugin-sync.mjs";
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const scratch: string[] = [];
 const skill = "skills/superstables-payments";
-const bundle = `plugin/${skill}`;
+const pluginSkill = "plugin/skills/superstables";
+const bundle = `${pluginSkill}/references`;
 const manifests = ["plugin/plugin.json", "plugin/.claude-plugin/plugin.json"];
-const sourceSkill = "---\nname: superstables-payments\n---\n\nBefore.\n<!-- run: how to run -->\nRun from a checkout.\n<!-- /run -->\nAfter.\n";
+const sourceSkill = "---\nname: superstables-payments\n---\n\nBefore. [Pay](references/pay.md)\n<!-- run: how to run -->\nRun from a checkout.\n<!-- /run -->\nAfter.\n";
 
 function write(root: string, file: string, text: string) {
   mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -25,7 +26,9 @@ function fixture() {
   write(root, "package.json", JSON.stringify({ version: "1.2.3" }));
   for (const manifest of manifests) write(root, manifest, JSON.stringify({ name: "superstables", version: "0.0.0" }));
   write(root, `${skill}/SKILL.md`, sourceSkill);
-  write(root, `${skill}/references/pay.md`, "Payment instructions.\n");
+  write(root, `${skill}/references/pay.md`, "Payment instructions. See SKILL.md and [budgets](budget.md).\n");
+  write(root, `${skill}/references/budget.md`, "Budgets.\n");
+  write(root, `${pluginSkill}/SKILL.md`, "---\nname: superstables\n---\n\nRoute.\n");
   execFileSync("git", ["add", "skills"], { cwd: root });
   return root;
 }
@@ -34,9 +37,52 @@ afterEach(() => {
   for (const root of scratch.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
+function slug(heading: string) {
+  return heading.trim().toLowerCase().replace(/[^a-z0-9 _-]/g, "").replace(/ /g, "-");
+}
+
+/** Relative links in a markdown file whose file, or heading anchor, does not exist. */
+function brokenLinks(file: string) {
+  const broken: string[] = [];
+  for (const [, target] of readFileSync(file, "utf8").matchAll(/\]\(([^)\s]+)\)/g)) {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+    const [path, anchor] = target.split("#");
+    const resolved = path ? join(dirname(file), path) : file;
+    if (!existsSync(resolved) || !statSync(resolved).isFile()) { broken.push(target); continue; }
+    if (anchor === undefined) continue;
+    const text = readFileSync(resolved, "utf8");
+    const anchors = [...[...text.matchAll(/^#{1,6} (.+)$/gm)].map((match) => slug(match[1])), ...[...text.matchAll(/<a id="([^"]+)"><\/a>/g)].map((match) => match[1])];
+    if (!anchors.includes(anchor)) broken.push(target);
+  }
+  return broken;
+}
+
 describe("plugin synchronization", () => {
   it("checks the committed package's skill copy and client versions", () => {
     expect(() => syncPlugin({ root: repo, check: true })).not.toThrow();
+  });
+
+  it("ships one skill, with every relative link in it resolving", () => {
+    expect(readdirSync(join(repo, "plugin/skills"))).toEqual(["superstables"]);
+    const folder = join(repo, pluginSkill);
+    const files = ["SKILL.md", ...readdirSync(join(folder, "references")).map((file) => `references/${file}`)];
+    expect(files.sort()).toEqual(["SKILL.md", "references/budget.md", "references/cli.md", "references/discovery.md", "references/once.md", "references/pay.md"]);
+    for (const file of files) expect(brokenLinks(join(folder, file)), file).toEqual([]);
+    const entry = readFileSync(join(folder, "SKILL.md"), "utf8");
+    expect(entry).toMatch(/^---\nname: superstables\n/);
+    expect(entry).not.toMatch(/superstables-payments/);
+    expect(readFileSync(join(folder, "agents/openai.yaml"), "utf8")).toContain("allow_implicit_invocation: true");
+    for (const manifest of [...manifests, ".claude-plugin/marketplace.json"]) {
+      expect(readFileSync(join(repo, manifest), "utf8"), manifest).not.toContain("CLI payments skill");
+    }
+  });
+
+  it("keeps the single-purchase order in references/cli.md: buy-once first, local pay as the fallback", () => {
+    const cli = readFileSync(join(repo, bundle, "cli.md"), "utf8");
+    const source = readFileSync(join(repo, skill, "SKILL.md"), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    for (const line of source.split("\n").filter((text) => /budget buy-once|Single purchase on superstables\.com/.test(text))) {
+      expect(cli, line.slice(0, 60)).toContain(line.replace(/\]\(references\//g, "]("));
+    }
   });
 
   it("imports without running when argv names a missing entry point", () => {
@@ -67,8 +113,8 @@ describe("plugin synchronization", () => {
     for (const script of ["plugin-sync.mjs", "package-root.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
     const result = spawnSync(process.execPath, [join(linkedRoot, "scripts/plugin-sync.mjs")], { encoding: "utf8" });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("Plugin skill and versions synchronized.\n");
-    expect(readFileSync(join(root, bundle, "references/pay.md"), "utf8")).toBe("Payment instructions.\n");
+    expect(result.stdout).toBe("Plugin references and versions synchronized.\n");
+    expect(readFileSync(join(root, bundle, "pay.md"), "utf8")).toBe("Payment instructions. See cli.md and [budgets](budget.md).\n");
     expect(() => syncPlugin({ root: linkedRoot, check: true })).not.toThrow();
   });
 
@@ -77,7 +123,7 @@ describe("plugin synchronization", () => {
     write(root, `${skill}/scratch.txt`, "Do not ship.\n");
     write(root, `${bundle}/old.md`, "Obsolete.\n");
     syncPlugin({ root });
-    expect(readFileSync(join(root, bundle, "references/pay.md"), "utf8")).toBe("Payment instructions.\n");
+    expect(readFileSync(join(root, bundle, "pay.md"), "utf8")).toBe("Payment instructions. See cli.md and [budgets](budget.md).\n");
     expect(existsSync(join(root, bundle, "scratch.txt"))).toBe(false);
     expect(existsSync(join(root, bundle, "old.md"))).toBe(false);
     expect(() => syncPlugin({ root, check: true })).not.toThrow();
@@ -86,19 +132,19 @@ describe("plugin synchronization", () => {
   it("replaces only the run block with instructions pinned to the client version", () => {
     const root = fixture();
     syncPlugin({ root });
-    const bundled = readFileSync(join(root, bundle, "SKILL.md"), "utf8");
-    expect(bundled).toContain("This skill needs an agent that can run commands.");
-    expect(bundled).toContain("the `superstables` skill");
+    const bundled = readFileSync(join(root, bundle, "cli.md"), "utf8");
+    expect(bundled).toContain("**This reference needs an agent that can run commands.** In a chat app without a terminal, the connector tools in SKILL.md are the route.");
+    expect(bundled).not.toContain("the `superstables` skill");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 find weather");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 budget doctor --rail evm");
     expect(bundled).toContain("budget doctor --rail evm`. In the commands below, `superstables` is shorthand for `npx --yes @superstables/client@1.2.3`. If `superstables` is already installed");
     expect(bundled).toContain("Never run unscoped `npx superstables`");
     expect(bundled).not.toContain("<!--");
-    expect(bundled).toMatch(/^---\nname: superstables-payments\n---\n\nBefore\.\n[\s\S]*\nAfter\.\n$/);
+    expect(bundled).toMatch(/^Before\. \[Pay\]\(pay\.md\)\n[\s\S]*\nAfter\.\n$/);
     expect(readFileSync(join(root, skill, "SKILL.md"), "utf8")).toBe(sourceSkill);
     expect(() => syncPlugin({ root, check: true })).not.toThrow();
-    write(root, `${bundle}/SKILL.md`, sourceSkill);
-    expect(() => syncPlugin({ root, check: true })).toThrow(/SKILL.md: differs/);
+    write(root, `${bundle}/cli.md`, sourceSkill);
+    expect(() => syncPlugin({ root, check: true })).toThrow(/cli.md: differs/);
   });
 
   it("updates the pinned instructions on a version bump and keeps manifest formatting stable", () => {
@@ -111,7 +157,7 @@ describe("plugin synchronization", () => {
     for (const [index, file] of manifests.entries()) {
       expect(readFileSync(join(root, file), "utf8")).toBe(previous[index].replace('"1.2.3"', '"2.0.0"'));
     }
-    expect(readFileSync(join(root, bundle, "SKILL.md"), "utf8")).toContain("@superstables/client@2.0.0");
+    expect(readFileSync(join(root, bundle, "cli.md"), "utf8")).toContain("@superstables/client@2.0.0");
     expect(() => syncPlugin({ root, check: true })).not.toThrow();
   });
 
@@ -124,10 +170,35 @@ describe("plugin synchronization", () => {
     expect(existsSync(join(root, bundle))).toBe(false);
   });
 
+  it("writes the source skill body as references/cli.md and the references beside it, with working links", () => {
+    const root = fixture();
+    syncPlugin({ root });
+    expect(readdirSync(join(root, bundle)).sort()).toEqual(["budget.md", "cli.md", "pay.md"]);
+    expect(existsSync(join(root, "plugin/skills/superstables-payments"))).toBe(false);
+    for (const file of readdirSync(join(root, bundle))) expect(brokenLinks(join(root, bundle, file))).toEqual([]);
+  });
+
+  it("refuses a second skill folder in the plugin, in both modes, before updating manifests", () => {
+    const root = fixture();
+    syncPlugin({ root });
+    write(root, "plugin/skills/superstables-payments/SKILL.md", "---\nname: superstables-payments\n---\n");
+    write(root, "package.json", JSON.stringify({ version: "2.0.0" }));
+    for (const check of [true, false]) {
+      expect(() => syncPlugin({ root, check })).toThrow(/plugin\/skills may hold only the superstables skill; remove plugin\/skills\/superstables-payments/);
+    }
+    expect(JSON.parse(readFileSync(join(root, manifests[0]), "utf8")).version).toBe("1.2.3");
+  });
+
+  it("refuses to run without the plugin's own SKILL.md", () => {
+    const root = fixture();
+    rmSync(join(root, pluginSkill, "SKILL.md"));
+    expect(() => syncPlugin({ root })).toThrow(/superstables\/SKILL.md must exist/);
+  });
+
   it("detects and repairs executable mode drift", () => {
     const root = fixture();
-    const file = "references/pay.md";
-    chmodSync(join(root, skill, file), 0o755);
+    const file = "pay.md";
+    chmodSync(join(root, skill, "references", file), 0o755);
     syncPlugin({ root });
     expect(statSync(join(root, bundle, file)).mode & 0o111).toBe(0o111);
     chmodSync(join(root, bundle, file), 0o644);
@@ -139,12 +210,12 @@ describe("plugin synchronization", () => {
   it("detects changed, missing and extra bundled files without repairing them", () => {
     const root = fixture();
     syncPlugin({ root });
-    write(root, `${bundle}/SKILL.md`, "Changed.\n");
-    rmSync(join(root, bundle, "references/pay.md"));
+    write(root, `${bundle}/cli.md`, "Changed.\n");
+    rmSync(join(root, bundle, "pay.md"));
     write(root, `${bundle}/extra.md`, "Extra.\n");
-    expect(() => syncPlugin({ root, check: true })).toThrow(/SKILL.md[\s\S]*references\/pay.md[\s\S]*extra.md/);
-    expect(readFileSync(join(root, bundle, "SKILL.md"), "utf8")).toBe("Changed.\n");
-    expect(existsSync(join(root, bundle, "references/pay.md"))).toBe(false);
+    expect(() => syncPlugin({ root, check: true })).toThrow(/cli.md[\s\S]*pay.md[\s\S]*extra.md/);
+    expect(readFileSync(join(root, bundle, "cli.md"), "utf8")).toBe("Changed.\n");
+    expect(existsSync(join(root, bundle, "pay.md"))).toBe(false);
     syncPlugin({ root });
     expect(() => syncPlugin({ root, check: true })).not.toThrow();
   });
@@ -166,7 +237,7 @@ describe("plugin synchronization", () => {
   });
 
   it.each([
-    "plugin", "plugin/skills", bundle, `${bundle}/references`, `${bundle}/references/pay.md`,
+    "plugin", "plugin/skills", pluginSkill, bundle, `${bundle}/pay.md`,
     "plugin/.claude-plugin", "plugin/.claude-plugin/plugin.json", "plugin/plugin.json",
     "skills", skill, `${skill}/references`, `${skill}/references/pay.md`,
   ])("refuses a symlink at %s without touching its target or updating manifests", (file) => {
@@ -201,12 +272,12 @@ describe("plugin synchronization", () => {
     syncPlugin({ root });
     mkdirSync(join(root, "scripts"));
     for (const script of ["plugin-sync.mjs", "package-root.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
-    if (kind === "skill") write(root, `${bundle}/SKILL.md`, "Changed.\n");
+    if (kind === "skill") write(root, `${bundle}/cli.md`, "Changed.\n");
     else write(root, manifests[0], JSON.stringify({ version: "0.0.0" }));
     const result = spawnSync(process.execPath, [join(root, "scripts/plugin-sync.mjs"), "--check"], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
-    expect(result.stderr).toContain(kind === "skill" ? `${bundle}/SKILL.md: differs` : `${manifests[0]}: version must equal`);
+    expect(result.stderr).toContain(kind === "skill" ? `${bundle}/cli.md: differs` : `${manifests[0]}: version must equal`);
     expect(result.stderr).toContain("Run npm run plugin:sync");
     expect(result.stderr).not.toMatch(/\n\s+at |Error:|file:\/\//);
   });
