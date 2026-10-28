@@ -874,7 +874,7 @@ export const awaitingAdoption = (record) => Boolean(record && !record.final && i
 
 /**
  * A site request given for this signed request and not adopted (yet): kept by `wait --site-request` before it asks the site or checks
- * anything, and dropped only when the site's complete answer shows it is not this request (dropUnsettled). It may be this request,
+ * anything, and dropped only on the site's exact answer that it is not this agent's request (dropUnsettled). It may be this request,
  * open on the site, so the record holds the chain and reads unknown until a later wait adopts it.
  */
 export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
@@ -885,11 +885,11 @@ export const signedExpired = (record, now = Date.now()) => awaitingAdoption(reco
 /**
  * The site request made from the signed request `nonce` passed every check (hosted.ts adopt): record it, its token included, in one
  * locked step, only while the record still holds that signed request with nothing adopted (or with this request unsettled). `shown`
- * is what the owner was given (the link, its expiry, the terms) and the action, for message_for_owner. `walletAsked`: the read showed
- * the owner's wallet was asked; kept, like any earlier evidence, so every later reader reports the outcome unknown until it is final.
- * Throws when nothing was recorded.
+ * is what the owner was given (the link, its expiry, the terms) and the action, for message_for_owner. The evidence mergeEvidence
+ * kept stays with the signed request, so every later reader reports the outcome unknown until it is final. Throws when nothing was
+ * recorded.
  */
-export function adoptSigned(id, nonce, hosted, shown, walletAsked) {
+export function adoptSigned(id, nonce, hosted, shown) {
   let taken = false;
   update(id, (before) => {
     if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
@@ -899,38 +899,42 @@ export function adoptSigned(id, nonce, hosted, shown, walletAsked) {
     const { submitted: _adopted, ...signed } = before.hosted.signed;
     return {
       state: "waiting_owner", action: shown.action, url: shown.url, expires: new Date(shown.expires).toISOString(), terms: shown.terms, matchCode: hosted.matchCode,
-      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline, signed: { ...signed, ...(walletAsked ? { walletAsked: true } : {}) } },
+      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline, signed },
     };
   });
   if (!taken) throw new Error(`approval ${id} no longer holds that signed request unadopted; nothing was recorded`);
 }
 
 /**
- * A site request given for the signed request `nonce`, which may be it (unsettledRequest): kept under the record's lock before
- * anything is checked, and again with what a check saw. Evidence only grows: a request already kept stays, and once the wallet
- * was seen asked it stays asked. Throws when nothing was kept.
+ * The one way anything about a site request given for the signed request `nonce` reaches its record: the request itself
+ * (unsettledRequest), kept before anything is checked, and then what every answer about it showed, merged under the record's lock
+ * before the next contact. Evidence only grows: a request already kept stays, the wallet once seen asked stays asked, hashes are
+ * added to, and an answer without them changes nothing. Throws when nothing was kept.
+ * @param {{ requestId: string, link: string, matchCode: string, walletAsked?: boolean, hashes?: string[] }} e
  */
-export function recordUnsettled(id, nonce, u) {
+export function mergeEvidence(id, nonce, e) {
   let kept = false;
   update(id, (before) => {
     if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
     const earlier = unsettledRequest(before);
-    if (earlier && earlier.requestId !== u.requestId) return null;
+    if (earlier && earlier.requestId !== e.requestId) return null;
     kept = true;
-    const walletAsked = before.hosted.signed.walletAsked === true || u.walletAsked;
-    return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: u.requestId, link: u.link, matchCode: u.matchCode }, ...(walletAsked ? { walletAsked: true } : {}) } } };
+    const hashes = [...new Set([...(before.hosted.signed.hashes ?? []), ...(e.hashes ?? [])])];
+    const walletAsked = before.hosted.signed.walletAsked === true || e.walletAsked === true || hashes.length > 0;
+    return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: e.requestId, link: e.link, matchCode: e.matchCode }, ...(walletAsked ? { walletAsked: true } : {}), ...(hashes.length ? { hashes } : {}) } } };
   });
-  if (!kept) throw new Error(`approval ${id} could not keep ${u.requestId}; whether the owner's wallet was asked for it is unknown`);
+  if (!kept) throw new Error(`approval ${id} could not keep ${e.requestId}; whether the owner's wallet was asked for it is unknown`);
 }
 
 /**
- * The site's complete answer showed that `requestId`, kept for the signed request `nonce`, is not that request, and no wallet asked:
- * dropped under the record's lock, unless the record holds evidence that the wallet was asked. Whether it was dropped.
+ * The site answered exactly that `requestId`, kept for the signed request `nonce`, is not this agent's request (hosted.ts
+ * notThisRequest): dropped under the record's lock, unless the merged record holds any evidence that the wallet was asked.
+ * Whether it was dropped.
  */
 export function dropUnsettled(id, nonce, requestId) {
   let dropped = false;
   update(id, (before) => {
-    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce || unsettledRequest(before)?.requestId !== requestId || before.hosted.signed.walletAsked) return null;
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce || unsettledRequest(before)?.requestId !== requestId || before.hosted.signed.walletAsked || before.hosted.signed.hashes?.length) return null;
     dropped = true;
     const { submitted: _dropped, ...signed } = before.hosted.signed;
     return { hosted: { ...before.hosted, signed } };
@@ -1298,7 +1302,7 @@ export function recordMayHaveSent(record, page = null) {
  * read over the network.
  */
 export function walletWasAsked(record, page = null) {
-  // a read made while adopting a request signed here (wait --site-request) showed it, before or after it was adopted
+  // an answer while adopting a request signed here (wait --site-request) showed it, before or after it was adopted (mergeEvidence)
   if (record?.hosted?.signed?.walletAsked === true) return true;
   if (page?.walletAsked === true || page?.sending === true) return true;
   if (["sending", "sent", "hosted:sending", "hosted:unknown", "hosted:sent", "hosted:confirmed", "hosted:failed"].includes(page?.status)) return true;

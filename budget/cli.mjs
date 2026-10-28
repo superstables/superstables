@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, recordUnsettled, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -496,11 +496,12 @@ refused before anything is recorded or asked (state unknown, exit 5, final false
 with the approval, and the chain is held for it, before anything else is checked: the request may be the signed one.
 The command then checks that it still asks for exactly what was signed, that the site gives this agent's key a fresh
 access token for the request, and that the site shows this agent, rail, chain and the signed transaction or steps.
-Only the site's own answer that the request is another agent's, does not exist, or asks for other terms, with no sign
-that the owner's wallet was asked, refuses it (exit 3, final false): the kept values are dropped, the chain is freed,
-and the signed approval can still adopt its own request. Anything else (another answer from the site, no answer, a
-check on this machine that fails, a crash) is unknown (exit 5, final false): the request stays kept, the chain stays
-held, next names anything to fix here first, and every later wait checks that request again until it is adopted.
+Only the site's exact refusal of that token, 403 not_your_request (another agent's request) or 404 not_found (no such
+request), with no sign so far that the owner's wallet was asked, refuses it (exit 3, final false): the kept values are
+dropped, the chain is freed, and the signed approval can still adopt its own request. Anything else (a request for
+other terms, another answer from the site, no answer, a check on this machine that fails, a crash) is unknown (exit 5,
+final false): the request stays kept, the chain stays held, next names anything to fix here first, and every later wait
+checks that request again until it is adopted.
 Once adopted, the approval continues as if the owner command had sent the request: without --shown, wait returns
 waiting_owner with message_for_owner, as the owner command would have; with --shown, it waits as above. Run on a signed
 approval that no request was given for, wait returns state signed (final false) until 5 minutes after signing, then
@@ -3018,11 +3019,12 @@ const unsettledNext = (record, requestId, fix) => `${requestId} may be the reque
 
 /**
  * wait --site-request: adopt the request the connector made from a signed one. The request id, link and match code are kept with the
- * approval first (recordUnsettled), under its lock, before the site is asked or anything is checked, and the chain is taken for it.
- * Then the approval's own command, resumed, checks the request (hosted.ts adopt) and records it. Returns the record with the request
- * in it. Otherwise this command ends unknown, with the request kept and the chain held, whatever stopped the check (a refusal on this
- * machine, a crash, a timeout, any answer of the site), except one: the site's complete answer that the request is not this one, with
- * no wallet asked (notAdopted). Only that drops what was kept, frees the chain, and is refused.
+ * approval first (mergeEvidence), under its lock, before the site is asked or anything is checked, and the chain is taken for it.
+ * Then the approval's own command, resumed, checks the request (hosted.ts adopt), merging what each answer shows, and records it.
+ * Returns the record with the request in it. Otherwise this command ends unknown, with the request kept and the chain held, whatever
+ * stopped the check (a refusal on this machine, a crash, a timeout, any answer of the site, other terms included), except one: the
+ * site's exact 403 not_your_request or 404 not_found for it (notAdopted), while the record holds no evidence that the wallet was
+ * asked (dropUnsettled). Only that drops what was kept, frees the chain, and is refused.
  */
 async function adoptRequest(f, record) {
   const ctx = { command: "wait", rail: record.rail, chain: record.chain };
@@ -3031,7 +3033,7 @@ async function adoptRequest(f, record) {
   if (values) return badInput(ctx, `${values}: give the request_id, approval_link and match_code submit_budget_request returned for this signed request`);
   const nonce = record.hosted.signed.nonce;
   try {
-    recordUnsettled(record.id, nonce, { ...given, walletAsked: false });
+    mergeEvidence(record.id, nonce, given);
   } catch (e) {
     return waitUnknown(record.id, record, `${clean(e.message)}; the approval changed while this command started`, `run superstables budget wait --id ${record.id} --shown again`);
   }
