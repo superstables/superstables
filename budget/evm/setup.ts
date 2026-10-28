@@ -296,8 +296,8 @@ if (BUNDLE) {
       console.log(`REFUSED: ${reason}. Nothing was requested.`);
       process.exit(emit("setup", 3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail evm${chainFlag} checks the RPC; then run the same command again` }));
     }
-    agentHad = await nativeBalance(agentAddr).catch(() => 0n);
-    return { startBlock, agentHad };
+    // the agent's balance is what a fund step is checked against; a grant alone needs only the block
+    return fundTx ? { startBlock, agentHad: await nativeBalance(agentAddr).catch(() => 0n) } : { startBlock, agentHad: 0n };
   }));
   console.log(`one approval link: the owner adds this agent, then their wallet ${[FUND_AMT ? `sends it ${FUND_AMT} ${GAS.symbol} for gas` : "", CAP !== undefined ? `approves a budget of ${capWords(CAP)}` : ""].filter(Boolean).join(", then ")}. Transactions are checked from block ${startBlock + 1n} on.`);
 }

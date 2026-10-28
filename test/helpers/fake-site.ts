@@ -234,14 +234,20 @@ export async function startFakeSite(): Promise<FakeSite> {
       ...(r.proofVersion === 2 && r.owner && !site.omitAccountId ? { account_id: site.viewAccountId ?? site.accountId ?? ACCOUNT_ID } : {}),
     };
   };
+  /** What the site's read repeats of the request as it was created, after the contract's fields (superstables-app agentView). */
+  const asked = (r: FakeRequest) => ({
+    rail: r.body.rail, chain: { rail: r.body.rail, key: r.body.chain }, agent: r.body.agent,
+    ...(r.kind === "link" ? {} : r.body.solana ? { solana: r.body.solana } : { transaction: r.body.transaction }),
+    ...(r.expiresAt !== undefined ? { expires_at: new Date(r.expiresAt).toISOString() } : {}),
+  });
   const view = async (r: FakeRequest) => {
     if (r.steps) {
       const { state, final } = bundleState(r);
       const hashes = r.steps.map((s) => s.tx_hash).filter(Boolean);
       // like the site: the request's wallet_asked is the link's own or any step's
-      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...echo(r), ...proofFields(r), ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) } };
+      return { id: r.id, kind: r.kind, state, final, owner: r.owner, ...echo(r), ...proofFields(r), ...(await proofOf(r)), tx_hash: null, wallet_asked: r.wallet_asked === true || r.steps.some((st) => st.wallet_asked === true), reason: r.reason ?? null, reason_code: r.reason_code ?? null, steps: r.steps.map(stepView), next_action: { type: ["confirmed", "unknown"].includes(state) ? "verify_on_chain" : final ? "stop" : "wait_for_owner", ...(["confirmed", "unknown"].includes(state) ? { tx_hashes: hashes } : {}) }, ...asked(r) };
     }
-    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...echo(r), ...proofFields(r), ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" } };
+    return { id: r.id, kind: r.kind, state: r.state, final: r.final ?? FINAL.has(r.state), owner: r.owner, ...echo(r), ...proofFields(r), ...(r.state === "linked" ? await proofOf(r) : {}), tx_hash: r.tx_hash, reason: r.reason ?? null, reason_code: r.reason_code ?? null, ...(r.wallet_asked !== undefined ? { wallet_asked: r.wallet_asked } : {}), next_action: { type: FINAL.has(r.state) ? "stop" : "wait_for_owner" }, ...asked(r) };
   };
   const server = await startServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -368,6 +374,18 @@ export async function startFakeSite(): Promise<FakeSite> {
   });
   site.origin = server.url;
   return Object.assign(site, server);
+}
+
+/**
+ * The connector's submit_budget_request, as the website builds it: the CLI's signed request (method, path, headers, raw body) sent
+ * to the site as it is, and the four values the site's read leaves out. A refusal is the route's own error code, with no token.
+ */
+export async function submitSigned(site: FakeSite, signed: { method: string; path: string; headers: Record<string, string>; body: string }): Promise<{ request_id: string; approval_link: string; match_code: string; expires_at: string } | { error: string }> {
+  if (signed.method !== "POST" || !["/api/v1/budget/links", "/api/v1/budget/approvals"].includes(signed.path)) return { error: "not_allowed" };
+  const res = await fetch(`${site.url}${signed.path}`, { method: "POST", headers: { ...signed.headers, "content-type": "application/json" }, body: signed.body });
+  const json = (await res.json()) as any;
+  if (!res.ok) return { error: String(json?.error?.code ?? json?.code ?? res.status) };
+  return { request_id: json.id, approval_link: json.approval.url, match_code: json.approval.match_code, expires_at: json.approval.expires_at };
 }
 
 /** The agent request proof v2 text, exactly as the protocol spells it. */

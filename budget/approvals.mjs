@@ -60,6 +60,14 @@ export const HOLDER_ENV = "SUPERSTABLES_BUDGET_HOLDER";
 export const RESUME_ENV = "SUPERSTABLES_BUDGET_RESUME";
 /** The restart a worker is: the record's `resumes` as it was when this worker was started. Only the newest restart marks or relies on a takeover. */
 export const RESUME_GENERATION_ENV = "SUPERSTABLES_BUDGET_RESUME_GENERATION";
+/** Set in the rail script environment of an owner command run with --sign-only: the id of the approval that keeps the signed request. */
+export const SIGN_ONLY_ENV = "SUPERSTABLES_BUDGET_SIGN_ONLY";
+/** Set in the owner command that `wait --site-request` runs to check a site request against a signed approval: that approval's id. */
+export const ADOPT_ENV = "SUPERSTABLES_BUDGET_ADOPT";
+/** With ADOPT_ENV: the request id, link and match code the connector returned, as JSON { requestId, link, matchCode }. */
+export const ADOPT_REQUEST_ENV = "SUPERSTABLES_BUDGET_ADOPT_REQUEST";
+/** The site takes an agent proof only within 300 seconds of its timestamp: a signed request is sendable that long after signing. */
+export const SIGNED_WINDOW_MS = 300_000;
 /** How long the owner page keeps a link open after the wallet was asked to send (owner-approval-server.ts). */
 const SENDING_GRACE_S = 120;
 /** Reading the chain after the wallet sent: readSent waits up to 180 s, then the allowance reads. */
@@ -616,6 +624,8 @@ function lockHeld(lock) {
   // owner may approve it after its worker is gone, so nothing new is asked until `wait` or --replace has settled it. A
   // single purchase is its own record, read by buy-once itself.
   if (record?.hosted?.token && record.command !== "buy-once") return true;
+  // so does a request signed here whose site request was given and is not adopted yet (unsettledRequest): the owner may approve that one too
+  if (unsettledRequest(record)) return true;
   return Date.now() - Number(lock.createdAt ?? 0) < STARTUP_GRACE_MS;
 }
 
@@ -837,7 +847,103 @@ export function linkGate(id, { waitMs = LINK_TEXT_WAIT_MS, record = recordLink }
 export function recordHosted(id, hosted) {
   if (!isApprovalId(id)) return null;
   // a final approval keeps no access token: checked and written under the record's lock, in one step
-  return update(id, (record) => record.final ? null : { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}), ...(hosted.resumable ? { resumable: true, intent: hosted.intent, expiresAt: hosted.expiresAt, deadline: hosted.deadline, ...(hosted.proofVersion ? { proofVersion: hosted.proofVersion } : {}) } : {}) } });
+  return update(id, (record) => record.final ? null : { hosted: { site: hosted.site, requestId: hosted.requestId, kind: hosted.kind, matchCode: hosted.matchCode, token: hosted.token, ...(hosted.then?.length ? { then: hosted.then } : {}), ...(hosted.resumable ? { resumable: true, intent: hosted.intent, expiresAt: hosted.expiresAt, deadline: hosted.deadline, ...(hosted.proofVersion ? { proofVersion: hosted.proofVersion } : {}) } : {}), ...(hosted.signed ? { signed: hosted.signed } : {}) } });
+}
+
+// ── requests signed here and sent by the connector (--sign-only, then wait --site-request) ──────────────────────────────────
+// The owner command signs its request and keeps it in an approval record that has no request id, token or match code yet, then
+// exits; nothing holds the chain. `wait --site-request` checks the site request made from it (hosted.ts adopt) and records it here,
+// after which the record is an ordinary resumable hosted approval: wait starts its worker again, and the worker takes it over.
+
+/**
+ * An owner command run with --sign-only: its record, made like a background approval's (startDetached), so that once a request is
+ * adopted a later wait can start the same worker from `workerArgs`. This process holds the chain until it ends.
+ */
+export function startSigning({ id, command, rail, chain, workerArgs, timeoutS }) {
+  saveApproval({ id, command, rail, chain, state: "signing", createdAt: new Date().toISOString(), pid: process.pid, ...startOf(process.pid), deadline: null, workerArgs, timeoutS });
+}
+
+/** The rail script signed the request (hosted.ts SignedRecord): kept with the approval, mode 600, before it is shown. */
+export function recordSigned(id, s) {
+  const stored = update(id, (record) => (record.final || record.hosted ? null : { state: "signed", hosted: { site: s.site, kind: s.kind, ...(s.then?.length ? { then: s.then } : {}), resumable: true, intent: s.intent, ...(s.proofVersion ? { proofVersion: s.proofVersion } : {}), signed: s.signed } }));
+  if (stored?.hosted?.signed?.nonce !== s.signed.nonce) throw new Error(`approval ${id} could not keep the signed request; nothing was sent`);
+}
+
+/** A request signed here that no site request has been adopted for yet. */
+export const awaitingAdoption = (record) => Boolean(record && !record.final && isObject(record.hosted?.signed) && !record.hosted.requestId);
+
+/**
+ * A site request given for this signed request and not adopted (yet): kept by `wait --site-request` before it asks the site or checks
+ * anything, and dropped only on an answer of the site that gives it up (dropUnsettled). It may be this request,
+ * open on the site, so the record holds the chain and reads unknown until a later wait adopts it.
+ */
+export const unsettledRequest = (record) => (awaitingAdoption(record) && isObject(record.hosted.signed.submitted) ? record.hosted.signed.submitted : null);
+
+/** A signed request past the site's window that no site request was given for: the site no longer takes it, and nothing here sent it. */
+export const signedExpired = (record, now = Date.now()) => awaitingAdoption(record) && !unsettledRequest(record) && now - Number(record.hosted.signed.signedAt) * 1000 > SIGNED_WINDOW_MS;
+
+/**
+ * The site request made from the signed request `nonce` passed every check (hosted.ts adopt): record it, its token included, in one
+ * locked step, only while the record still holds that signed request with nothing adopted (or with this request unsettled). `shown`
+ * is what the owner was given (the link, its expiry, the terms) and the action, for message_for_owner. The evidence mergeEvidence
+ * kept stays with the signed request, so every later reader reports the outcome unknown until it is final. Throws when nothing was
+ * recorded.
+ */
+export function adoptSigned(id, nonce, hosted, shown) {
+  let taken = false;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
+    const unsettled = unsettledRequest(before);
+    if (unsettled && unsettled.requestId !== hosted.requestId) return null;
+    taken = true;
+    const { submitted: _adopted, ...signed } = before.hosted.signed;
+    return {
+      state: "waiting_owner", action: shown.action, url: shown.url, expires: new Date(shown.expires).toISOString(), terms: shown.terms, matchCode: hosted.matchCode,
+      hosted: { ...before.hosted, requestId: hosted.requestId, token: hosted.token, matchCode: hosted.matchCode, expiresAt: hosted.expiresAt, deadline: hosted.deadline, signed },
+    };
+  });
+  if (!taken) throw new Error(`approval ${id} no longer holds that signed request unadopted; nothing was recorded`);
+}
+
+/**
+ * The one way anything about a site request given for the signed request `nonce` reaches its record: the request itself
+ * (unsettledRequest), kept before anything is checked, and then what every answer about it showed, merged under the record's lock
+ * before the next contact. Evidence only grows: a request already kept stays, the wallet once seen asked stays asked, hashes are
+ * added to, an answer that could not be read (mayHaveSent) stays marked, and an answer without them changes nothing. Returns the
+ * evidence the record holds then (hosted.ts givesUp reads only that); throws when nothing was kept.
+ * @param {{ requestId: string, link: string, matchCode: string, walletAsked?: boolean, hashes?: string[], mayHaveSent?: boolean }} e
+ * @returns {{ walletAsked: boolean, hashes: string[], mayHaveSent: boolean }}
+ */
+export function mergeEvidence(id, nonce, e) {
+  let kept = null;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce) return null;
+    const earlier = unsettledRequest(before);
+    if (earlier && earlier.requestId !== e.requestId) return null;
+    const hashes = [...new Set([...(before.hosted.signed.hashes ?? []), ...(e.hashes ?? [])])];
+    const walletAsked = before.hosted.signed.walletAsked === true || e.walletAsked === true || hashes.length > 0;
+    const mayHaveSent = before.hosted.signed.mayHaveSent === true || e.mayHaveSent === true;
+    kept = { walletAsked, hashes, mayHaveSent };
+    return { hosted: { ...before.hosted, signed: { ...before.hosted.signed, submitted: earlier ?? { requestId: e.requestId, link: e.link, matchCode: e.matchCode }, ...(walletAsked ? { walletAsked: true } : {}), ...(hashes.length ? { hashes } : {}), ...(mayHaveSent ? { mayHaveSent: true } : {}) } } };
+  });
+  if (!kept) throw new Error(`approval ${id} could not keep ${e.requestId}; whether the owner's wallet was asked for it is unknown`);
+  return kept;
+}
+
+/**
+ * The site gave up `requestId`, kept for the signed request `nonce` (hosted.ts givesUp): dropped under the record's lock, unless
+ * the merged record holds any evidence that the wallet was asked or the mark of an answer that could not be read (only the owner's
+ * wait --abandon ends such a record). Whether it was dropped.
+ */
+export function dropUnsettled(id, nonce, requestId) {
+  let dropped = false;
+  update(id, (before) => {
+    if (!awaitingAdoption(before) || before.hosted.signed.nonce !== nonce || unsettledRequest(before)?.requestId !== requestId || before.hosted.signed.walletAsked || before.hosted.signed.hashes?.length || before.hosted.signed.mayHaveSent) return null;
+    dropped = true;
+    const { submitted: _dropped, ...signed } = before.hosted.signed;
+    return { hosted: { ...before.hosted, signed } };
+  });
+  return dropped;
 }
 
 const bigintOut = (_key, value) => (typeof value === "bigint" ? { $bigint: value.toString() } : value);
@@ -1196,10 +1302,12 @@ export function recordMayHaveSent(record, page = null) {
 
 /**
  * Whether the owner's wallet was asked to send for this approval: the page's state (pageStateOf) says so, or the page log
- * did earlier, on this page or an earlier one of the same approval. Without `page`, the log alone decides, and nothing is
+ * did earlier, on this page or an earlier one of the same approval. Without `page`, the record and the log decide, and nothing is
  * read over the network.
  */
 export function walletWasAsked(record, page = null) {
+  // an answer while adopting a request signed here (wait --site-request) showed it, before or after it was adopted (mergeEvidence)
+  if (record?.hosted?.signed?.walletAsked === true) return true;
   if (page?.walletAsked === true || page?.sending === true) return true;
   if (["sending", "sent", "hosted:sending", "hosted:unknown", "hosted:sent", "hosted:confirmed", "hosted:failed"].includes(page?.status)) return true;
   return [record?.url, ...(record?.earlierUrls ?? [])].some((url) => lastPageStatus(url).sending);
