@@ -281,25 +281,31 @@ export function siteRequestProblem(site, kind, { requestId, link, matchCode }) {
 
 export const SITE_MAX_BYTES = 1_000_000;
 
+/**
+ * One request to the site: { ok, status, body }, and `unread: true` (body null) when there was no answer or it was not read whole
+ * and parsed as JSON: cut off, longer than the cap, empty, not JSON, a timeout or a reset. What an unread answer said is unknown.
+ */
 export async function call(url, init, timeoutMs, fetchImpl = fetch) {
   let res;
   try {
     res = await fetchImpl(url, { ...init, redirect: "error", signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
-    return { ok: false, status: 0, body: null, network: siteText(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err) };
+    return { ok: false, status: 0, body: null, unread: true, network: siteText(err?.cause?.code ?? err?.cause?.message ?? err?.message ?? err) };
   }
   const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
   // an answer cut off or longer than the cap is no answer to act on: never parsed, never ok
-  if (truncated) return { ok: false, status: res.status, body: null, network: `the answer from ${siteText(new URL(url).host, 80)} was cut off or longer than ${SITE_MAX_BYTES} bytes` };
-  let body = null;
-  try { body = JSON.parse(bytes.toString("utf8")); } catch {}
-  return { ok: res.ok, status: res.status, body };
+  if (truncated) return { ok: false, status: res.status, body: null, unread: true, network: `the answer from ${siteText(new URL(url).host, 80)} was cut off or longer than ${SITE_MAX_BYTES} bytes` };
+  try {
+    return { ok: res.ok, status: res.status, body: JSON.parse(bytes.toString("utf8")) };
+  } catch {
+    return { ok: res.ok, status: res.status, body: null, unread: true };
+  }
 }
 
 /**
  * One read of a request: GET /api/v1/budget/requests/{id}?wait=N. { ok: true, view } or { ok: false, status, reason }.
  * status 0: the site did not answer. `asked`: the failed answer itself shows the wallet was asked; `body`: that answer, for
- * walletEvidence. The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
+ * walletEvidence; `unread`: there was none to read whole (call). The view is the site's JSON: id, kind, state, final, owner, tx_hash, reason, next_action.
  */
 /**
  * `own`: the answer must be about this request, and is checked here, once. A view is ok only when its `id` is this request's;
@@ -315,13 +321,13 @@ export async function readSiteRequest({ site, id, token, wait = 0, own = false, 
   if (own) {
     const named = [r.body?.id, r.body?.error?.id].filter((x) => x !== undefined && x !== null);
     const foreign = named.some((x) => x !== id) || (r.ok && r.body?.id !== id);
-    if (foreign && !r.network) return { ok: false, status: r.status, foreign: true, asked: viewEvidence(r.body), body: r.body, reason: "the site's answer is about another request" };
+    if (foreign && !r.unread) return { ok: false, status: r.status, foreign: true, asked: viewEvidence(r.body), body: r.body, reason: "the site's answer is about another request" };
   }
   if (r.ok && r.body && typeof r.body === "object" && typeof r.body.state === "string") return { ok: true, view: r.body };
   const code = r.body?.error?.code ?? r.body?.code ?? r.body?.reason_code;
   const next = accountRefusalNext(code);
   // an error answer can show the wallet was asked (`error.money_moved`, even on a 429): the caller keeps that
-  return { ok: false, status: r.status, own: own || undefined, code: siteWord("code", code), asked: viewEvidence(r.body), body: r.body, reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
+  return { ok: false, status: r.status, own: own || undefined, code: siteWord("code", code), asked: viewEvidence(r.body), body: r.body, unread: r.unread, reason: r.network ? `${site} did not answer (${scrub(r.network)})` : r.unread ? `${siteFailure(r.status, null)}, an answer that is not JSON` : r.ok ? "the site's answer has no state" : `${siteFailure(r.status, r.body)}${next ? `; ${next}` : ""}` };
 }
 
 /** Site states that say the owner's wallet was asked, or a transaction exists. */

@@ -232,20 +232,21 @@ One owner approval at a time per rail and chain. --replace cancels a pending one
 they cancelled any open wallet prompt.
 Unattended tests only: --owner-key-file PATH --yes signs with that key file instead of the owner's wallet.
 
---sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): runs this command's
-checks, then signs the request it would send to the site with the agent key and keeps it in an approval record on this
-machine (mode 600). It reads the chain but sends nothing to the site and no transaction. It reads only the chain's id,
-what its checks refuse on (the allowance now and at the final block; the owner's gas for the fee, except where gas is
-USDC; the owner's balance for a transfer) and what the owner's transaction is later checked against or reported with
-(the block it must come after, the agent's balance before a transfer to it, and the allowance before it). The owner's
-token balance, which a grant only shows, is read when the request is adopted. It prints the request as one JSON block,
-then a RESULT with state signed, final false, id, request and expires. The connector's submit_budget_request tool
-sends that request, unchanged, before expires (5 minutes after signing; after that the site refuses its signature),
-and returns request_id, approval_link and match_code. Then superstables budget wait --id ID --site-request REQUEST_ID
---link APPROVAL_LINK --match MATCH_CODE adopts it: the approval continues as if this command had sent the request
-itself. Once the 5 minutes pass, wait on a signed request that no request was given for reads unknown (exit 5, final
-false): nothing was sent from this machine, but the tool may have sent it in time. Not with --owner-key-file, --yes,
---wait or --detach.
+--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted):
+runs this command's checks, then signs the request it would send to the site with the agent key and keeps it in an
+approval record on this machine (mode 600). It reads the chain and signs the new approval request without submitting
+it or a transaction. Setup may read an existing approval from the site; with --replace, the command may ask the site
+to cancel an existing approval. It reads only the chain's id, what its checks refuse on (the allowance now and at the
+final block; the owner's gas for the fee, except where gas is USDC; the owner's balance for a transfer) and what the
+owner's transaction is later checked against or reported with (the block it must come after, the agent's balance
+before a transfer to it, and the allowance before it). The owner's token balance, which a grant only shows, is read
+when the request is adopted. It prints the request as one JSON block, then a RESULT with state signed, final false,
+id, request and expires. The connector's submit_budget_request tool sends that request, unchanged, before expires (5
+minutes after signing; after that the site refuses its signature), and returns request_id, approval_link and
+match_code. Then superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE
+adopts it: the approval continues as if this command had sent the request itself. Once the 5 minutes pass, wait on a
+signed request that no request was given for reads unknown (exit 5, final false): this machine did not submit the
+signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
@@ -320,20 +321,21 @@ One owner approval at a time per rail and chain. --replace cancels a pending one
 they cancelled any open wallet prompt.
 Unattended tests only: --owner-key-file PATH --yes signs with that key file instead of the owner's wallet.
 
---sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): runs this command's
-checks, then signs the request it would send to the site with the agent key and keeps it in an approval record on this
-machine (mode 600). It reads the chain but sends nothing to the site and no transaction. It reads only the chain's id,
-what its checks refuse on (the allowance now and at the final block; the owner's gas for the fee, except where gas is
-USDC; the owner's balance for a transfer) and what the owner's transaction is later checked against or reported with
-(the block it must come after, the agent's balance before a transfer to it, and the allowance before it). The owner's
-token balance, which a grant only shows, is read when the request is adopted. It prints the request as one JSON block,
-then a RESULT with state signed, final false, id, request and expires. The connector's submit_budget_request tool
-sends that request, unchanged, before expires (5 minutes after signing; after that the site refuses its signature),
-and returns request_id, approval_link and match_code. Then superstables budget wait --id ID --site-request REQUEST_ID
---link APPROVAL_LINK --match MATCH_CODE adopts it: the approval continues as if this command had sent the request
-itself. Once the 5 minutes pass, wait on a signed request that no request was given for reads unknown (exit 5, final
-false): nothing was sent from this machine, but the tool may have sent it in time. Not with --owner-key-file, --yes,
---wait or --detach.
+--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted):
+runs this command's checks, then signs the request it would send to the site with the agent key and keeps it in an
+approval record on this machine (mode 600). It reads the chain and signs the new approval request without submitting
+it or a transaction. Setup may read an existing approval from the site; with --replace, the command may ask the site
+to cancel an existing approval. It reads only the chain's id, what its checks refuse on (the allowance now and at the
+final block; the owner's gas for the fee, except where gas is USDC; the owner's balance for a transfer) and what the
+owner's transaction is later checked against or reported with (the block it must come after, the agent's balance
+before a transfer to it, and the allowance before it). The owner's token balance, which a grant only shows, is read
+when the request is adopted. It prints the request as one JSON block, then a RESULT with state signed, final false,
+id, request and expires. The connector's submit_budget_request tool sends that request, unchanged, before expires (5
+minutes after signing; after that the site refuses its signature), and returns request_id, approval_link and
+match_code. Then superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE
+adopts it: the approval continues as if this command had sent the request itself. Once the 5 minutes pass, wait on a
+signed request that no request was given for reads unknown (exit 5, final false): this machine did not submit the
+signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -417,20 +419,21 @@ One owner approval at a time per rail and chain. --replace cancels a pending one
 they cancelled any open wallet prompt.
 Unattended tests only: --owner-key-file PATH --yes signs with that key file instead of the owner's wallet.
 
---sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): runs this command's
-checks, then signs the request it would send to the site with the agent key and keeps it in an approval record on this
-machine (mode 600). It reads the chain but sends nothing to the site and no transaction. It reads only the chain's id,
-what its checks refuse on (the allowance now and at the final block; the owner's gas for the fee, except where gas is
-USDC; the owner's balance for a transfer) and what the owner's transaction is later checked against or reported with
-(the block it must come after, the agent's balance before a transfer to it, and the allowance before it). The owner's
-token balance, which a grant only shows, is read when the request is adopted. It prints the request as one JSON block,
-then a RESULT with state signed, final false, id, request and expires. The connector's submit_budget_request tool
-sends that request, unchanged, before expires (5 minutes after signing; after that the site refuses its signature),
-and returns request_id, approval_link and match_code. Then superstables budget wait --id ID --site-request REQUEST_ID
---link APPROVAL_LINK --match MATCH_CODE adopts it: the approval continues as if this command had sent the request
-itself. Once the 5 minutes pass, wait on a signed request that no request was given for reads unknown (exit 5, final
-false): nothing was sent from this machine, but the tool may have sent it in time. Not with --owner-key-file, --yes,
---wait or --detach.
+--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted):
+runs this command's checks, then signs the request it would send to the site with the agent key and keeps it in an
+approval record on this machine (mode 600). It reads the chain and signs the new approval request without submitting
+it or a transaction. Setup may read an existing approval from the site; with --replace, the command may ask the site
+to cancel an existing approval. It reads only the chain's id, what its checks refuse on (the allowance now and at the
+final block; the owner's gas for the fee, except where gas is USDC; the owner's balance for a transfer) and what the
+owner's transaction is later checked against or reported with (the block it must come after, the agent's balance
+before a transfer to it, and the allowance before it). The owner's token balance, which a grant only shows, is read
+when the request is adopted. It prints the request as one JSON block, then a RESULT with state signed, final false,
+id, request and expires. The connector's submit_budget_request tool sends that request, unchanged, before expires (5
+minutes after signing; after that the site refuses its signature), and returns request_id, approval_link and
+match_code. Then superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE
+adopts it: the approval continues as if this command had sent the request itself. Once the 5 minutes pass, wait on a
+signed request that no request was given for reads unknown (exit 5, final false): this machine did not submit the
+signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -641,20 +644,21 @@ One owner approval at a time per rail and chain. --replace cancels a pending one
 they cancelled any open wallet prompt.
 Unattended tests only: --owner-key-file PATH --yes signs with that key file instead of the owner's wallet.
 
---sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted): runs this command's
-checks, then signs the request it would send to the site with the agent key and keeps it in an approval record on this
-machine (mode 600). It reads the chain but sends nothing to the site and no transaction. It reads only the chain's id,
-what its checks refuse on (the allowance now and at the final block; the owner's gas for the fee, except where gas is
-USDC; the owner's balance for a transfer) and what the owner's transaction is later checked against or reported with
-(the block it must come after, the agent's balance before a transfer to it, and the allowance before it). The owner's
-token balance, which a grant only shows, is read when the request is adopted. It prints the request as one JSON block,
-then a RESULT with state signed, final false, id, request and expires. The connector's submit_budget_request tool
-sends that request, unchanged, before expires (5 minutes after signing; after that the site refuses its signature),
-and returns request_id, approval_link and match_code. Then superstables budget wait --id ID --site-request REQUEST_ID
---link APPROVAL_LINK --match MATCH_CODE adopts it: the approval continues as if this command had sent the request
-itself. Once the 5 minutes pass, wait on a signed request that no request was given for reads unknown (exit 5, final
-false): nothing was sent from this machine, but the tool may have sent it in time. Not with --owner-key-file, --yes,
---wait or --detach.
+--sign-only (evm, on a chain whose approvals are on superstables.com; setup with --hosted):
+runs this command's checks, then signs the request it would send to the site with the agent key and keeps it in an
+approval record on this machine (mode 600). It reads the chain and signs the new approval request without submitting
+it or a transaction. Setup may read an existing approval from the site; with --replace, the command may ask the site
+to cancel an existing approval. It reads only the chain's id, what its checks refuse on (the allowance now and at the
+final block; the owner's gas for the fee, except where gas is USDC; the owner's balance for a transfer) and what the
+owner's transaction is later checked against or reported with (the block it must come after, the agent's balance
+before a transfer to it, and the allowance before it). The owner's token balance, which a grant only shows, is read
+when the request is adopted. It prints the request as one JSON block, then a RESULT with state signed, final false,
+id, request and expires. The connector's submit_budget_request tool sends that request, unchanged, before expires (5
+minutes after signing; after that the site refuses its signature), and returns request_id, approval_link and
+match_code. Then superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE
+adopts it: the approval continues as if this command had sent the request itself. Once the 5 minutes pass, wait on a
+signed request that no request was given for reads unknown (exit 5, final false): this machine did not submit the
+signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
   tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
@@ -815,24 +819,27 @@ that do not have the site's form for that request (an id of the signed kind, the
 refused before anything is recorded or asked (state unknown, exit 5, final false). Otherwise the three values are kept
 with the approval, and the chain is held for it, before anything else is checked: the request may be the signed one.
 The command then checks that it still asks for exactly what was signed, that the site gives this agent's key a fresh
-access token for the request, and that the site shows this agent, rail, chain and the signed transaction or steps.
-Two kinds of answer refuse it, and only while no answer so far showed that the owner's wallet was asked: the site's
-exact refusal of that token, 403 not_your_request (another agent's request) or 404 not_found (no such request), and its
-read of a request for other terms that is final as expired, rejected or cancelled with the wallet never asked (reason
-names that state). Either refuses it (exit 3, final false): the kept values are dropped, the chain is freed, and the
-signed approval can still adopt its own request. Anything else (a request for other terms in any other state, another
-answer from the site, no answer, a check on this machine that fails, a crash) is unknown (exit 5, final false): the
-request stays kept, the chain stays held, next names anything to fix here first, and every later wait checks that
-request again until it is adopted.
+access token for the request, and that the site shows this agent, rail, chain and the signed transaction or steps. Two
+kinds of answer refuse it, and only while every answer so far was read whole and none showed that the owner's wallet
+was asked: the site's exact refusal of that token, 403 not_your_request (another agent's request) or 404 not_found (no
+such request), and its read of a request for other terms that is final as expired, rejected or cancelled with the
+wallet never asked (reason names that state). Either refuses it (exit 3, final false): the kept values are dropped,
+the chain is freed, and the signed approval can still adopt its own request. Anything else (a request for other terms
+in any other state, another answer from the site, no answer, a check on this machine that fails, a crash) is unknown
+(exit 5, final false): the request stays kept, the chain stays held, next names anything to fix here first, and every
+later wait checks that request again until it is adopted. Once an answer showed that the wallet was asked, or could
+not be read whole (cut off, too long, not JSON, a timeout, a reset, no answer), no answer refuses it any more: it
+stays unknown until it is adopted and final. Only the owner can stop waiting for it, with wait --id ID --abandon in
+their own terminal, which ends the approval unknown and frees the chain.
 Once adopted, the approval continues as if the owner command had sent the request: without --shown, wait returns
 waiting_owner with message_for_owner, as the owner command would have; with --shown, it waits as above. Run on a signed
 approval that no request was given for, wait returns state signed (final false) until 5 minutes after signing, then
-unknown (exit 5, final false: the signature expired). Either way nothing was sent from this machine, but the connector
-may have sent the request, and the owner may be approving it.
+unknown (exit 5, final false: the signature expired). Either way this machine did not submit the signed approval
+request, but the connector may have sent the request, and the owner may be approving it.
 Adopt that request with --site-request; only if it was never sent, run the owner command again with --sign-only.
 
-Moves money: no. It never approves or sends anything. With --site-request, the agent key signs one request to the site for
-  a fresh access token.
+Moves money: no. It never approves or submits a transaction. Adopting or retrying adoption signs and sends an access-token
+  request with the agent key, including when a later wait retries without --site-request.
 Run by: anyone, usually the agent that started the owner command, after the owner says they've approved.
 Example:
   $ superstables budget wait --id oa-20260930120000-1a2b3c4d --shown --timeout 60

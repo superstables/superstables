@@ -24,6 +24,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -375,7 +376,10 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     ];
     for (const [status, body, exact] of rows) expect(givesUp(id, { renewal: { status, body } }, NONE), `${status} ${JSON.stringify(body)}`).toBe(exact ? (status === 403 ? "not_your_request" : "not_found") : null);
     // the record's evidence decides, never the answer alone: the exact refusal, once any answer recorded the wallet asked or a hash
-    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }]) expect(givesUp(id, { renewal: { status: 404, body: shape("not_found") } }, held)).toBeNull();
+    // or the mark of an answer that could not be read
+    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }, { walletAsked: false, hashes: [], mayHaveSent: true }]) {
+      for (const status of [403, 404]) expect(givesUp(id, { renewal: { status, body: shape(status === 403 ? "not_your_request" : "not_found") } }, held)).toBeNull();
+    }
   });
 
   it("givesUp, read: only a well-formed final read in a state the owner never signed in, with no wallet asked, no transaction and no step asked", () => {
@@ -441,7 +445,7 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     // as adopt calls it: with the evidence the record holds once this answer was merged into it
     for (const [read, out] of rows) expect(givesUp(id, { read }, walletEvidence(read, isEvmTx)), JSON.stringify(read)).toBe(out);
     // a clean final read, once an earlier answer recorded evidence
-    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }]) expect(givesUp(id, { read: view() }, held)).toBeNull();
+    for (const held of [{ walletAsked: true, hashes: [] }, { walletAsked: false, hashes: [GRANT_HASH] }, { walletAsked: false, hashes: [], mayHaveSent: true }]) expect(givesUp(id, { read: view() }, held)).toBeNull();
   });
 
   it("a token renewal the site does not answer exactly as another agent's or missing keeps the request before the refusal, with the answer's evidence", async () => {
@@ -533,8 +537,12 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     });
 
     type Answer = { status: number; body: unknown };
-    /** One adoption's answers: the token renewal's and the read's (the site's own when absent), or no answer from either. */
-    type Shape = { name: string; renew?: (r: { id: string; token: string }) => Answer; read?: (v: any) => Answer; timeout?: "renew" | "read"; frees?: true; asked?: true; hash?: string; adopts?: true };
+    /**
+     * One adoption's answers: the token renewal's and the read's (the site's own when absent), or, with `wire`, what the network
+     * gives this machine for one of them instead (a body that is not JSON, cut off, or no answer). `unread`: that answer cannot be
+     * read whole, so it leaves the record's mayHaveSent mark.
+     */
+    type Shape = { name: string; renew?: (r: { id: string; token: string }) => Answer; read?: (v: any) => Answer; wire?: { at: "renew" | "read"; answer: () => Promise<Response> }; frees?: true; asked?: true; hash?: string; adopts?: true; unread?: true };
     const exact = (status: 403 | 404) => ({ status, body: { error: { code: status === 403 ? "not_your_request" : "not_found", message: "words", money_moved: false, retryable: false, doc_url: "https://superstables.com/docs/budgets.md", request_id: "req_abcdefABCDEF0123" } } });
     const otherAmount = (v: any) => ({ ...v, transaction: grantTx(AGENT, 20000n) });
     const read = (change: (v: any) => unknown) => (v: any) => ({ status: 200, body: change(v) });
@@ -548,6 +556,35 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       { name: "Sol's repro: read 503, its transaction only in error.next_action.tx_hashes", read: () => ({ status: 503, body: { error: { code: "chain_unavailable", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } } } }), asked: true, hash: GRANT_HASH },
       { name: "Sol's repro: read about another request, its transaction only in next_action.tx_hashes", read: read((v) => ({ ...v, id: "ba_different0002", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } })), asked: true, hash: GRANT_HASH },
     ];
+    /** Answers this machine cannot read whole, as the network delivers them: each is no answer to judge, and leaves the mark. */
+    const BIG = "x".repeat(1_100_000);
+    const broken = (start: string, error: unknown) => () => Promise.resolve(new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(start)); c.error(error); } }), { status: 200, headers: { "content-type": "application/json" } }));
+    const reset = () => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+    const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const evidenceStart = `{"wallet_asked":true,"tx_hash":"${GRANT_HASH}","state":"sent"`;
+    const UNREADABLE = (["renew", "read"] as const).flatMap((at): Shape[] => {
+      const what = at === "renew" ? "renewal" : "read";
+      return [
+        { name: `${what} that is not JSON`, wire: { at, answer: () => Promise.resolve(new Response("<html>502 Bad Gateway</html>", { status: 502, headers: { "content-type": "text/html" } })) } },
+        { name: `${what} 200 with an empty body`, wire: { at, answer: () => Promise.resolve(new Response("", { status: 200 })) } },
+        { name: `${what} 404 with an empty body`, wire: { at, answer: () => Promise.resolve(new Response(null, { status: 404 })) } },
+        { name: `${what} 403 whose body is not JSON`, wire: { at, answer: () => Promise.resolve(new Response("not_your_request", { status: 403 })) } },
+        { name: `${what} cut off by a reset, after it showed the wallet asked`, wire: { at, answer: broken(evidenceStart, reset()) } },
+        { name: `${what} cut off by a timeout, after it showed the wallet asked`, wire: { at, answer: broken(evidenceStart, timedOut()) } },
+        { name: `${what}: connection reset before any answer`, wire: { at, answer: () => Promise.reject(reset()) } },
+        { name: `${what}: timeout before any answer`, wire: { at, answer: () => Promise.reject(timedOut()) } },
+        at === "renew"
+          ? { name: "renewal 200 with a token, longer than the cap", renew: (r) => ({ status: 200, body: { id: r.id, access_token: r.token, reason: BIG } }) }
+          : { name: "read with the signed terms, longer than the cap", read: read((v) => ({ ...v, reason: BIG })) },
+      ];
+    }).map((x) => ({ ...x, unread: true as const }));
+    /** Sol's round 7 repros: a read or renewal, 200 or 503, that shows the wallet asked and a transaction, then runs past the cap. */
+    const SOL7: Shape[] = [
+      { name: "Sol's repro: read 200 with the wallet asked and a transaction, longer than the cap", read: read((v) => ({ ...v, wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG })) },
+      { name: "Sol's repro: read 503 with the wallet asked and a transaction, longer than the cap", read: () => ({ status: 503, body: { error: { wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } } }) },
+      { name: "Sol's repro: renewal 200 with the wallet asked and a transaction, longer than the cap", renew: (r: { id: string; token: string }) => ({ status: 200, body: { id: r.id, access_token: r.token, wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } }) },
+      { name: "Sol's repro: renewal 503 with the wallet asked and a transaction, longer than the cap", renew: () => ({ status: 503, body: { error: { wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } } }) },
+    ].map((x) => ({ ...x, unread: true as const }));
     const SHAPES: Shape[] = [
       { name: "renewal 200 and the signed terms", adopts: true },
       { name: "renewal 200 with the wallet asked, and the signed terms", renew: askedRenewal, asked: true, adopts: true },
@@ -566,8 +603,8 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       { name: "renewal 401", renew: () => ({ status: 401, body: { error: { code: "agent_proof" } } }) },
       { name: "renewal 429 with money_moved", renew: () => ({ status: 429, body: { error: { code: "rate_limited", money_moved: "unknown" } } }), asked: true },
       { name: "renewal 503", renew: () => ({ status: 503, body: { error: { code: "unavailable" } } }) },
-      { name: "renewal 403 not_your_request, cut off", renew: () => ({ status: 403, body: { error: { ...exact(403).body.error, message: "x".repeat(1_100_000) } } }) },
-      { name: "renewal times out", timeout: "renew" },
+      { name: "renewal 403 not_your_request, cut off", renew: () => ({ status: 403, body: { error: { ...exact(403).body.error, message: BIG } } }), unread: true },
+      { name: "renewal times out", wire: { at: "renew", answer: () => Promise.reject(timedOut()) }, unread: true },
       { name: "read with another amount", read: read(otherAmount) },
       { name: "read with another amount, final as expired, wallet never asked", read: read((v) => ({ ...otherAmount(v), ...never("expired", "approval_expired") })), frees: true },
       { name: "read with another amount, final as rejected, wallet never asked", read: read((v) => ({ ...otherAmount(v), ...never("rejected", "owner_rejected") })), frees: true },
@@ -594,9 +631,11 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       { name: "read 404 not_found, exact", read: () => exact(404) },
       { name: "read 403 not_your_request, exact", read: () => exact(403) },
       { name: "read 503 with money_moved", read: () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }), asked: true },
-      { name: "read cut off", read: read((v) => ({ ...v, reason: "x".repeat(1_100_000) })) },
-      { name: "read times out", timeout: "read" },
+      { name: "read cut off", read: read((v) => ({ ...v, reason: BIG })), unread: true },
+      { name: "read times out", wire: { at: "read", answer: () => Promise.reject(timedOut()) }, unread: true },
       ...SOL,
+      ...UNREADABLE,
+      ...SOL7,
     ];
     /** Every answer that gives the request up while the record holds no evidence. */
     const EXITS = SHAPES.filter((x) => x.frees);
@@ -612,18 +651,18 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       approvals.recordSigned(id, signed);
       // the dispatcher keeps the request before the check starts
       approvals.mergeEvidence(id, nonce, given);
-      let before = { walletAsked: false, hashes: [] as string[] };
+      let before = { walletAsked: false, hashes: [] as string[], mayHaveSent: false };
       for (const [i, shape] of shapes.entries()) {
         const what = shapes.slice(0, i + 1).map((x) => x.name).join(" → ");
         site.renewAnswer = shape.renew;
         site.readAnswer = shape.read && ((_r, v) => shape.read!(v));
-        const timeout = (input: RequestInfo | URL, init?: RequestInit) => {
+        const wire = (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
-          const hit = shape.timeout === "renew" ? url.endsWith("/token") : shape.timeout === "read" && /\/requests\/[^/]+\?wait=/.test(url);
-          return hit ? Promise.reject(new DOMException("The operation was aborted due to timeout", "TimeoutError")) : fetch(input, init);
+          const hit = shape.wire?.at === "renew" ? url.endsWith("/token") : shape.wire?.at === "read" && /\/requests\/[^/]+\?wait=/.test(url);
+          return hit ? shape.wire!.answer() : fetch(input, init);
         };
         const c = new HostedApprovals({
-          site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, fetchImpl: timeout as typeof fetch,
+          site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, fetchImpl: wire as typeof fetch,
           adopt: {
             signed: approvals.readApproval(id).hosted, ...given,
             onAdopt: (r, shown) => approvals.adoptSigned(id, nonce, r, { ...shown, action: "grant", terms: TERMS }),
@@ -634,10 +673,12 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
         // the dispatcher frees the chain only on this
         const freed = err instanceof HostedRefusal && err.notAdopted && approvals.dropUnsettled(id, nonce, given.requestId);
         const now = approvals.readApproval(id).hosted;
-        expect(freed, what).toBe(shape.frees === true && !before.walletAsked);
+        // a give-up only on a clean history: every answer so far read whole, none with evidence
+        expect(freed, what).toBe(shape.frees === true && !before.walletAsked && !before.mayHaveSent);
         expect(now.signed.walletAsked === true, what).toBe(before.walletAsked || shape.asked === true);
         expect(now.signed.hashes ?? [], what).toEqual([...new Set([...before.hashes, ...(shape.hash ? [shape.hash] : [])])]);
-        before = { walletAsked: now.signed.walletAsked === true, hashes: now.signed.hashes ?? [] };
+        expect(now.signed.mayHaveSent === true, what).toBe(before.mayHaveSent || shape.unread === true);
+        before = { walletAsked: now.signed.walletAsked === true, hashes: now.signed.hashes ?? [], mayHaveSent: now.signed.mayHaveSent === true };
         if (freed) {
           expect(now.signed.submitted, what).toBeUndefined();
           return now;
@@ -650,8 +691,8 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
         expect(err, what).toBeInstanceOf(HostedRefusal);
         expect((err as HostedRefusal).sending, what).toBe(true);
         expect(now.signed.submitted, what).toEqual(given);
-        // with evidence, nothing drops it, whatever the check said
-        if (before.walletAsked) expect(approvals.dropUnsettled(id, nonce, given.requestId), what).toBe(false);
+        // with evidence or the mark, nothing drops it, whatever the check said
+        if (before.walletAsked || before.mayHaveSent) expect(approvals.dropUnsettled(id, nonce, given.requestId), what).toBe(false);
       }
       return approvals.readApproval(id).hosted;
     }
@@ -683,6 +724,41 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
           const now = await through([sol, exit], record, given);
           expect(now.signed, `${sol.name} → ${exit.name}`).toMatchObject({ walletAsked: true, hashes: [GRANT_HASH], submitted: given });
         }
+      }
+    }, 600_000);
+
+    it("Sol's round 7 repros: a read or renewal, 200 or 503, with wallet evidence past the cap leaves the mark, and no exit after it frees the chain", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      for (const sol of SOL7) {
+        for (const exit of EXITS) {
+          const now = await through([sol, exit], record, given);
+          expect(now.signed, `${sol.name} → ${exit.name}`).toMatchObject({ mayHaveSent: true, submitted: given });
+        }
+      }
+      expect(site.requests[0].cancels).toBe(0);
+    }, 600_000);
+
+    it("every kind of answer this machine cannot read whole leaves the mark, at the renewal and at the read, and no exit after it frees the chain", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      for (const u of UNREADABLE) {
+        for (const shapes of [[u], ...EXITS.map((exit) => [u, exit]), ...EXITS.map((exit) => [EVIDENCE, u, exit])]) {
+          const now = await through(shapes, record, given);
+          expect(now.signed, shapes.map((x) => x.name).join(" → ")).toMatchObject({ mayHaveSent: true, submitted: given });
+        }
+      }
+      expect(site.requests[0].cancels).toBe(0);
+    }, 600_000);
+
+    it("controls: after answers each read whole with no evidence, every exit still frees the chain", async () => {
+      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
+      const given = await submit(request);
+      const clean = SHAPES.filter((x) => !x.adopts && !x.frees && !x.asked && !x.unread);
+      expect(clean.length).toBeGreaterThan(10);
+      for (const exit of EXITS) {
+        expect((await through([exit], record, given)).signed.submitted, exit.name).toBeUndefined();
+        for (const a of clean) expect((await through([a, exit], record, given)).signed, `${a.name} → ${exit.name}`).not.toHaveProperty("submitted");
       }
     }, 600_000);
 
@@ -764,11 +840,14 @@ const rpcCalls: { method: string; params: any[] }[] = [];
 
 type Run = { code: number; stdout: string; stderr: string; result: any };
 const outputs: string[] = [];
-function start(args: string[], extraEnv: Record<string, string> = {}): { child: ChildProcess; done: Promise<Run> } {
+/** `terminal`: run as the owner in their own terminal (a TTY on stdin) and type this. */
+function start(args: string[], extraEnv: Record<string, string> = {}, terminal?: string): { child: ChildProcess; done: Promise<Run> } {
   const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc!.url, ...extraEnv };
   for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
   tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }] });
-  const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+  const preload = terminal === undefined ? [] : ["--import", fileURLToPath(new URL("../helpers/budget-owner-terminal.mjs", import.meta.url))];
+  const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+  if (terminal !== undefined) child.stdin!.end(terminal);
   const done = new Promise<Run>((ok, fail) => {
     let stdout = "";
     let stderr = "";
@@ -783,7 +862,7 @@ function start(args: string[], extraEnv: Record<string, string> = {}): { child: 
   });
   return { child, done };
 }
-const budget = (args: string[], extraEnv?: Record<string, string>) => start(args, extraEnv).done;
+const budget = (args: string[], extraEnv?: Record<string, string>, terminal?: string) => start(args, extraEnv, terminal).done;
 
 const approvals = () => join(home, "budget", "approvals");
 const publicPath = () => join(home, "budget", "public", "evm-base-sepolia.env");
@@ -886,7 +965,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(early.result).toMatchObject({ state: "signed", final: false, id, expires: signed.result.expires });
     expect(early.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
     // the connector may already have sent it: never a bare "nothing was sent"
-    expect(early.result.next).toMatch(/Nothing was sent from this machine, but if submit_budget_request already sent it, the owner may be approving it now/);
+    expect(early.result.next).toMatch(/This machine did not submit the signed approval request, but if submit_budget_request already sent it, the owner may be approving it now/);
     expect(JSON.stringify(early.result)).not.toMatch(/nothing was sent(?! from this machine)/i);
     expect(JSON.stringify(signed.result)).not.toMatch(/nothing was sent(?! from this machine)/i);
 
@@ -898,7 +977,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     // this machine cannot tell whether the connector sent it in time: unknown, never refused
     expect(late.code, late.stderr).toBe(5);
     expect(late.result).toMatchObject({ command: "grant", state: "unknown", final: false, id });
-    expect(late.result.reason).toMatch(/expired.*Nothing was sent from this machine, but if submit_budget_request sent it in time/);
+    expect(late.result.reason).toMatch(/expired.*This machine did not submit the signed approval request, but if submit_budget_request sent it in time/);
     expect(late.result.next).toContain("--sign-only");
     expect(late.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
     // not final: had the connector sent it in time, --site-request would still adopt that request
@@ -1148,6 +1227,38 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(record(id).hosted.signed).toMatchObject({ walletAsked: true, submitted: { requestId: v.request_id } });
     expect(existsSync(lockPath())).toBe(true);
     expect(other.cancels).toBe(0);
+  }, 240_000);
+
+  it("a renewal cut off after it showed the wallet asked: unknown, marked, and no later exact 404 frees the chain; only the owner's --abandon does", async () => {
+    onRecord(true);
+    const signed = await budget([...grantArgs, "--sign-only"]);
+    const id = signed.result.id;
+    const v = await connector(signed.result.request);
+    site.renewAnswer = (r) => ({ status: 200, body: { id: r.id, access_token: r.token, wallet_asked: true, tx_hash: GRANT_HASH, reason: "x".repeat(1_100_000) } });
+    const first = await budget(adoptArgs(id, v));
+    expect(first.code, first.stderr).toBe(5);
+    expect(first.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
+    expect(first.result.next).toMatch(/could not be read, so the owner's wallet may have sent its transaction/);
+    expect(first.result.next).toContain(`only the owner runs superstables budget wait --id ${id} --abandon in their own terminal`);
+    expect(record(id).hosted.signed).toMatchObject({ mayHaveSent: true, submitted: { requestId: v.request_id } });
+    site.renewAnswer = () => ({ status: 404, body: { error: { code: "not_found" } } });
+    const later = await budget(["wait", "--id", id, "--shown", "--timeout", "0"]);
+    expect(later.code, later.stderr).toBe(5);
+    expect(later.result).toMatchObject({ state: "unknown", final: false, id });
+    expect(later.result.next).toContain("--abandon");
+    expect(JSON.stringify(later.result)).not.toMatch(/nothing was sent|unpaid|not paid|refused/i);
+    expect(record(id).hosted.signed).toMatchObject({ mayHaveSent: true, submitted: { requestId: v.request_id } });
+    expect(existsSync(lockPath())).toBe(true);
+    // an agent cannot give it up; the owner can, in their own terminal, and the outcome stays unknown
+    const agent = await budget(["wait", "--id", id, "--abandon"]);
+    expect(agent.code, agent.stderr).toBe(3);
+    expect(existsSync(lockPath())).toBe(true);
+    const owner = await budget(["wait", "--id", id, "--abandon"], {}, `${id} abandon\n`);
+    expect(owner.code, owner.stderr).toBe(5);
+    expect(owner.result).toMatchObject({ state: "unknown", final: true, id, abandonedAt: expect.any(String) });
+    expect(record(id)).toMatchObject({ abandoned: { walletMayHaveBeenAsked: true, requestId: v.request_id } });
+    expect(existsSync(lockPath())).toBe(false);
+    expect(site.requests[0].cancels).toBe(0);
   }, 240_000);
 
   // Once the owner's wallet may have been asked, the outcome is unknown, never "nothing sent", "refused" or "failed", until the site or
