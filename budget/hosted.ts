@@ -1642,7 +1642,7 @@ function signedProblem(v: any, f: SignedWant, same: (a?: string | null, b?: stri
     }
     return (v.solana?.amount_atomic ?? null) === (f.body.solana?.amount_atomic ?? null) ? "" : "it has another amount";
   }
-  const steps = f.then ? stepsProblem(f.then, v.steps) : Array.isArray(v.steps) && v.steps.length ? "steps that were not signed" : "";
+  const steps = f.then ? stepsProblem(f.then, v.steps) : v.steps == null || (Array.isArray(v.steps) && !v.steps.length) ? "" : "steps that were not signed";
   if (steps) return `its wallet steps are not the ones signed (${steps})`;
   if (f.body.expected_owner !== undefined && !same(v.expected_owner, f.body.expected_owner)) return "it does not name the owner recorded on this machine";
   if (f.body.owner_proof_version === 2 && v.owner_proof_version !== 2) return "it does not ask for the owner proof that names the account";
@@ -1660,8 +1660,9 @@ const SITE_PROOF_VERSIONS = new Set<unknown>([1, 2]);
 
 /**
  * Whether the site's read carries every field signedProblem compares, each in the site's format: a kind, rail and chain the API
- * sends, an agent address of this rail (`address`), and on a link every step a kind the API sends with its transaction (or Solana
- * amount), the owner it names as an address of this rail and an owner proof version the API sends. Only then does a difference
+ * sends, an agent address of this rail (`address`), and on a link steps as the API sends them (an array, or none on a link
+ * without steps) with each step a kind the API sends and its transaction (or Solana amount), the owner it names as an address of
+ * this rail and an owner proof version the API sends. Only then does a difference
  * show another request; a read that leaves one out, or garbles it, shows nothing.
  */
 function readComplete(v: any, f: SignedWant, address: (v: unknown) => string | null): boolean {
@@ -1670,7 +1671,7 @@ function readComplete(v: any, f: SignedWant, address: (v: unknown) => string | n
   const amount = (x: any) => typeof x?.solana?.amount_atomic === "string" && /^\d+$/.test(x.solana.amount_atomic);
   if (f.kind !== "link") return f.body.transaction ? isTx(v.transaction) : amount(v);
   const step = (g: any) => !!g && typeof g === "object" && SITE_STEPS.has(g.kind) && (v.rail === "solana" ? amount(g) : isTx(g.transaction));
-  if (Array.isArray(v.steps) ? !v.steps.every(step) : f.then?.length) return false;
+  if (Array.isArray(v.steps) ? !v.steps.every(step) : v.steps != null || f.then?.length) return false;
   if (f.body.expected_owner !== undefined && !address(v.expected_owner)) return false;
   return f.body.owner_proof_version !== 2 || SITE_PROOF_VERSIONS.has(v.owner_proof_version);
 }

@@ -189,6 +189,47 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
     }
   });
 
+  it("a link without steps: steps that are not an array are kept, alone or beside another difference; none, null or [] adopt", async () => {
+    const plain: Ask = (c) => c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, expectedOwner: OWNER });
+    const { request, record } = await sign(KEY, plain);
+    expect(JSON.parse(request.body)).toMatchObject({ owner_proof_version: 2 });
+    expect(JSON.parse(request.body).then).toBeUndefined();
+    const given = await submit(request);
+    const step = { kind: "grant", transaction: grantTx(AGENT, 10000n) };
+    for (const [changed, outcome] of [
+      [{ steps: {} }, "kept"],
+      [{ steps: "garbled" }, "kept"],
+      [{ steps: 0 }, "kept"],
+      [{ steps: true }, "kept"],
+      [{ steps: {}, owner_proof_version: 1 }, "kept"],
+      [{ steps: "garbled", expected_owner: privateKeyToAccount(OTHER_KEY).address }, "kept"],
+      [{ steps: [step] }, "refused"],
+      [{ owner_proof_version: 1 }, "refused"],
+      [{ steps: null }, "adopted"],
+      [{ steps: [] }, "adopted"],
+      [{}, "adopted"],
+    ] as const) {
+      const what = JSON.stringify(changed);
+      site.readAnswer = (_r, v) => ({ status: 200, body: { ...(v as object), ...changed } });
+      const { err, adopted, kept } = await adopt(KEY, record, given, plain);
+      if (outcome === "adopted") {
+        expect(err, what).toBeInstanceOf(HostedAdopted);
+        continue;
+      }
+      expect(err, what).toBeInstanceOf(HostedRefusal);
+      expect(adopted, what).toBeUndefined();
+      expect((err as HostedRefusal).notAdopted, what).toBe(outcome === "refused");
+      if (outcome === "kept") {
+        expect((err as HostedRefusal).message, what).toMatch(/leaves out, or garbles, what was signed.*It is kept with this approval/);
+        expect((err as HostedRefusal).sending, what).toBe(true);
+        expect(kept, what).toMatchObject([{ requestId: given.requestId, walletAsked: false }]);
+      } else {
+        expect(kept, what).toEqual([]);
+      }
+    }
+    expect(site.requests[0].cancels).toBe(0);
+  });
+
   it("other terms on an approval: a read naming another agent, kind or chain the site sends is refused; one with a value the site never sends is kept", async () => {
     const { request, record } = await sign(KEY, grant(AGENT, 10000n));
     const given = await submit(request);
@@ -622,6 +663,25 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(later.code, later.stderr).toBe(0);
     expect(later.result).toMatchObject({ command: "setup", state: "waiting_owner", id, url: v.approval_link });
     expect(record(id).hosted.signed.submitted).toBeUndefined();
+  }, 300_000);
+
+  it("a link without steps whose read has steps that are not an array is unknown, keeps the request and holds the chain", async () => {
+    onRecord(false);
+    const signed = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--sign-only"]);
+    expect(signed.code, signed.stderr).toBe(0);
+    const id = signed.result.id;
+    const v = await connector(signed.result.request);
+    for (const change of [{ steps: {} }, { steps: "garbled" }, { steps: {}, owner_proof_version: 1 }]) {
+      const what = JSON.stringify(change);
+      site.readAnswer = (_r, view) => ({ status: 200, body: { ...(view as object), ...change } });
+      const out = await budget(adoptArgs(id, v));
+      expect(out.code, `${what}: ${out.stderr}`).toBe(5);
+      expect(out.result, what).toMatchObject({ state: "unknown", final: false });
+      expect(out.result.reason, what).toMatch(/leaves out, or garbles, what was signed/);
+      expect(record(id).hosted.signed.submitted, what).toEqual({ requestId: v.request_id, link: v.approval_link, matchCode: v.match_code });
+      expect(existsSync(lockPath()), what).toBe(true);
+    }
+    expect(site.requests[0].cancels).toBe(0);
   }, 300_000);
 
   it("another agent, other terms: adopting either is refused, the record stays byte for byte, and the chain stays free", async () => {
