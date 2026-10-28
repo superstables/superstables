@@ -102,8 +102,9 @@ function exercise(route, superstables, { version, cwd }) {
   check(route, "superstables budget doctor --rail evm", (r.status === 0 || r.status === 1) && result?.command === "doctor", `exit ${r.status ?? r.signal}, ${result ? `RESULT state ${result.state}` : "no RESULT line"}`);
 }
 
-// name@version of every package under a node_modules folder, nested ones included; the client itself left out.
-function installedVersions(nodeModules) {
+// name@version of every package under a node_modules folder, nested ones included; the client itself left out. `where`
+// collects the node_modules folders each one was found in.
+function installedVersions(nodeModules, where = new Map()) {
   const found = new Set();
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -112,7 +113,11 @@ function installedVersions(nodeModules) {
       for (const folder of folders) {
         let pkg;
         try { pkg = JSON.parse(readFileSync(join(folder, "package.json"), "utf8")); } catch { continue; }
-        if (pkg.name !== "@superstables/client") found.add(`${pkg.name}@${pkg.version}`);
+        if (pkg.name !== "@superstables/client") {
+          const id = `${pkg.name}@${pkg.version}`;
+          found.add(id);
+          where.set(id, [...(where.get(id) ?? []), dir]);
+        }
         if (existsSync(join(folder, "node_modules"))) walk(join(folder, "node_modules"));
       }
     }
@@ -148,8 +153,14 @@ function checkInstalled(route, nodeModules, { fromShrinkwrap = false, hasShrinkw
   if (fromShrinkwrap) check(route, "npm honoured the shrinkwrap: the client has its own node_modules", existsSync(join(pkg, "node_modules")));
   // A dependency range somewhere down the tree that a newer release now satisfies shows here, as a package that the
   // lockfile (the tested set) does not name.
-  const got = installedVersions(nodeModules);
-  const extra = [...got].filter((p) => !tested.has(p));
+  const nestedUnder = new Map();
+  const got = installedVersions(nodeModules, nestedUnder);
+  // The root override that gives x402 the client's zod (package.json) is the lockfile's, and npm applies a package's
+  // overrides only when it is the root, and its shrinkwrap only for a registry install. A route that installs from a file
+  // or a git URL therefore resolves x402's own `zod ^3` and nests a 3.x under @x402/*. That is the one extra it may have;
+  // the registry route, which npx runs, is held to the lockfile exactly.
+  const x402Zod = (p) => !fromShrinkwrap && /^zod@3\./.test(p) && nestedUnder.get(p)?.every((d) => /[\\/]node_modules[\\/]@x402[\\/][^\\/]+[\\/]node_modules$/.test(d));
+  const extra = [...got].filter((p) => !tested.has(p) && !x402Zod(p));
   const missing = [...tested].filter((p) => !got.has(p));
   check(route, `installs exactly the production versions package-lock.json resolved${fromShrinkwrap ? " (the published shrinkwrap)" : ""}`, !extra.length && !missing.length, [...extra.map((p) => `+${p}`), ...missing.map((p) => `-${p}`)].join(" "));
 }
