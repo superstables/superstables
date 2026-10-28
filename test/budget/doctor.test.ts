@@ -5,7 +5,7 @@
 // case in test/core/browser-signer.test.ts).
 
 import { describe, expect, it } from "vitest";
-import { evmAgentGasNeed, evmOwnerGasNeed } from "../../budget/doctor.mjs";
+import { evmAgentGasNeed, evmOwnerGasNeed, publicKeyNames } from "../../budget/doctor.mjs";
 import { DOCTOR_SPIKE, EVM_CHAINS } from "../../budget/evm/chains.mjs";
 
 const base = EVM_CHAINS["base-sepolia"].doctor;
@@ -32,5 +32,22 @@ describe("doctor's agent gas minimum on evm", () => {
     expect(evmAgentGasNeed((225_000 * 7_000_000) / 1e18, base.minAgentGas)).toBe(0.00003);
     expect(evmAgentGasNeed(null, base.minAgentGas)).toBe(0.00003);
     expect(evmAgentGasNeed(0.001, base.minAgentGas)).toBe(0.002);
+  });
+});
+
+describe("doctor's public-file key check", () => {
+  const key = `0x${"ab".repeat(32)}`;
+  const hash = `0x${"cd".repeat(32)}`;
+  const owner = "0xOwner";
+  const opts = { caseSensitive: false, addresses: [owner, "0xAgent"], keyAddress: async (v: string) => (v === key ? "0xowner" : "0xother") };
+
+  it("does not call a recorded transaction hash key material", async () => {
+    const pub = { B4_OWNER_ADDRESS: owner, B4_SET_TX: hash, B4_REVOKED_TX: hash, GRANT_TX: hash, REVOKED_TX: hash };
+    expect(await publicKeyNames(pub, opts)).toEqual([]);
+  });
+
+  it("still flags a private key, under any name", async () => {
+    expect(await publicKeyNames({ B4_OWNER_KEY: key, NOTE: hash }, opts)).toEqual(["B4_OWNER_KEY", "NOTE"]);
+    expect(await publicKeyNames({ B4_SET_TX: key }, opts)).toEqual(["B4_SET_TX"]);
   });
 });

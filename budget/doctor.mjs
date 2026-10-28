@@ -147,6 +147,23 @@ function readEnv(path, what) {
   return out;
 }
 const keyShaped = (v) => /^0x[0-9a-fA-F]{64}$/.test(v) || /^[1-9A-HJ-NP-Za-km-z]{64,100}$/.test(v);
+// Public-file names that hold a transaction hash or signature: 32 bytes of hex (evm) or base58 of about 88 characters (solana), the same shape as a key.
+const TX_HASH_NAMES = new Set(["B4_SET_TX", "B4_REVOKED_TX", "GRANT_TX", "REVOKED_TX"]);
+// Names in the public file that hold key material. A hash name passes unless its value is a key for the owner or the agent address,
+// which is the only way to tell a key pasted there from a real hash.
+export async function publicKeyNames(pub, { keyAddress, caseSensitive, addresses }) {
+  const norm = (a) => (caseSensitive ? a : a.toLowerCase());
+  const known = new Set(addresses.filter(Boolean).map(norm));
+  const out = [];
+  for (const [name, value] of Object.entries(pub)) {
+    if (!keyShaped(value)) continue;
+    if (TX_HASH_NAMES.has(name)) {
+      const a = await keyAddress(value).catch(() => null);
+      if (a && known.has(norm(a))) out.push(name);
+    } else out.push(name);
+  }
+  return out;
+}
 const mode = (path) => (statSync(path).mode & 0o777).toString(8);
 
 /**
@@ -243,7 +260,7 @@ export async function runDoctor(f) {
 
   if (!existsSync(r.pub)) line(false, `public file ${r.pub}`, `does not exist (run ${r.setup})`);
   else {
-    const secrets = Object.entries(pub).filter(([, v]) => keyShaped(v)).map(([k]) => k);
+    const secrets = await publicKeyNames(pub, { keyAddress: r.keyAddress, caseSensitive: r.caseSensitive, addresses: [ownerAddress, agentAddress] });
     const missing = [r.ownerAddr, r.agentAddr].filter((v) => !pub[v]);
     line(!secrets.length && !missing.length, `public file ${r.pub}`, [secrets.length && `holds key material in ${secrets.join(", ")}`, missing.length && `missing ${missing.join(", ")} (run ${r.setup})`].filter(Boolean).join("; "));
   }
