@@ -158,7 +158,15 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
       [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: grantTx(AGENT, 20000n) }] }), true],
       [(v: any) => ({ ...v, owner_proof_version: 1 }), true],
       [(v: any) => ({ ...v, chain: { key: "arc-testnet" } }), true],
+      [(v: any) => ({ ...v, expected_owner: privateKeyToAccount(OTHER_KEY).address }), true],
+      [(v: any) => ({ ...v, steps: [v.steps[1], v.steps[0]] }), true],
       [drop("expected_owner"), false],
+      [(v: any) => ({ ...v, expected_owner: "garbled" }), false],
+      [(v: any) => ({ ...v, owner_proof_version: 99 }), false],
+      [(v: any) => ({ ...v, owner_proof_version: "2" }), false],
+      [(v: any) => ({ ...v, steps: [{ kind: "garbled" }] }), false],
+      [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], kind: "garbled" }] }), false],
+      [(v: any) => ({ ...v, steps: [...v.steps, { kind: "grant" }] }), false],
       [drop("agent"), false],
       [drop("steps"), false],
       [(v: any) => ({ ...v, steps: [v.steps[0], { ...v.steps[1], transaction: { to: "nope" } }] }), false],
@@ -590,6 +598,30 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     // token: never in any output, log or file but the approval record
     const tokens = [r.token, ...Array.from({ length: r.renewals ?? 0 }, (_, i) => `ssbt_test_${r.id}renewed${i + 1}`)];
     for (const text of [...outputs, ...filesOutsideRecords()]) for (const t of tokens) expect(text).not.toContain(t);
+  }, 300_000);
+
+  it("a link whose read garbles the owner, the owner proof version or a step is unknown, keeps the request and holds the chain", async () => {
+    onRecord(false);
+    const signed = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--sign-only"]);
+    expect(signed.code, signed.stderr).toBe(0);
+    const id = signed.result.id;
+    const v = await connector(signed.result.request);
+    for (const change of [{ expected_owner: "garbled" }, { owner_proof_version: 99 }, { steps: [{ kind: "garbled" }] }]) {
+      const what = JSON.stringify(change);
+      site.readAnswer = (_r, view) => ({ status: 200, body: { ...(view as object), ...change } });
+      const out = await budget(adoptArgs(id, v));
+      expect(out.code, `${what}: ${out.stderr}`).toBe(5);
+      expect(out.result, what).toMatchObject({ state: "unknown", final: false });
+      expect(out.result.reason, what).toMatch(/leaves out, or garbles, what was signed/);
+      expect(record(id).hosted.signed.submitted, what).toEqual({ requestId: v.request_id, link: v.approval_link, matchCode: v.match_code });
+      expect(existsSync(lockPath()), what).toBe(true);
+    }
+    expect(site.requests[0].cancels).toBe(0);
+    site.readAnswer = undefined;
+    const later = await budget(["wait", "--id", id]);
+    expect(later.code, later.stderr).toBe(0);
+    expect(later.result).toMatchObject({ command: "setup", state: "waiting_owner", id, url: v.approval_link });
+    expect(record(id).hosted.signed.submitted).toBeUndefined();
   }, 300_000);
 
   it("another agent, other terms: adopting either is refused, the record stays byte for byte, and the chain stays free", async () => {

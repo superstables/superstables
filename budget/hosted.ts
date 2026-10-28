@@ -1649,22 +1649,28 @@ function signedProblem(v: any, f: SignedWant, same: (a?: string | null, b?: stri
   return "";
 }
 
-/** The request kinds, rails and chain keys the site's budget API sends, so a read naming anything else is garbled, not other terms. */
+/**
+ * The request kinds, rails, chain keys, link step kinds and owner proof versions the site's budget API sends, so a read naming
+ * anything else is garbled, not other terms.
+ */
 const SITE_KINDS = new Set(["link", "grant", "revoke", "fund_agent"]);
 const SITE_CHAINS: Record<string, readonly string[]> = { evm: EVM_CHAIN_KEYS, tempo: ["moderato"], solana: ["devnet"] };
+const SITE_STEPS = new Set(["fund_agent", "grant"]);
+const SITE_PROOF_VERSIONS = new Set<unknown>([1, 2]);
 
 /**
  * Whether the site's read carries every field signedProblem compares, each in the site's format: a kind, rail and chain the API
- * sends, an agent address of this rail (`address`). Only then does a difference show another request; a read that leaves one out,
- * or garbles it, shows nothing.
+ * sends, an agent address of this rail (`address`), and on a link every step a kind the API sends with its transaction (or Solana
+ * amount), the owner it names as an address of this rail and an owner proof version the API sends. Only then does a difference
+ * show another request; a read that leaves one out, or garbles it, shows nothing.
  */
 function readComplete(v: any, f: SignedWant, address: (v: unknown) => string | null): boolean {
   if (!v || typeof v !== "object" || v.id !== f.id || !SITE_KINDS.has(v.kind) || !address(v.agent) || !Object.hasOwn(SITE_CHAINS, v.rail)) return false;
   if (!SITE_CHAINS[v.rail].includes(v.chain && typeof v.chain === "object" ? v.chain.key : v.chain)) return false;
   const amount = (x: any) => typeof x?.solana?.amount_atomic === "string" && /^\d+$/.test(x.solana.amount_atomic);
   if (f.kind !== "link") return f.body.transaction ? isTx(v.transaction) : amount(v);
-  const then = f.then ?? [];
-  if (then.length && !(Array.isArray(v.steps) && v.steps.every((g: any, i: number) => g && typeof g === "object" && typeof g.kind === "string" && (g.kind !== then[i]?.kind || (then[i].transaction ? isTx(g.transaction) : !then[i].solana || amount(g)))))) return false;
-  if (f.body.expected_owner !== undefined && typeof v.expected_owner !== "string") return false;
-  return f.body.owner_proof_version !== 2 || typeof v.owner_proof_version === "number";
+  const step = (g: any) => !!g && typeof g === "object" && SITE_STEPS.has(g.kind) && (v.rail === "solana" ? amount(g) : isTx(g.transaction));
+  if (Array.isArray(v.steps) ? !v.steps.every(step) : f.then?.length) return false;
+  if (f.body.expected_owner !== undefined && !address(v.expected_owner)) return false;
+  return f.body.owner_proof_version !== 2 || SITE_PROOF_VERSIONS.has(v.owner_proof_version);
 }
