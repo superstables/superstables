@@ -1,0 +1,5 @@
+interface:
+  display_name: "Superstables"
+  short_description: "Find paid services, request a purchase the owner approves, and manage testnet budgets, through the Superstables tools or the superstables CLI"
+policy:
+  allow_implicit_invocation: true

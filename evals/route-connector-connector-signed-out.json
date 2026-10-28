@@ -1,5 +1,5 @@
 {
-  "skills": ["superstables-payments", "superstables"],
+  "skills": ["superstables"],
   "query": "Find BTC market data and buy it once. Don't spend more than 0.02.",
   "files": [],
   "expected_behavior": [

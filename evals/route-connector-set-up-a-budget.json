@@ -1,8 +1,5 @@
 {
-  "skills": [
-    "superstables-payments",
-    "superstables"
-  ],
+  "skills": ["superstables"],
   "query": "Set up a 1 USDC budget on Base Sepolia for you to spend from.",
   "files": [],
   "expected_behavior": [
