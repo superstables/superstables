@@ -46,7 +46,8 @@ vi.mock("../../src/core/token-domain.js", async (importOriginal) => {
   return { ...real, tokenDomainProblem: async () => "" };
 });
 
-import { MAINNET_SIGNING, setChainGateSource, setPrerequisiteCheck } from "../../src/core/chain-gate.js";
+import { MAINNET_SIGNING, chainGate, setChainGateSource, setPrerequisiteCheck } from "../../src/core/chain-gate.js";
+import { judgeAccept } from "../../src/core/rails/index.js";
 import { BASE_SEPOLIA, EVM_NETWORKS, networkFor, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
 import { manifestState } from "../../src/core/mainnet-policy.js";
 import { MAINNET_LEDGER, MAINNET_PAUSE_FILE, heldToday, mainnetSendRefusal, type MainnetHold } from "../../src/core/mainnet-spend.js";
@@ -182,6 +183,12 @@ describe("caps at the local key signer", () => {
     await refusedWith(signer.sign(request(0.1, 31)), /ledger .* is not valid/);
     expect(asked()).toBe(0);
     expect(readFileSync(join(h, MAINNET_LEDGER), "utf8")).toBe("{not json");
+  });
+
+  it("refuses a chain table entry that states another chain id than the manifest, and quotes the true entry", async () => {
+    const forged = { ...TESTMAIN, chainId: 1 };
+    expect(chainGate({ rail: "evm", key: "testmain", chainId: forged.chainId, testnet: false, token: forged.token }, { enabledChains: ["testmain"] })).toMatch(/chain id 1 here/);
+    expect(judgeAccept({ ...usdcRequirement(0.1, PAY_TO, TESTMAIN) } as never, 2)).toMatchObject({ supported: true });
   });
 
   it("still lets the owner's settings decide: a chain they do not enable is refused", async () => {
