@@ -95,7 +95,7 @@ const RAILS = {
 // A chain name that is a mainnet's, or a chain id, in a --chain value. While the mainnet switch is off it is refused as a mainnet.
 const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find covers every network: the testnet line names the tokens without naming one. */
-const TESTNET_TOKENS_LINE = "Testnet only. Test tokens, no real money.";
+const TESTNET_TOKENS_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.0.0, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
 /** Every chain key the budget commands take, and its rail. */
 const RAIL_OF_CHAIN = Object.fromEntries(Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((c) => [c, rail])));
 /** The chain keys in words, each with its rail: the list find names when it refuses a chain. */
@@ -607,7 +607,8 @@ ${SIGN_ONLY_HELP}`,
 };
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnet by default. No real money moves unless the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.
+Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
+No mainnet chain is payable in 1.0.0, even with the switch enabled. Agents never set the variable.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):

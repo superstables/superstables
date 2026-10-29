@@ -23,7 +23,9 @@ There are two ways:
   on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
   wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
-**Testnet only.** Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
+**Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
+No mainnet chain is payable in 1.0.0, even with the switch enabled.
+Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
 moves. Use the [0.3.0 client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
 requests on superstables.com, the owner approves and checks activity on the site; linked budget agents are

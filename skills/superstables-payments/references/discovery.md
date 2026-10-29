@@ -83,7 +83,9 @@ When several listings can answer the request:
 
 ## Chain names
 
-Only testnet names count. In the index, `base`, `ethereum` and `solana` are mainnets and are never payable here.
+Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
+No mainnet chain is payable in 1.0.0, even with the switch enabled.
+Agents never set the variable. In the index, `base`, `ethereum` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |
 | --- | --- | --- |

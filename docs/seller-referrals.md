@@ -5,7 +5,9 @@ client, the paid request carries a referral token signed by superstables.com. Yo
 verify that token with `@superstables/client/seller`, which uses Node built-ins only. You don't
 report sales to superstables.com.
 
-**Testnet only.** Purchases, fees and statements are kept by superstables.com. The client carries
+**Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
+No mainnet chain is payable in 1.0.0, even with the switch enabled.
+Purchases, fees and statements are kept by superstables.com. The client carries
 the token from the index to your service, and this helper checks it; neither computes a fee.
 
 ## How it works
