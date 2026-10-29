@@ -1,6 +1,6 @@
 {
   "name": "@superstables/client",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "description": "Superstables client: discover paid services, quote them, and pay from an owner-controlled wallet. CLI and agent skill.",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "https://github.com/superstables/superstables.git" },

@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 0.5.0 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
+Superstables client 1.0.0 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -801,8 +801,8 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-For 0.5.0, use the agent skill zip attached to the 0.5.0 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-0.5.0.zip`;
+For 1.0.0, use the agent skill zip attached to the 1.0.0 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.0.0.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
