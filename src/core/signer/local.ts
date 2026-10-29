@@ -11,6 +11,7 @@ import { verifyTypedData } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { chainGate, chainGateSettings } from "../chain-gate.js";
 import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
+import { MainnetRefused, reserveMainnetSpend, settleMainnetSpend } from "../mainnet-spend.js";
 import { judgeSignRequest, x402RailFor } from "../rails/index.js";
 import { untrustedText } from "../text.js";
 import { buildTypedData } from "./steps/eip3009.js";
@@ -42,7 +43,7 @@ export class LocalKeySigner implements Signer {
     // refuses it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
-    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
+    const gate = chainGate({ rail: network.rail, key: network.key, chainId: network.chainId, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
     // Judged again here, as every signer must: the chain gate, the offer's `extra` allow-list, Permit2, the pinned domain,
     // the amount and the recipient. A request sent straight to the wallet gets no easier a check than one `pay` made.
     const judged = judgeSignRequest(req);
@@ -62,7 +63,23 @@ export class LocalKeySigner implements Signer {
       nonce: typed.message.nonce as `0x${string}`,
     };
     const types = { TransferWithAuthorization: typed.types.TransferWithAuthorization };
-    const signature = await this.account.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
+    // On a mainnet the amount is reserved against the manifest's caps first, under the ledger's lock, and the pause is
+    // read again there: nothing is signed past a cap or a pause. A testnet reserves nothing.
+    let held;
+    try {
+      held = await reserveMainnetSpend(network, message.value, `eip3009:${network.key}:${message.from.toLowerCase()}:${message.nonce.toLowerCase()}`);
+    } catch (err) {
+      if (err instanceof MainnetRefused) throw new SignRefused("policy", err.message);
+      throw new SignRefused("invalid", `the mainnet spending ledger could not be checked (${err instanceof Error ? err.message : String(err)}); nothing was signed`);
+    }
+    let signature: `0x${string}`;
+    try {
+      signature = await this.account.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
+    } catch (err) {
+      await settleMainnetSpend(held, "released");
+      throw err;
+    }
+    await settleMainnetSpend(held, "signed");
     const genuine = await verifyTypedData({ address: this.account.address, domain, types, primaryType: "TransferWithAuthorization", message, signature });
     if (!genuine) throw new SignRefused("invalid", "the wallet's signature did not verify; nothing was returned");
     return {
