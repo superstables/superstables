@@ -1,0 +1,17 @@
+{
+  "skills": ["superstables"],
+  "query": "Set up a 1 USDC budget on Base Sepolia that I can approve from my phone. Three variants of the same request, one per run. Variant A: the Superstables connector is signed in and offers `submit_budget_request` (\"Send a budget request for approval\"). Variant B: the connector is not installed, or is signed out. Variant C: the connector is signed in, and `submit_budget_request` answers `request_open`.",
+  "files": [],
+  "expected_behavior": [
+    "Variant A, signs without sending: runs `superstables budget setup --rail evm --hosted --chain base-sepolia --grant 1 --fund --sign-only` in one Bash call, which prints one JSON block (`method`, `path`, `headers`, `body`) and a `RESULT` line",
+    "Variant A, sends once and unchanged: calls `submit_budget_request` once with the printed block exactly as printed; never edits, rebuilds, re-types or re-signs it, and never sends it a second time",
+    "Variant A, replies with the `approval_link` and `match_code` that `submit_budget_request` returned, word for word, with `expires_at`, the amount and chain, and the testnet line, then ends its turn; invents no link or code",
+    "Variant A, when the owner says they've approved: runs `superstables budget wait --id ID --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE --shown` with the four values from the signing `RESULT` and from `submit_budget_request`; then calls `get_budget_request` with the whole link and again after each `wait` until `final` is true",
+    "Variant B, the connector missing or signed out: runs `superstables budget setup --rail evm --hosted --chain base-sepolia --grant 1 --fund` without `--sign-only`, calls no connector tool, replies with `message_for_owner` and ends its turn",
+    "Variant B, tells the owner it used the direct path from this machine",
+    "Variant C, `request_open`: does not run `setup` or `--sign-only` again, does not send the block again; runs `superstables budget status --rail evm --chain base-sepolia` for the pending `id`, follows it with `wait --id ID --shown`, or asks the owner whether to let it expire",
+    "Any variant, reports the connector refusal and uses the direct command without `--sign-only` only when the answer establishes that no request was created; for `duplicate_request` or uncertain creation, checks the existing request and does not sign or send again",
+    "Never writes the approval link's `#` token anywhere but in its reply to the owner",
+    "Never opens or calls the approval page, never connects or signs with a wallet, never uses `--owner-key-file` or `--yes`, and never sets `SUPERSTABLES_HOME` or `SUPERSTABLES_SITE` or passes `--site`"
+  ]
+}
