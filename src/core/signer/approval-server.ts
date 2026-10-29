@@ -643,6 +643,11 @@ export class ApprovalServer {
           note = undefined;
         }
       }
+      const finalBoundary = this.mainnetAccountAnswer(record, address);
+      if (finalBoundary) {
+        this.sendJson(res, finalBoundary.http, finalBoundary.body);
+        return;
+      }
       const shown = note ? { ...(answer.body as object), signedSettings: note } : answer.body;
       if (answer.http === 200 && record.network.testnet !== true) record.mainnetAnswer = { account: address, body: shown };
       this.sendJson(res, answer.http, shown);
@@ -696,7 +701,9 @@ export class ApprovalServer {
    */
   private mainnetAccountAnswer(record: ApprovalRecord, address: string): { http: number; body: unknown } | undefined {
     if (record.network.testnet === true) return undefined;
-    const closed = mainnetSendRefusal(record.network);
+    const closed = record.status !== "pending" || Date.now() >= record.expiresAt
+      ? "this approval has expired or ended"
+      : mainnetSendRefusal(record.network);
     if (closed) {
       const reason = `${closed}; nothing was prepared for your wallet`;
       record.status = "refused";

@@ -18,6 +18,7 @@ import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.j
 import { CAP_DECIMALS, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { MainnetRefused, reserveMainnetSpend } from "../mainnet-spend.js";
+import { MAX_SIGNED_LIFETIME_S } from "../rails/evm.js";
 import { judgeSignRequest } from "../rails/index.js";
 import { untrustedText } from "../text.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
@@ -202,8 +203,10 @@ export class BrowserWalletSigner implements Signer {
     // On a mainnet each page reserves its own amount against the manifest's caps, and the pause is read again, before the
     // page can offer anything to a wallet. The reservation counts from here for its 24 hours and is never released, and
     // the page prepares one authorization for one wallet only (approval-server.ts), so it covers what the page can ask.
+    let notAfter: number | undefined;
     try {
-      await reserveMainnetSpend(network, BigInt(terms.amountAtomic), `page:${network.key}:${req.kind === "eip3009" && req.nonce ? req.nonce.toLowerCase() : req.context?.attemptId ?? "once"}`);
+      const reservation = await reserveMainnetSpend(network, BigInt(terms.amountAtomic), `page:${network.key}:${req.kind === "eip3009" && req.nonce ? req.nonce.toLowerCase() : req.context?.attemptId ?? "once"}`);
+      if (reservation.held) notAfter = reservation.expiresAt - MAX_SIGNED_LIFETIME_S * 1000;
     } catch (err) {
       if (err instanceof MainnetRefused) throw new SignRefused("policy", err.message);
       throw new SignRefused("invalid", `the mainnet spending ledger could not be checked (${err instanceof Error ? err.message : String(err)}); nobody was asked`);
@@ -219,6 +222,7 @@ export class BrowserWalletSigner implements Signer {
       ...(req.kind === "eip3009" && req.nonce ? { nonce: req.nonce } : {}),
       ...(req.kind !== "eip3009" && req.referralId ? { referralId: req.referralId } : {}),
       timeoutMs: this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      ...(notAfter !== undefined ? { notAfter } : {}),
       ...(hooks?.beforeWalletSends ? { beforeWalletSends: hooks.beforeWalletSends } : {}),
     });
     hooks?.onPending?.(approval.id, approval.url);

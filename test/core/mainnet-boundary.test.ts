@@ -57,6 +57,7 @@ import { Records } from "../../src/core/records.js";
 import type { Signer } from "../../src/core/signer/types.js";
 import { termsFor } from "../../src/core/x402.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
+import { ApprovalServer } from "../../src/core/signer/approval-server.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { LocalKeySigner } from "../../src/core/signer/local.js";
 import { SignRefused } from "../../src/core/signer/types.js";
@@ -345,6 +346,62 @@ describe("review repairs: the approval page", () => {
     await vi.waitFor(() => expect(links).toHaveLength(requests.length));
     return { links, endings };
   }
+
+  it("S1: a long-lived page cannot issue validity past its accounting window", async () => {
+    const now = Date.now();
+    const signer = new BrowserWalletSigner({ port: 0, home: h, policy, timeoutMs: 90_000_000, balance: false });
+    try {
+      const { links, endings } = await open(signer, request(1, 501));
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now + 86_400_001);
+      try {
+        const answer = await postJson(`${links[0]}/account`, { address: wallet() });
+        expect(answer.status).toBe(409);
+        expect(answer.body.typedData).toBeUndefined();
+      } finally { clock.mockRestore(); }
+      await signer.close();
+      await Promise.all(endings);
+    } finally { await signer.close(); }
+  });
+
+  it("S1: the last authorization before the page deadline expires within its reservation", async () => {
+    const signer = new BrowserWalletSigner({ port: 0, home: h, policy, timeoutMs: 90_000_000, balance: false });
+    try {
+      const { links, endings } = await open(signer, request(1, 503));
+      const hold = ledger()[0];
+      const clock = vi.spyOn(Date, "now").mockReturnValue(hold.at + 86_400_000 - 600_001);
+      try {
+        const prepared = await postJson(`${links[0]}/account`, { address: wallet() });
+        expect(prepared.status).toBe(200);
+        const typed = prepared.body.typedData;
+        if (!typed || typeof typed !== "object" || !("message" in typed)) throw new Error("no typed message");
+        const message = typed.message;
+        if (!message || typeof message !== "object" || !("validBefore" in message)) throw new Error("no validity");
+        expect(Number(message.validBefore) * 1000).toBeLessThanOrEqual(hold.at + 86_400_000);
+      } finally { clock.mockRestore(); }
+      await signer.close();
+      await Promise.all(endings);
+    } finally { await signer.close(); }
+  });
+
+  it.each(["pause", "expiry"])("S5: %s during the settings lookup withholds the prepared authorization", async (stop) => {
+    const clock = vi.spyOn(Date, "now");
+    const started = Date.now();
+    const server = new ApprovalServer({ port: 0, recordsDirPath: join(h, "records"), settingsNote: async () => {
+      if (stop === "pause") writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
+      else clock.mockReturnValue(started + 30_000);
+      return undefined;
+    } });
+    try {
+      await server.start();
+      const judged = judgeAccept(usdcRequirement(1, PAY_TO, TESTMAIN), 2);
+      if (!judged.supported) throw new Error(judged.reason);
+      const approval = server.request({ kind: "eip3009", verified: { ...judged.offer.terms, payer: "" }, requirement: judged.offer.requirement, x402Version: 2, timeoutMs: 20_000, nonce: nonce(502) });
+      const answer = await postJson(`${approval.url}/account`, { address: wallet() });
+      expect(answer.status).toBe(409);
+      expect(answer.body.typedData).toBeUndefined();
+      expect((await approval.settled).status).toBe("refused");
+    } finally { clock.mockRestore(); await server.close(); }
+  });
 
   it("S2: two pages with the same nonce, each connected to another wallet, both count", async () => {
     const signer = pageSigner();

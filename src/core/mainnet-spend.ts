@@ -107,7 +107,7 @@ export function heldToday(holds: readonly MainnetHold[], chain: string, now: num
 }
 
 /** Whether an amount was reserved: never on a testnet. */
-export type Reservation = { held: boolean };
+export type Reservation = { held: false } | { held: true; expiresAt: number };
 
 /**
  * Reserve `amountAtomic` on `chain` for one request to sign (`what` says which, for a person), or throw MainnetRefused.
@@ -138,7 +138,7 @@ export async function reserveMainnetSpend(chain: MainnetChainRef, amountAtomic: 
     }
     const kept = holds.filter((h) => h.at > now - 7 * MAINNET_WINDOW_MS);
     writeLedger(path, [...kept, { id: randomUUID(), what, chain: chain.key, amountAtomic: amountAtomic.toString(), at: now }]);
-    return { held: true };
+    return { held: true, expiresAt: now + MAINNET_WINDOW_MS };
   });
 }
 
