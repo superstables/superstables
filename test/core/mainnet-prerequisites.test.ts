@@ -154,7 +154,7 @@ describe("mainnetGate", () => {
     expect(mainnetGate(ready, { enabledChains: ["skale-base-sepolia"] })).toBe(`the evm chain skale-base-sepolia is not ready for mainnet signing: ${RPC}`);
   });
 
-  it("chainGate still stops at the build's own switch", () => {
-    expect(chainGate({ ...chain, key: "skale-base-sepolia" }, { enabledChains: ["skale-base-sepolia"] })).toMatch(/^this client does not sign on mainnet chains/);
+  it("chainGate still stops at the environment switch", () => {
+    expect(chainGate({ ...chain, key: "skale-base-sepolia" }, { enabledChains: ["skale-base-sepolia"] })).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
   });
 });

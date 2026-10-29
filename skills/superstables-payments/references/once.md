@@ -4,7 +4,7 @@
 
 <a id="buy-once"></a>
 
-Read this when the owner chose to approve one purchase. The owner approves this one payment on superstables.com, in their own wallet. There is no setup, no budget or agent key: nothing is spent until they approve, and they approve each purchase separately. Testnet only. Test tokens, no real money. It pays on the chain the service's listing names: Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet.
+Read this when the owner chose to approve one purchase. The owner approves this one payment on superstables.com, in their own wallet. There is no setup, no budget or agent key: nothing is spent until they approve, and they approve each purchase separately. Testnet-first: test tokens, no real money. It pays on the chain the service's listing names: Base Sepolia, Arc Testnet, Tempo Moderato or Solana devnet.
 
 ## What the owner needs
 

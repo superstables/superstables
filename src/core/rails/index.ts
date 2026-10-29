@@ -3,7 +3,7 @@
 // refused before the owner is asked.
 
 import { chainGate, chainGateSettings } from "../chain-gate.js";
-import { describeNetwork, mainnetName, networkFor, shortLabel, type NetworkInfo } from "../chain.js";
+import { describeNetwork, mainnetName, mainnetUnsupported, networkFor, shortLabel, type NetworkInfo } from "../chain.js";
 import type { MppChallenge } from "../mpp.js";
 import type { SignRequest } from "../signer/types.js";
 import { untrustedText } from "../text.js";
@@ -44,12 +44,12 @@ export function payableLabels(): string[] {
   return SUPPORTED_NETWORKS.map((n) => n.label.replace(/\s*\(testnet\)\s*/i, "").trim() || n.label);
 }
 
-/** Why a chain is refused: a mainnet says so; anything else is simply not one `pay` pays on. */
+/** Why a chain is refused: a mainnet says so (and names the mainnet switch); anything else is simply not one `pay` pays on. */
 export function networkRefusal(named: string): string {
   const shown = untrustedText(describeNetwork(named), 60);
   const only = payableLabels().join(", ");
   return mainnetName(named)
-    ? `chain ${shown} is not supported: it is a mainnet, and this client pays on testnets only (${only})`
+    ? `${mainnetUnsupported(shown)} (${only})`
     : `chain ${shown} is not supported (only ${only})`;
 }
 

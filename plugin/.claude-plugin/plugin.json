@@ -1,7 +1,7 @@
 {
   "name": "superstables",
-  "version": "0.5.0",
-  "description": "Find services and request purchases with approval on superstables.com, through one skill that uses the Superstables tools and, for what needs a local signature, the CLI. Testnet only.",
+  "version": "1.0.0",
+  "description": "Find services and request purchases with approval on superstables.com, through one skill that uses the Superstables tools and, for what needs a local signature, the CLI. Testnet-first.",
   "author": {
     "name": "Superstables"
   },

@@ -29,7 +29,7 @@ against the latest release or `main`.
 ## Scope
 
 This policy covers the code in this repository: the CLI, the agent skill, the local approval
-pages and the Budget scripts. The client runs on testnets only and moves test tokens.
+pages and the Budget scripts. The client runs on testnets by default and moves test tokens; mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
 
 [The security boundary](docs/security.md) describes what the design protects and what it does
 not. A report that shows the client breaking one of the guarantees on that page is in scope,

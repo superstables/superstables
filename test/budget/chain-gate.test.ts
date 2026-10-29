@@ -26,7 +26,7 @@ import { chainGate } from "../../src/core/chain-gate.js";
 const lastGateToken = () => (vi.mocked(chainGate).mock.calls.at(-1)?.[0] as { token?: unknown }).token;
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const REFUSED = /^this client does not sign on mainnet chains: the (evm|solana|tempo) chain /;
+const REFUSED = /^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET.*; the (evm|solana|tempo) chain /;
 const OWNER_KEY = `0x${"11".repeat(32)}`;
 const OWNER = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
 const AGENT_KEY = `0x${"22".repeat(32)}`;
@@ -225,7 +225,7 @@ export const EVM_CHAIN_KEYS`);
     const r = await run(h, ["grant", "--rail", "evm", "--chain", "gated-base", "--amount", "0.01", "--owner-key-file", join(h, "owner.env"), "--yes"], { B4_RPC: rpc.url });
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result).toMatchObject({ ok: false, state: "refused_precheck" });
-    expect(r.result.reason).toMatch(/^this client does not sign on mainnet chains: the evm chain gated-base /);
+    expect(r.result.reason).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET.*; the evm chain gated-base /);
     expect(rpc.methods.filter((m) => SENDS.has(m))).toEqual([]);
   }, 120_000);
 
@@ -274,7 +274,7 @@ export const EVM_CHAIN_KEYS`);
     const r = await run(h, full, { SUPERSTABLES_SOLANA_RPC: rpc.url, SUPERSTABLES_TEMPO_RPC: rpc.url }, script);
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result).toMatchObject({ ok: false, state: "refused_precheck" });
-    expect(r.result.reason).toMatch(new RegExp(`^this client does not sign on mainnet chains: the ${rail} chain`));
+    expect(r.result.reason).toMatch(new RegExp(`^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET.*; the ${rail} chain`));
     expect(rpc.hits()).toBe(0);
     expect(seller.hits()).toBe(0);
   }, 120_000);

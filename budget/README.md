@@ -2,7 +2,7 @@
 
 An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
 
-**Testnet only.** Test tokens, no real money. `superstables budget` refuses mainnet chains. Do not point it at real money.
+**Testnet by default.** Test tokens, no real money. `superstables budget` refuses mainnet chains unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`. Do not point it at real money.
 
 There are two ways to pay, and an agent can offer both:
 
@@ -115,7 +115,7 @@ You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 0.5.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.0.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh

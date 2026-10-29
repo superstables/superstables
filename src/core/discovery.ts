@@ -18,6 +18,7 @@
 // than an error.
 
 import { z } from "zod";
+import { mainnetSwitchRefusal } from "./chain-gate.js";
 import { describeNetwork, networkFor, toCaip2 } from "./chain.js";
 import { readBody } from "./http.js";
 import { SUPPORTED_NETWORKS } from "./rails/index.js";
@@ -724,7 +725,7 @@ function fromIndexRow(row: IndexRow): ServiceListing {
       : routes.pay
         ? "the index does not yet record the request parameters this service needs"
         : !testnet
-          ? `mainnet only (${describeOffer(rails, chains)}); this client pays on testnets only`
+          ? `mainnet only (${describeOffer(rails, chains)}); ${mainnetSwitchRefusal() || "the chain tables hold no entry for it"}`
           : routes.budget.length > 0
             ? `\`superstables pay\` does not pay ${describeOffer(rails, chains)}; a \`superstables budget\` rail could`
             : `this client does not pay ${describeOffer(rails, chains)}`,

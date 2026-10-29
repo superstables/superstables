@@ -2,7 +2,7 @@
 // superstables budget: one command for the budget rails. A thin dispatcher over the rail scripts in evm/, tempo/
 // and solana/. It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
 // stdout. Logs go to stderr. With --json, stdout carries only that object, as bare JSON, and the APPROVE line goes to
-// stderr, like the rest of the CLI's --json. Contract: CLI.md. Testnet only.
+// stderr, like the rest of the CLI's --json. Contract: CLI.md. Testnet by default (SUPERSTABLES_ALLOW_MAINNET).
 // Owner commands on every rail (setup, fund-agent, grant, revoke, and on evm the owner's part of recover) never sign here: the
 // rail opens a page on 127.0.0.1 where the owner approves in their own wallet (any EVM browser wallet on evm, one that can add a
 // custom network on tempo, any Wallet Standard wallet on solana), and this dispatcher passes the link on as one stdout line,
@@ -43,6 +43,7 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteRequestId, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteRequestProblem, siteText } from "./site.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
+import { mainnetSwitchRefusal } from "../src/core/chain-gate.js";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
@@ -91,6 +92,8 @@ const RAILS = {
   tempo: { chains: ["moderato"], chain: "moderato", addr: /^0x[0-9a-fA-F]{40}$/, unit: "pathUSD" },
   solana: { chains: ["devnet"], chain: "devnet", addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
+// A chain name that is a mainnet's, or a chain id, in a --chain value. While the mainnet switch is off it is refused as a mainnet.
+const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find covers every network: the testnet line names the tokens without naming one. */
 const TESTNET_TOKENS_LINE = "Testnet only. Test tokens, no real money.";
 /** Every chain key the budget commands take, and its rail. */
@@ -604,7 +607,7 @@ ${SIGN_ONLY_HELP}`,
 };
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnet only. No real money moves.
+Testnet by default. No real money moves unless the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
@@ -721,7 +724,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
---mainnet, or a mainnet chain, is refused.`;
+--mainnet, or a mainnet chain, is refused unless the operator sets SUPERSTABLES_ALLOW_MAINNET=1; agents never set it.`;
 
 // ---- output -----------------------------------------------------------------------------------------
 // control characters (C0, DEL, C1) and the Unicode line and paragraph separators become spaces: one line, always
@@ -868,8 +871,11 @@ function parse(argv) {
     emit(2, { command: cmd, state: "failed", next: `run npm ci at ${REPO} (it installs the dev packages and builds), then rerun`, reason: "a checkout without dev packages needs its dist/budget build" });
   }
   // (wait takes no --mainnet: for an approval that exists it is an unknown flag, which badInput answers unknown; with no such approval the
-  // mainnet refusal stands)
-  if (rest.includes("--mainnet") && !(cmd === "wait" && waitRecord())) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  // mainnet refusal stands) With SUPERSTABLES_ALLOW_MAINNET on, --mainnet is no refusal here: it is an unknown flag like any other.
+  if (rest.includes("--mainnet") && !(cmd === "wait" && waitRecord())) {
+    const off = mainnetSwitchRefusal();
+    if (off) return refuse({ command: cmd }, `--mainnet is refused: ${off}`);
+  }
   // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
   if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
   // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
@@ -952,7 +958,8 @@ function parse(argv) {
   const rail = RAILS[f.rail];
   if (!rail) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);
   if (f.chain !== undefined && !rail.chains.includes(f.chain)) {
-    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
+    const mainnetOff = mainnetSwitchRefusal();
+    if (mainnetOff && LOOKS_MAINNET.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet, and ${mainnetOff}`);
     return badInput(ctx, `--chain for ${f.rail} must be one of: ${rail.chains.join(", ")}`);
   }
   f.chain ??= rail.chain;
@@ -1075,7 +1082,8 @@ function parseBuyOnce(cmd, f) {
   const ctx = { command: cmd };
   const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Robinhood Chain Testnet (--rail evm --chain robinhood-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
   if (f.chain !== undefined && !ONCE_CHAINS[f.chain]) {
-    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
+    const mainnetOff = mainnetSwitchRefusal();
+    if (mainnetOff && LOOKS_MAINNET.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet, and ${mainnetOff}`);
     return badInput(ctx, `buy-once pays on ${where}, not ${f.chain}. The network comes from the service's listing`);
   }
   if (f.rail !== undefined && !RAILS[f.rail]) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);

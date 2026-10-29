@@ -1,12 +1,12 @@
 ---
 name: superstables
-description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or revokes a testnet budget through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked to find a paid API, quote what a call costs, pay for one, make a single purchase, or set up, grant, check, revoke or recover a testnet budget. Testnet only.
+description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or revokes a testnet budget through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked to find a paid API, quote what a call costs, pay for one, make a single purchase, or set up, grant, check, revoke or recover a testnet budget. Testnet-first.
 ---
 
 # Superstables
 
 Use the connected Superstables tools to find a service and request a purchase.
-Testnet only: test tokens, no real money.
+Testnet-first: test tokens, no real money. Mainnet is off, and only the operator turns it on (`SUPERSTABLES_ALLOW_MAINNET`); you never set it, and when a refusal names it you report the refusal and stop.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 

@@ -27,7 +27,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 ```text
 superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnet only. No real money moves.
+Testnet by default. No real money moves unless the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
@@ -165,7 +165,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
---mainnet, or a mainnet chain, is refused.
+--mainnet, or a mainnet chain, is refused unless the operator sets SUPERSTABLES_ALLOW_MAINNET=1; agents never set it.
 ```
 
 ## superstables budget setup

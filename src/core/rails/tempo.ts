@@ -13,7 +13,7 @@ import { inclusion } from "../finality.js";
 // a payment whose hash never reached this machine is then found on chain (findPayment) in a later block only.
 
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
-import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName } from "../chain.js";
+import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName, mainnetUnsupported } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
 import { tempoChallengeKey, tempoClientId } from "../referral-memo.mjs";
 import { rpcCall, verifiedRpc } from "../rpc.js";
@@ -93,7 +93,7 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
     return {
       supported: false,
       reason: mainnet
-        ? `chain ${mainnet} is not supported: it is a mainnet, and this client pays on testnets only`
+        ? mainnetUnsupported(mainnet)
         : `chain ${untrustedText(named, 40)} is not supported for MPP (only ${TEMPO_MODERATO.label}, chain ${TEMPO_MODERATO.chainId})`,
     };
   }

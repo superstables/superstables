@@ -34,9 +34,9 @@ describe("skills/superstables-payments/SKILL.md", () => {
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
     const top = skill.split("\n").slice(0, 12).join("\n");
-    expect(top).toMatch(/Testnet only: test tokens, no real money\./);
+    expect(top).toMatch(/Testnet-first: test tokens, no real money\./);
     // The description names both tokens, and Budgets before Single purchase.
-    expect(top).toMatch(/using test USDC, test USDG or test pathUSD\. Testnet only\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
+    expect(top).toMatch(/using test USDC, test USDG or test pathUSD\. Testnet-first: mainnet is off, and only the operator turns it on\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
@@ -62,7 +62,8 @@ describe("skills/superstables-payments/SKILL.md", () => {
 
   it("writes the link before waiting, offers Single purchase only for listed services, and treats a no as final", () => {
     expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
-    expect(skill).toMatch(/Testnet only: test tokens, no real money\./);
+    expect(skill).toMatch(/Testnet-first: test tokens, no real money\./);
+    expect(skill).toMatch(/Never set, export or suggest `SUPERSTABLES_ALLOW_MAINNET`/);
     expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
     expect(skill).toMatch(/A no is final/);
@@ -95,7 +96,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);
     for (const f of files) expect(existsSync(resolve(SKILL, f)), f).toBe(true);
-    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet only\. Test tokens, no real money\./);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet-first: test tokens, no real money/);
   });
 });
 
