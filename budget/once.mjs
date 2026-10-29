@@ -57,7 +57,7 @@ export const ONCE_NETWORKS = {
 /** The rail and chain flags buy-once accepts: each names one of ONCE_NETWORKS. */
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
-export const TESTNET_LINE = "Testnet only. Test tokens, no real money.";
+export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.0.0, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";
 /** How long a wait reads on once a purchase's outcome is unknown (the owner's step is over) before it answers unknown. */

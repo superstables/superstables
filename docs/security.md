@@ -249,7 +249,9 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `1` or `0.05 USDC`. YAML would read `0x10` as 16 and `1e3` as 1000, so those spellings, and `.5`,
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
-authorization — and the balance of the account, which is why this release is testnet only.
+authorization — and the balance of the account. Testnet by default.
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+even with the switch enabled.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -286,7 +288,10 @@ not enforcement: an agent that runs as you can still edit the files, and in the 
 read the key that signs, so there the signature only makes an edit evident. The signature that
 matters is the one a wallet you keep apart from the agent makes.
 
-## Testnet only
+## Testnet by default
+
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+even with the switch enabled.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -902,7 +907,7 @@ signed on, so that what the code enforces today stays separate from what it does
 passes one chain gate first. A chain whose table entry is not marked as a testnet is refused unless all three of these hold:
 
 - **The operator allows mainnet.** `SUPERSTABLES_ALLOW_MAINNET` is `1` or `true` in the environment (see
-  [Testnet only](#testnet-only)). It is off unless set, and no file sets it.
+  [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it.
 - **Your signed settings enable the chain.** `superstables owner settings sign` has your wallet sign the list of chains
   enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
   build, so this command enables none.
