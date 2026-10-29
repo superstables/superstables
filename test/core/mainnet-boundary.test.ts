@@ -110,7 +110,7 @@ describe("caps at the local key signer", () => {
     const signed = await signer.sign(request(1, 1));
     expect(signed.payload.signature).toMatch(/^0x/);
     expect(asked()).toBe(1);
-    expect(ledger()).toMatchObject([{ chain: "testmain", amountAtomic: "1000000", state: "signed" }]);
+    expect(ledger()).toMatchObject([{ chain: "testmain", amountAtomic: "1000000", what: `eip3009:testmain:${String(signed.payload.authorization.from).toLowerCase()}:${nonce(1)}` }]);
   });
 
   it("refuses one payment above the per-grant cap without asking the key", async () => {
@@ -130,20 +130,13 @@ describe("caps at the local key signer", () => {
     expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_500_000n);
   });
 
-  it("does not count a retry of the same signature twice", async () => {
+  it("counts a retry of the same nonce again: each one is a new authorization", async () => {
     const { signer, asked } = countedSigner();
     await signer.sign(request(1, 7));
     await signer.sign(request(1, 7));
     expect(asked()).toBe(2);
-    expect(ledger()).toHaveLength(1);
-    await signer.sign(request(1, 8));
-    expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_000_000n);
-  });
-
-  it("refuses a retry that reuses a nonce for another amount", async () => {
-    const { signer } = countedSigner();
-    await signer.sign(request(0.5, 9));
-    await refusedWith(signer.sign(request(0.6, 9)), /already holds another amount/);
+    expect(new Set(ledger().map((x) => x.id)).size).toBe(2);
+    await refusedWith(signer.sign(request(1, 8)), /would reach 3000000 in 24 hours/);
   });
 
   it("lets only as many concurrent payments through as the cap holds", async () => {
@@ -158,23 +151,13 @@ describe("caps at the local key signer", () => {
   it("counts a reservation a stopped process left pending, until its 24 hours pass", async () => {
     const now = Date.now();
     writeFileSync(join(h, MAINNET_LEDGER), JSON.stringify({ holds: [
-      { opId: "crashed", chain: "testmain", amountAtomic: "2000000", at: now - 60 * 60 * 1000, state: "reserved" },
-      { opId: "old", chain: "testmain", amountAtomic: "2500000", at: now - 25 * 60 * 60 * 1000, state: "signed" },
+      { id: "crashed", what: "eip3009:testmain:0x1:0x1", chain: "testmain", amountAtomic: "2000000", at: now - 60 * 60 * 1000 },
+      { id: "old", what: "eip3009:testmain:0x1:0x2", chain: "testmain", amountAtomic: "2500000", at: now - 25 * 60 * 60 * 1000 },
     ] }));
     const { signer, asked } = countedSigner();
     await refusedWith(signer.sign(request(1, 11)), /would reach 3000000 in 24 hours/);
     await signer.sign(request(0.5, 12));
     expect(asked()).toBe(1);
-  });
-
-  it("releases a reservation when the key failed before any signature existed", async () => {
-    const failing = countedSigner(true);
-    await expect(failing.signer.sign(request(1, 21))).rejects.toThrow(/device went away/);
-    expect(ledger()).toMatchObject([{ opId: expect.stringContaining("eip3009:testmain:"), state: "released" }]);
-    const { signer } = countedSigner();
-    await signer.sign(request(1, 22));
-    await signer.sign(request(1, 23));
-    expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_000_000n);
   });
 
   it("refuses when the ledger cannot be read, and leaves it as it is", async () => {
@@ -276,14 +259,14 @@ describe("the approval page (browser signer)", () => {
       await expect(signer.sign(request(1, 81), hooks)).rejects.toBeInstanceOf(SignRefused);
       expect(hooks.onPending).toHaveBeenCalledTimes(1);
       expect(heldWhenOffered).toBe(1_000_000n);
-      expect(ledger()).toMatchObject([{ opId: `page:testmain:${nonce(81)}`, state: "signed" }]);
+      expect(ledger()).toMatchObject([{ what: `page:testmain:${nonce(81)}`, amountAtomic: "1000000" }]);
     } finally {
       await signer.close();
     }
   });
 
   it("offers no page past the 24-hour cap or during a pause", async () => {
-    writeFileSync(join(h, MAINNET_LEDGER), JSON.stringify({ holds: [{ opId: "earlier", chain: "testmain", amountAtomic: "2000000", at: Date.now(), state: "signed" }] }));
+    writeFileSync(join(h, MAINNET_LEDGER), JSON.stringify({ holds: [{ id: "earlier", what: "page:testmain:once", chain: "testmain", amountAtomic: "2000000", at: Date.now() }] }));
     const signer = pageSigner();
     const hooks = { onPending: vi.fn() };
     try {
@@ -292,6 +275,159 @@ describe("the approval page (browser signer)", () => {
       await refusedWith(signer.sign(request(0.1, 83), hooks), /paused/);
       // The page's server may be up, but no approval was created: nothing was offered to a wallet.
       expect(hooks.onPending).not.toHaveBeenCalled();
+    } finally {
+      await signer.close();
+    }
+  });
+});
+
+describe("review repairs: every signing request holds its own amount", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  it("S1: counts a fresh authorization over an unused nonce once the earlier hold has left the window", async () => {
+    const t0 = Date.now();
+    vi.useFakeTimers({ now: t0, toFake: ["Date"] });
+    try {
+      const { signer, asked } = countedSigner();
+      await signer.sign(request(1, 90));
+      vi.setSystemTime(t0 + DAY + 1_000);
+      await signer.sign(request(1, 91));
+      await signer.sign(request(1, 92));
+      // The same nonce, never used on chain, signed again: a new validBefore, so a new authorization that can settle.
+      await refusedWith(signer.sign(request(1, 90)), /would reach 3000000 in 24 hours, above its cap of 2500000/);
+      expect(asked()).toBe(3);
+      expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_000_000n);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("S3: a concurrent twin that fails cannot release the hold of a signature still being made", async () => {
+    const account = privateKeyToAccount(generatePrivateKey());
+    let finish!: () => void;
+    const held = new Promise<void>((done) => { finish = done; });
+    let asked = 0;
+    const key = { ...account, signTypedData: async (args: Parameters<typeof account.signTypedData>[0]) => {
+      asked++;
+      if (asked === 1) { await held; return account.signTypedData(args); }
+      throw new Error("the device went away");
+    } };
+    const signer = new LocalKeySigner(key as typeof account);
+    const slow = signer.sign(request(1, 95));
+    await vi.waitFor(() => expect(asked).toBe(1));
+    await expect(signer.sign(request(1, 95))).rejects.toThrow(/device went away/);
+    finish();
+    expect((await slow).payload.signature).toMatch(/^0x/);
+    // Both requests reached the key, so both count: the signature that exists is never left out.
+    expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_000_000n);
+    await refusedWith(signer.sign(request(1, 96)), /would reach 3000000 in 24 hours/);
+  });
+
+  it("S3: a request whose key fails still counts (nothing is released)", async () => {
+    const failing = countedSigner(true);
+    await expect(failing.signer.sign(request(1, 97))).rejects.toThrow(/device went away/);
+    expect(heldToday(ledger(), "testmain", Date.now())).toBe(1_000_000n);
+  });
+});
+
+describe("review repairs: the approval page", () => {
+  const policy = { ...DEFAULT_POLICY, perCall: { amount: 10, asset: "USDC", atomic: "10000000" }, perDay: { amount: 100, asset: "USDC", atomic: "100000000" } };
+  const pageSigner = () => new BrowserWalletSigner({ port: 0, home: h, policy, timeoutMs: 20_000, balance: false });
+  const postJson = async (url: string, body: unknown) => {
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin: new URL(url).origin }, body: JSON.stringify(body) });
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  const wallet = () => privateKeyToAccount(generatePrivateKey()).address;
+  /** Open pages for `requests`, and hand back their links and their endings (a SignRefused or a result). */
+  async function open(signer: BrowserWalletSigner, ...requests: Parameters<LocalKeySigner["sign"]>[0][]) {
+    const links: string[] = [];
+    const endings = requests.map((r) => signer.sign(r, { onPending: (_id: string, url?: string) => { links.push(url ?? ""); } }).catch((e: unknown) => e));
+    await vi.waitFor(() => expect(links).toHaveLength(requests.length));
+    return { links, endings };
+  }
+
+  it("S2: two pages with the same nonce, each connected to another wallet, both count", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 84), request(1, 84));
+      expect((await postJson(`${links[0]}/account`, { address: wallet() })).body.typedData).toBeDefined();
+      expect((await postJson(`${links[1]}/account`, { address: wallet() })).body.typedData).toBeDefined();
+      expect(heldToday(ledger(), "testmain", Date.now())).toBe(2_000_000n);
+      await refusedWith(signer.sign(request(1, 85)), /would reach 3000000 in 24 hours/);
+      for (const link of links) await postJson(`${link}/reject`, {});
+      await Promise.all(endings);
+    } finally {
+      await signer.close();
+    }
+  });
+
+  it("S2: a mainnet page prepares for one wallet only; switching accounts prepares nothing new", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 86));
+      const first = wallet();
+      const prepared = await postJson(`${links[0]}/account`, { address: first });
+      expect(prepared.status).toBe(200);
+      const other = await postJson(`${links[0]}/account`, { address: wallet() });
+      expect(other.status).toBe(409);
+      expect(other.body.typedData).toBeUndefined();
+      // The same wallet again (a reload) gets the very authorization it was given, not a new one.
+      const again = await postJson(`${links[0]}/account`, { address: first });
+      expect(again.status).toBe(200);
+      expect(again.body.typedData).toEqual(prepared.body.typedData);
+      expect(heldToday(ledger(), "testmain", Date.now())).toBe(1_000_000n);
+      await postJson(`${links[0]}/reject`, {});
+      await Promise.all(endings);
+    } finally {
+      await signer.close();
+    }
+  });
+
+  it("S2: a testnet page still lets the owner switch accounts", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 87, BASE_SEPOLIA));
+      const a = await postJson(`${links[0]}/account`, { address: wallet() });
+      const b = await postJson(`${links[0]}/account`, { address: wallet() });
+      expect([a.status, b.status]).toEqual([200, 200]);
+      expect((b.body.typedData as { message: { from: string } }).message.from).not.toBe((a.body.typedData as { message: { from: string } }).message.from);
+      await postJson(`${links[0]}/reject`, {});
+      await Promise.all(endings);
+    } finally {
+      await signer.close();
+    }
+  });
+
+  it("S5: a page already open prepares nothing once mainnet signing is paused, and keeps its hold", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 88));
+      writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
+      const answer = await postJson(`${links[0]}/account`, { address: wallet() });
+      expect(answer.status).toBe(409);
+      expect(answer.body.typedData).toBeUndefined();
+      expect(String(answer.body.error)).toMatch(/paused/);
+      const [ended] = await Promise.all(endings);
+      expect(ended).toBeInstanceOf(SignRefused);
+      expect((ended as SignRefused).code).toBe("policy");
+      expect(heldToday(ledger(), "testmain", Date.now())).toBe(1_000_000n);
+    } finally {
+      await signer.close();
+    }
+  });
+
+  it("S5: a wallet that connected before the pause is not handed its authorization again after it", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 89));
+      const address = wallet();
+      expect((await postJson(`${links[0]}/account`, { address })).status).toBe(200);
+      writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
+      const again = await postJson(`${links[0]}/account`, { address });
+      expect(again.status).toBe(409);
+      expect(again.body.typedData).toBeUndefined();
+      await Promise.all(endings);
+      expect(heldToday(ledger(), "testmain", Date.now())).toBe(1_000_000n);
     } finally {
       await signer.close();
     }

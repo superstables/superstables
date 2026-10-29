@@ -1,6 +1,6 @@
 // One process that reserves a mainnet amount and says how it went, for test/core/mainnet-boundary.test.ts. The manifest
-// is the test's made-up "testmain", handed in directly: a child process cannot share the test's mock. Arguments: the
-// operation id and the amount. SUPERSTABLES_HOME is the parent's, so every child shares one ledger and one lock.
+// is the test's made-up "testmain", handed in directly: a child process cannot share the test's mock. Arguments: what
+// the reservation is for, and the amount. SUPERSTABLES_HOME is the parent's, so every child shares one ledger and one lock.
 
 import "../../src/core/chain.js";
 import { reserveMainnetSpend } from "../../src/core/mainnet-spend.js";
@@ -24,9 +24,9 @@ const manifest = {
   },
 } as MainnetManifest;
 
-const [opId, amount] = process.argv.slice(2);
+const [what, amount] = process.argv.slice(2);
 const chain = { rail: "evm", key: "testmain", chainId: 990001, testnet: false, token: manifest.chains.testmain.token };
-reserveMainnetSpend(chain, BigInt(amount), opId, { manifest, env: {} }).then(
+reserveMainnetSpend(chain, BigInt(amount), what, { manifest, env: {} }).then(
   (r) => process.stdout.write(r.held ? "held" : "none"),
   (e: Error) => process.stdout.write(`refused: ${e.message}`),
 );

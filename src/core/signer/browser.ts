@@ -10,7 +10,6 @@
 // open. What the wallet is then asked to do is the rail's: sign an EIP-3009 authorization
 // (EVM), send a pathUSD transfer (Tempo), or sign a token transfer (Solana).
 
-import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK, fromAtomicString, networkFor, usdcBalance, type Rail } from "../chain.js";
@@ -18,7 +17,7 @@ import { accountPolicyPath, browserWalletPath, ensureDir, homeDir, policyPath, r
 import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.js";
 import { CAP_DECIMALS, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
 import { Records } from "../records.js";
-import { MainnetRefused, reserveMainnetSpend, settleMainnetSpend } from "../mainnet-spend.js";
+import { MainnetRefused, reserveMainnetSpend } from "../mainnet-spend.js";
 import { judgeSignRequest } from "../rails/index.js";
 import { untrustedText } from "../text.js";
 import type { VerifiedTerms, WalletStatus } from "../types.js";
@@ -200,12 +199,11 @@ export class BrowserWalletSigner implements Signer {
     // Last word before the page exists: the page's start may have taken long enough for the caller's cap reservation
     // to lapse (pay.ts renews it, or refuses).
     await hooks?.beforeAsk?.();
-    // On a mainnet the amount is reserved against the manifest's caps, and the pause read again, before the page can
-    // offer anything to a wallet. Once offered, the owner's wallet may sign whatever the page later reports, so the
-    // reservation counts from here for its 24 hours and is never released.
+    // On a mainnet each page reserves its own amount against the manifest's caps, and the pause is read again, before the
+    // page can offer anything to a wallet. The reservation counts from here for its 24 hours and is never released, and
+    // the page prepares one authorization for one wallet only (approval-server.ts), so it covers what the page can ask.
     try {
-      const opId = `page:${network.key}:${req.kind === "eip3009" && req.nonce ? req.nonce.toLowerCase() : req.context?.attemptId ?? approvalOpId()}`;
-      await settleMainnetSpend(await reserveMainnetSpend(network, BigInt(terms.amountAtomic), opId), "signed");
+      await reserveMainnetSpend(network, BigInt(terms.amountAtomic), `page:${network.key}:${req.kind === "eip3009" && req.nonce ? req.nonce.toLowerCase() : req.context?.attemptId ?? "once"}`);
     } catch (err) {
       if (err instanceof MainnetRefused) throw new SignRefused("policy", err.message);
       throw new SignRefused("invalid", `the mainnet spending ledger could not be checked (${err instanceof Error ? err.message : String(err)}); nobody was asked`);
@@ -348,6 +346,3 @@ function pagePolicy(policy: Policy, fromProgram: boolean): PagePolicy {
     ...(policy.also ? { also: { file: untrustedText(policy.also.file, 300), perCall: capText(policy.also.policy.perCall), perDay: capText(policy.also.policy.perDay) } } : {}),
   };
 }
-
-/** An operation id for a page request that names neither a nonce nor an attempt: it is never a retry of another. */
-const approvalOpId = (): string => `once-${randomUUID()}`;
