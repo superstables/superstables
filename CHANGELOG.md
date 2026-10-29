@@ -287,7 +287,7 @@ extension and how to confirm which build is running.
   owner. That mode exists for a machine with no browser.
 
 [Unreleased]: https://github.com/superstables/superstables/compare/v0.5.0...HEAD
-[0.5.0]: https://github.com/superstables/superstables/compare/v0.4.0...v0.5.0
+[0.5.0]: https://github.com/superstables/superstables/compare/v0.4.1...v0.5.0
 [0.4.0]: https://github.com/superstables/superstables/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/superstables/superstables/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/superstables/superstables/compare/v0.2.0...v0.3.0
