@@ -106,7 +106,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
-      "the owner controls. Testnet only. No real money moves.",
+      "the owner controls. Testnet by default; the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -172,7 +172,7 @@ explain(
           // A new key is encrypted with a passphrase, and without a terminal there is nobody to type one.
           console.log(field("wallet key", "not created: setup needs a terminal to ask for the key's passphrase"));
           console.log(
-            "  run `superstables wallet init` in a terminal (or `superstables wallet init --no-passphrase` to store it unencrypted, testnet only)",
+            "  run `superstables wallet init` in a terminal (or `superstables wallet init --no-passphrase` to store it unencrypted, for a testnet key)",
           );
         } else {
           if (createdKey) initKey({ dir: walletDir(), passphrase: await askNewPassphrase() });
@@ -228,14 +228,14 @@ explain(
     .description("create this machine's wallet key, or import one")
     .option("--import-key-file <path>", "import a private key from a file (mode 600)")
     .option("--force", "replace an existing key (the old key cannot be recovered)")
-    .option("--no-passphrase", "store the key unencrypted (testnet only; anyone who can read the file can sign)")
+    .option("--no-passphrase", "store the key unencrypted (for a testnet key; anyone who can read the file can sign)")
     .action(async (options: { importKeyFile?: string; force?: boolean; passphrase: boolean }) => {
       const leftover = leftoverKeyFile(walletDir());
       if (leftover) console.error(`wallet: ${leftoverHint(leftover, walletDir())}`);
       if (options.passphrase !== false && !canAsk()) {
         throw badInput(
           "wallet init asks for a passphrase to encrypt the key, and there is no terminal to ask; run it in a terminal, " +
-            "or pass --no-passphrase to store the key unencrypted (testnet only)",
+            "or pass --no-passphrase to store the key unencrypted (for a testnet key)",
         );
       }
       ensureDir(walletDir()); // a folder that would refuse the key, before a passphrase is asked for nothing
@@ -541,7 +541,7 @@ explain(
         "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
         "does not verify that the data is real), and not said when the listing does not say (mock in --json: " +
         "true, false or null). Chains are named as the index names them: base and solana are mainnets, and " +
-        "nothing on a mainnet is payable here. By default only listings pay can call are shown.",
+        "a mainnet listing is not payable here while mainnet is off (SUPERSTABLES_ALLOW_MAINNET). By default only listings pay can call are shown.",
       "Next, per listing: the commands for each way this client could pay it, pay first. pay: " +
         "`superstables quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget " +
         "preflight` (signs nothing; prints the price and payTo), then `superstables budget buy --max <ceiling> " +
@@ -1101,7 +1101,7 @@ explain(
     notes: [
       "The seller side of the demo. Point discovery at it with " +
         `SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:${DEFAULT_DEMO_SERVICE_PORT}/v1/market.`,
-      "Claim challenge, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
+      "Claim challenge, off unless set: SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
         "/.well-known/superstables.txt and adds a Superstables-Claim header to every answer of /v1/market, so " +
         "superstables.com can confirm this host is yours.",
     ],

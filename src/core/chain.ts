@@ -1,7 +1,7 @@
 // The one place that knows chains: every testnet `pay` can pay on, with the token it pays in there and what a browser
 // wallet needs to add the chain. Each chain belongs to one rail (src/core/rails/): x402 exact on the EVM chains, MPP
 // tempo.charge on Tempo Moderato, x402 exact on Solana devnet. A chain this table does not name is refused before
-// anything is signed, and so is every mainnet: this client pays on testnets only.
+// anything is signed, and so is every mainnet unless the operator turns mainnet on (SUPERSTABLES_ALLOW_MAINNET, chain-gate.js).
 //
 // The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
@@ -10,6 +10,7 @@ import { verifiedRpc } from "./rpc.js";
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
+import { mainnetSwitchRefusal } from "./chain-gate.js";
 import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
 
 export type Rail = "evm" | "tempo" | "solana";
@@ -312,6 +313,12 @@ const MAINNETS: Record<string, string> = {
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "Solana (mainnet)",
   solana: "Solana (mainnet)",
 };
+
+/** Why a chain named as a mainnet is not paid on: the mainnet switch says so, or (switch on) the chain tables hold no such chain. */
+export function mainnetUnsupported(mainnet: string): string {
+  const off = mainnetSwitchRefusal();
+  return `chain ${mainnet} is not supported: ${off || "it is a mainnet, and the chain tables hold no entry for it"}`;
+}
 
 /** The mainnet a network name or CAIP-2 id names, or undefined. */
 export function mainnetName(name: string): string | undefined {

@@ -584,7 +584,7 @@ describe("the EVM chains the local wallet signs on", () => {
     expect(pending.verified).toMatchObject({ network: "eip155:421614", networkLabel: "Arbitrum Sepolia (testnet)", assetAddress: ARBITRUM_SEPOLIA.usdc.address });
     const mainnet = await ask(wallet, { ...usdcRequirement(0.01, PAYEE, ARBITRUM_SEPOLIA), network: "eip155:42161" } as unknown as Record<string, unknown>);
     expect(mainnet.status).toBe("rejected");
-    expect(mainnet.reason).toContain("it is a mainnet");
+    expect(mainnet.reason).toContain("mainnet is off");
   });
 });
 

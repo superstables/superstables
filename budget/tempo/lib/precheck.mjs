@@ -1,6 +1,7 @@
 // Pre-signing checks for a purchase (contract rule 4). Pure: no network, no keys. A refusal here means
 // nothing was signed, pulled or sent.
 import { CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
+import { mainnetSwitchRefusal } from '../../../src/core/chain-gate.js'
 
 /** mppx's payment-memo tag: the first 4 bytes of keccak256("mpp"). Every purchase memo starts with it (chain.ts mppMemo). */
 export const MPP_MEMO_TAG = '0xef1ed712'
@@ -52,6 +53,10 @@ export function precheckCharge(request, opts) {
     return refuse('wrong_token', `currency ${request.currency} is not ${TOKEN_LABEL} (${TOKEN_ADDRESS})`)
   }
   if (Number(details.chainId) !== CHAIN_ID) {
+    if (Number(details.chainId) === 4217) {
+      const off = mainnetSwitchRefusal()
+      if (off) return refuse('wrong_chain', off)
+    }
     return refuse('wrong_chain', `chainId ${details.chainId} is not Tempo Moderato (${CHAIN_ID})`)
   }
   if (!isAddr(request.recipient)) return refuse('bad_challenge', 'the challenge has no valid recipient address')

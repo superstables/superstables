@@ -9,7 +9,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.5.0] - Agent plugin, seller tools and safer payments
 
-Testnet only.
+Testnet by default. The mainnet gate is controlled by SUPERSTABLES_ALLOW_MAINNET; leave it unset for now. No mainnet chain is payable in this release, even with the switch enabled.
 
 ### Upgrade and recovery
 
@@ -24,6 +24,7 @@ Testnet only.
 
 ### Added
 
+- **Mainnet switch:** `SUPERSTABLES_ALLOW_MAINNET` is the operator's switch for mainnet, off unless set. `1` or `true` turns it on. Unset, empty, `0` or `false` keep it off. Any other value, such as `yes` or `TRUE`, is an error that names the variable and refuses every mainnet. Every refusal of a mainnet in `quote`, `pay` and `superstables budget` names it. Agents never set it. The switch alone signs nothing: the chain must also be enabled in your signed owner settings and meet the chain gate's prerequisites. No mainnet chain is payable in this release, so the switch unlocks none yet. See [what mainnet still needs](https://github.com/superstables/superstables/blob/v0.5.0/docs/security.md#what-mainnet-still-needs).
 - **Budget key protection:** EVM and Solana agent keys use files unless you opt into the OS keychain on macOS or Linux with `budget setup --key-store os-keychain`. `budget rotate --rail evm` or `--rail solana` retires the old address locally, obtains final revocation, handles open purchases and returns recoverable funds before connecting a replacement. Start with `--plan`; grant the new key separately. Revocation ends the old key's spending permission, not its control of funds already withdrawn. Keychain storage does not protect against code running as you while it is unlocked. See [key replacement](https://github.com/superstables/superstables/blob/v0.5.0/docs/security.md#replacing-a-key).
 - **Agent plugin:** the [plugin package](https://github.com/superstables/superstables/tree/v0.5.0/plugin) includes one Superstables skill for using the connector and CLI, including Budgets. It configures remote MCP tools at `https://mcp.superstables.com` for finding services, requesting single purchases and reading their status, plus the budget tools described below. An account member approves and signs single purchases on superstables.com. The plugin ships through GitHub, separately from npm.
 - **Budget requests signed on your machine, sent through the connector:** on EVM chains with approvals on superstables.com, `budget setup --hosted`, `grant`, `revoke` and `fund-agent` now support `--sign-only`. The agent key signs the approval request for the connector to send unchanged within five minutes. `budget wait --site-request` checks the agent and signed terms before adopting the request and following its outcome. If the signature expires before adoption, the outcome remains unknown: the connector may already have sent it. See [signed requests and recovery](https://github.com/superstables/superstables/blob/v0.5.0/budget/CLI.md#signed-here-sent-by-the-connector).

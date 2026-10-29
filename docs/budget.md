@@ -6,7 +6,7 @@ Use this when the agent should buy without asking each time. The owner grants a 
 their own wallet. The agent then buys on its own, purchase by purchase, until the budget is spent
 or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Single purchase](buy-once.md).
 
-**Testnet only.** Mainnet chains are refused. This page uses the `evm` rail, where the budget is a
+**Testnet by default.** Mainnet chains are refused unless the operator enables them with `SUPERSTABLES_ALLOW_MAINNET`. This page uses the `evm` rail, where the budget is a
 USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
 needs a seller that takes payment on Base Sepolia.
 The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet

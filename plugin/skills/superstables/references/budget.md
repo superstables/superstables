@@ -4,7 +4,7 @@
 
 Auto recovery (`buy` on `evm` and `solana`, a budget set up with `--hosted`): when the seller's terms cannot be read and the owner's recovery policy on the site is on, the client may pay the same seller on another chain, and the `RESULT` carries `recovery` saying so. Rerun the same `buy` with the same `--op` to read the order's outcome; on `unknown` with `final: false`, never pay again for that order.
 
-The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Testnet only. Test tokens, no real money.
+The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Testnet-first: test tokens, no real money.
 
 ## Contents
 

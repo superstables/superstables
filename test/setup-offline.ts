@@ -19,6 +19,10 @@ try {
   /* a worker thread cannot set it; the pool runs forks */
 }
 
+// Mainnet stays off in every test unless the test turns it on (SUPERSTABLES_ALLOW_MAINNET, src/core/chain-gate.js): an inherited
+// value must not change what a test sees.
+delete process.env.SUPERSTABLES_ALLOW_MAINNET;
+
 if (!process.env.SUPERSTABLES_LIVE) {
   // Every RPC the client and the budget rails read, forced to an address on this computer where nothing listens,
   // whatever the environment said. A test that needs a chain starts a fake one and passes its address itself.

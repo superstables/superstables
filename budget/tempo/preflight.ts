@@ -9,6 +9,7 @@
 import { parseCli, urlCheck } from './lib/args.mjs'
 import { CHAIN_ID, TOKEN_LABEL, fromBaseUnits, oneLine } from './lib/common.ts'
 import { precheckCharge, tempoChargeChallenges } from './lib/precheck.ts'
+import { mainnetSwitchRefusal } from '../../src/core/chain-gate.js'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
 const { values: args } = parseCli({
@@ -46,6 +47,10 @@ async function main() {
   for (const o of offers) console.error(`  offer: ${oneLine(`tempo.charge amount=${o.amount} currency=${o.currency} chainId=${o.methodDetails?.chainId} recipient=${o.recipient}`, 300)}`)
   const onModerato = offers.filter((o) => Number(o?.methodDetails?.chainId) === CHAIN_ID)
   if (!onModerato.length) {
+    if (offers.some((o) => Number(o?.methodDetails?.chainId) === 4217)) {
+      const off = mainnetSwitchRefusal()
+      if (off) result('failed', { reason: off, next: 'this seller cannot be paid from a tempo budget' })
+    }
     const other = /method="tempo"/.test(header) ? 'tempo offers only on another chain or another intent (a session or mainnet)' : 'no MPP tempo offer at all'
     result('failed', { reason: `no tempo.charge offer on Moderato (chain ${CHAIN_ID}): ${other}`, next: 'this seller cannot be paid from a tempo budget' })
   }

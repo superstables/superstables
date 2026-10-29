@@ -33,7 +33,8 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with test USDC
-from a wallet the owner controls. Testnet only. No real money moves.
+from a wallet the owner controls. Testnet by default; the operator turns mainnet
+on with SUPERSTABLES_ALLOW_MAINNET.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -267,8 +268,8 @@ Options:
   --import-key-file <path>  import a private key from a file (mode 600)
   --force                   replace an existing key (the old key cannot be
                             recovered)
-  --no-passphrase           store the key unencrypted (testnet only; anyone who
-                            can read the file can sign)
+  --no-passphrase           store the key unencrypted (for a testnet key; anyone
+                            who can read the file can sign)
   -h, --help                display help for command
 
 It asks for a passphrase twice, and stores the key encrypted with it; `wallet serve` asks for it
@@ -424,8 +425,9 @@ request parameters known); budget names the `superstables budget` rail and chain
 simulated is yes when the listing marks the output as prepared sample output, no when it marks it as
 not sample output (Superstables' market data service, which returns live prices; no does not verify
 that the data is real), and not said when the listing does not say (mock in --json: true, false or
-null). Chains are named as the index names them: base and solana are mainnets, and nothing on a
-mainnet is payable here. By default only listings pay can call are shown.
+null). Chains are named as the index names them: base and solana are mainnets, and a mainnet listing
+is not payable here while mainnet is off (SUPERSTABLES_ALLOW_MAINNET). By default only listings pay
+can call are shown.
 
 Next, per listing: the commands for each way this client could pay it, pay first. pay: `superstables
 quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget preflight` (signs
@@ -798,7 +800,7 @@ Options:
 The seller side of the demo. Point discovery at it with
 SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:4402/v1/market.
 
-Claim challenge, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves
+Claim challenge, off unless set: SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves
 /.well-known/superstables.txt and adds a Superstables-Claim header to every answer of /v1/market, so
 superstables.com can confirm this host is yours.
 
