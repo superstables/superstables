@@ -18,7 +18,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   superstables.com account. They sign in with an Ethereum or Solana wallet or an email address. An account
   admin links wallets on the account page: an Ethereum wallet for EVM chains and Tempo, or a Solana wallet
   for Solana. The owner approves with the linked wallet. An ordinary remote browser without a compatible
-  wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
+  wallet cannot sign. Choose [Budget on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
 These instructions describe **client 1.0.0** and require that release build. Install it from npm
@@ -147,7 +147,7 @@ release yourself some other way, do it under `umask 022`.
 
 ## Set up
 
-For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
+For `pay`, the owner runs `setup` once; Single purchase on superstables.com and Budget don't need it. It creates `~/.superstables`, writes a starting spend
 policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints how the owner
 approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
