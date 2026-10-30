@@ -1,7 +1,7 @@
 # Install the client
 
 The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
-that guides an agent through it. Start with a [budget](budget.md), where the owner
+that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
 each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, or pathUSD on Tempo Moderato. No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
 
@@ -27,7 +27,7 @@ as `@superstables/client`, or use the released commit and skill from
 The CLI/skill runs on your own machine or server,
 even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
-[budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
+[Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
 testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
