@@ -181,7 +181,8 @@ describe("preflight on tempo and solana", () => {
       const a = await budget(["preflight", "--rail", "tempo", "--url", mainnet.url]);
       expect(a.code).toBe(1);
       expect(a.result).toMatchObject({ ok: false, state: "failed", amount: null });
-      expect(a.result.reason).toContain("no tempo.charge offer on Moderato");
+      // a seller that offers only Tempo mainnet: the mainnet switch, off by default, refuses it first (tempo-mainnet-gate.test.ts)
+      expect(a.result.reason).toContain("mainnet is off");
       const b = await budget(["preflight", "--rail", "tempo", "--url", memo.url]);
       expect(b.code).toBe(1);
       expect(b.result.reason).toContain("a payment memo of its own");

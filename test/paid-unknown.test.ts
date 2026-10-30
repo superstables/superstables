@@ -1435,7 +1435,7 @@ const ROWS: Row[] = [
       return [first, waiting, seenBudget("wait for the end", "wait", await budget(b.home, ["wait", "--shown", "--id", id, "--timeout", "60"], b.env))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), message_for_owner: expect.stringMatching(/^Review and approve in your wallet: .+\nhttp:\/\/127\.0\.0\.1:\d+\/owner\/[\s\S]*\nTell me when you've approved\.$/), next: expect.stringMatching(/^this command already began sending its own transaction for this approval; its outcome is not known yet\. The owner still has to approve the next step: reply to the owner with message_for_owner, word for word .* Only the owner uses the page, in the browser with their wallet\. It is on this machine only: over SSH the owner first runs ssh -L (\d+):127\.0\.0\.1:\1 user@this-host\. Do not start another owner command$/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/owner\//), message_for_owner: expect.stringMatching(/^Review and approve in your wallet: .+\nhttp:\/\/127\.0\.0\.1:\d+\/owner\/[\s\S]*\nTell me when you've approved\.$/), next: expect.stringMatching(/^this command already began sending its own transaction for this approval; its outcome is not known yet\. The owner still has to approve the next step: reply to the owner with message_for_owner, word for word [\s\S]* Only the owner uses the page, in the browser with their wallet\. It is on this machine only: over SSH the owner first runs ssh -L (\d+):127\.0\.0\.1:\1 user@this-host\. Do not start another owner command$/) } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: false, next: expect.stringMatching(/^this command already began sending its own transaction/) } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, next: expect.stringMatching(/this step sent nothing/) } },
     ],
@@ -1789,6 +1789,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/tempo/preflight.ts", has: "seller unreachable", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "the seller did not ask for payment", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "no tempo.charge offer", why: READ_ONLY },
+  { file: "budget/tempo/preflight.ts", has: "if (off) result('failed', { reason: off", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "offer cannot be paid", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "main().catch((err) => result('failed'", why: READ_ONLY },
   { file: "budget/cli.mjs", has: "this home has no approval with that id", why: "wait found no approval record under that id: nothing in this home was approved, sent or paid, and the answer says so" },

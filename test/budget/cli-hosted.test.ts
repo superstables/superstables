@@ -11,6 +11,10 @@ import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
+import { TESTNET_LINE } from "../../budget/once.mjs";
+
+/** The testnet line as a regular expression fragment: the product sets its words (budget/once.mjs). */
+const TESTNET = TESTNET_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
@@ -398,14 +402,14 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only\. Test tokens, no real money\.$/);
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown\\. .*${TESTNET}$`));
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
     const msg = first.result.message_for_owner;
     expect(msg).toContain(first.result.url);
     expect(msg).toContain("Match code: ABC-DEF");
-    expect(msg).toMatch(/On Base Sepolia\. Testnet only\. Test tokens, no real money\./);
+    expect(msg).toMatch(new RegExp(`On Base Sepolia\\. ${TESTNET}`));
     expect(msg.endsWith("Tell me when you've approved.")).toBe(true);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
