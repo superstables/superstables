@@ -10,10 +10,19 @@ With Budgets, you approve an amount in your wallet and the agent can spend withi
 You need Node 22+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
 Payments also need a compatible wallet and test funds, as described in the guides below.
 
-### The plugin, for Claude Code or Codex
+### The plugin
 
 The [plugin](plugin/) adds one Superstables skill and the Superstables tools at `https://mcp.superstables.com`.
-Add this repository as a plugin marketplace, then install the plugin:
+From the next release, each GitHub Release carries one plugin zip per app, `superstables-plugin-<app>-<version>.zip`, with a `.sha256` file beside it:
+
+| App | Zip | Install |
+| --- | --- | --- |
+| Claude Code | `superstables-plugin-claude-code-<version>.zip` | Unzip it, then `claude plugin marketplace add <folder>` and `claude plugin install superstables@superstables` |
+| Codex | `superstables-plugin-codex-<version>.zip` | Unzip it, then `codex plugin marketplace add <folder>` and `codex plugin add superstables@superstables` |
+| Claude apps | `superstables-plugin-claude-apps-<version>.zip` | Add the zip as a plugin in the app's plugin settings |
+| Cursor | `superstables-plugin-cursor-<version>.zip` | Unzip it into `~/.cursor/plugins/local/superstables`, then reload the window |
+
+In Claude Code or Codex you can also add this repository as the marketplace:
 
 ```bash
 # Claude Code
@@ -25,7 +34,11 @@ codex plugin marketplace add superstables/superstables
 codex plugin add superstables@superstables
 ```
 
-Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The skill runs the CLI with `npx` when a step needs a signature on your machine.
+Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The plugin uses the website for everything that needs no key on your machine, and the CLI (run with `npx`) only for what needs a signature from it. If you decline to connect, the CLI does it all.
+
+### Or the connector
+
+An app that takes connectors can add `https://mcp.superstables.com` on its own, without the plugin. It can find services, request a purchase you approve on superstables.com, and read or follow a budget, or get the link to revoke it. Budget set-up, grants, buying under a budget and `pay` need the CLI, which a chat app without a terminal can't run.
 
 ### Or the skill zip
 
