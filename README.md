@@ -10,6 +10,25 @@ With Budgets, you approve an amount in your wallet and the agent can spend withi
 You need Node 22+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
 Payments also need a compatible wallet and test funds, as described in the guides below.
 
+### The plugin, for Claude Code or Codex
+
+The [plugin](plugin/) adds one Superstables skill and the Superstables tools at `https://mcp.superstables.com`.
+Add this repository as a plugin marketplace, then install the plugin:
+
+```bash
+# Claude Code
+claude plugin marketplace add superstables/superstables
+claude plugin install superstables@superstables
+
+# Codex
+codex plugin marketplace add superstables/superstables
+codex plugin add superstables@superstables
+```
+
+Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The skill runs the CLI with `npx` when a step needs a signature on your machine.
+
+### Or the skill zip
+
 1. Follow [Install the client](docs/install.md) to download the skill zip from the GitHub Release.
    It includes the CLI. Unzip it into `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex.
 2. Ask your agent:
