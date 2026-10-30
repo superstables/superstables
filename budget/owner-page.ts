@@ -260,10 +260,11 @@ export function ownerPageFor(rail: OwnerRail) {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;
   };
-  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; bundle?: unknown; settled?: Promise<unknown> }, t: OwnerTerms, site?: string) {
+  function announce(action: string, h: { url: string; expiresAt: number; matchCode?: string; notice?: string; bundle?: unknown; settled?: Promise<unknown> }, t: OwnerTerms, site?: string) {
     // The plain terms travel with the link, so a caller that is not watching stderr can show them next to it.
     const terms = plainTerms(t);
-    console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}) })}`);
+    console.log(`APPROVE ${JSON.stringify({ action, url: h.url, expires: new Date(h.expiresAt).toISOString(), terms, ...(h.matchCode ? { matchCode: h.matchCode } : {}), ...(h.notice ? { notice: h.notice } : {}) })}`);
+    if (h.notice) console.error(`\nNote: ${h.notice}.`);
     if (site) {
       const host = siteName(site);
       const other = isOtherSite(site) ? ` The site is ${host}, not www.superstables.com: say so to the owner.` : "";

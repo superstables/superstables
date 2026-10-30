@@ -268,7 +268,7 @@ export async function startFakeSite(): Promise<FakeSite> {
       const body = JSON.parse(raw);
       const link = url.pathname.endsWith("/links");
       // like both deployments: a field outside the route's own list is refused
-      const allowed = link ? ["rail", "chain", "agent", "label", "then", ...(site.features?.includes("expected_owner") ? ["expected_owner"] : []), ...(site.features?.includes("owner_proof_v2") ? ["owner_proof_version"] : [])] : ["kind", "rail", "chain", "agent", "transaction", "solana"];
+      const allowed = link ? ["rail", "chain", "agent", "label", "then", ...(site.features?.includes("expected_owner") ? ["expected_owner"] : []), ...(site.features?.includes("owner_proof_v2") ? ["owner_proof_version"] : []), ...(site.features?.includes("timeout_seconds") ? ["timeout_seconds"] : [])] : ["kind", "rail", "chain", "agent", "transaction", "solana", ...(site.features?.includes("timeout_seconds") ? ["timeout_seconds"] : [])];
       if (Object.keys(body).some((k) => !allowed.includes(k))) return json(res, 400, { error: { code: "unknown_parameter", message: "a field this request does not take", allowed } });
       if (link && body.owner_proof_version !== undefined && body.owner_proof_version !== null && body.owner_proof_version !== 1 && body.owner_proof_version !== 2) return json(res, 400, { error: { code: "invalid_owner_proof_version", message: "owner_proof_version must be 1 or 2" } });
       let expectedOwner: string | undefined;
@@ -287,7 +287,10 @@ export async function startFakeSite(): Promise<FakeSite> {
         if (owner) return json(res, 409, { error: { code: "already_linked", message: "This agent already belongs to an account on this chain. Ask for gas and a budget with separate approvals.", owner } });
       }
       const id = `${link ? "bl" : "ba"}_test${String(++n).padStart(4, "0")}`;
-      const expiresAt = Date.now() + (site.expiresInMs ?? 600_000);
+      // as the site does: the asked timeout held to 10..3600 seconds, and a notice when it was held
+      const asked = body.timeout_seconds as number | undefined;
+      const held = asked === undefined ? undefined : Math.min(3600, Math.max(10, asked));
+      const expiresAt = Date.now() + (held !== undefined ? held * 1000 : site.expiresInMs ?? 600_000);
       const r: FakeRequest = { id, kind: link ? "link" : body.kind, token: `ssbt_test_${id}secret`, body, state: "awaiting_owner", owner: link ? null : site.owner, tx_hash: null, polls: 0, cancels: 0, matchCode: "ABC-DEF", expiresAt, ...(link ? { proofVersion: body.owner_proof_version === 2 ? (2 as const) : (1 as const) } : {}) };
       if (link && Array.isArray(body.then)) r.steps = body.then.map((t: any, index: number) => ({ index, kind: t.kind, state: "queued", tx_hash: null, reason: null, reason_code: null, wallet_asked: false, ...(t.solana ? { solana: t.solana } : { transaction: t.transaction }) }));
       site.requests.push(r);
@@ -298,7 +301,7 @@ export async function startFakeSite(): Promise<FakeSite> {
         kind: link ? "link" : body.kind,
         state: "awaiting_owner",
         final: false,
-        approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(expiresAt).toISOString() },
+        approval: { url: site.approvalUrl?.(id) ?? `${server.url}/approve/budget/${id}#ssba_test_owner${n}`, match_code: "ABC-DEF", expires_at: new Date(expiresAt).toISOString(), ...(held !== undefined ? { timeout_seconds: held } : {}), ...(held !== undefined && held !== asked ? { requested_timeout_seconds: asked, notice: `timeout_seconds ${asked} is ${asked! > held ? "above the most" : "below the least"} this server allows (10 to 3600 seconds), so the link expires after ${held} seconds` } : {}) },
         message_for_owner: "Open the approval link and pick ABC-DEF.",
         next_action: { type: "wait_for_owner", poll: `/api/v1/budget/requests/${id}` },
         ...(expectedOwner && site.echoExpectedOwner !== false ? { expected_owner: expectedOwner } : {}),
