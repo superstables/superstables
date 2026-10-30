@@ -20,14 +20,16 @@ Terms used below: the **owner** controls the wallet and approves; the **agent** 
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 
-When the Superstables connector tools (`find_services`, `request_purchase`, `get_purchase_status`, `get_my_account`, `list_my_budgets`, `get_budget_request`, `request_budget_revoke`) are available, use them to:
+When the Superstables connector tools are available, use them for every operation that needs no signature from this machine:
 
-- find services, make a single purchase and read a purchase's status;
-- read the linked agent's budget amounts and current state: `list_my_budgets`. This does not establish approval finality or readiness on this machine;
-- read an approval on superstables.com with `get_budget_request`, passing its complete approval link. This does not accept a local approval page or the account link returned by `request_budget_revoke`;
-- revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. When the owner says they've revoked, call `list_my_budgets` and quote the matching entry's `remaining` and `state`. These fields show the current budget state; they do not identify a revoke transaction or establish its finality. If `remaining` is zero and `state` is no longer `live`, report that the connector shows no spending balance. This alone proves neither that a revoke landed nor that it is final. Count the revoke as unresolved until confirmed evidence establishes its outcome.
+- find services, make a single purchase and read a purchase's status: `find_services`, `request_purchase`, `get_purchase_status`. After `request_purchase`, show the owner the approval link and match code, then call `get_purchase_status` with `wait_seconds` 25 in the same turn, and keep calling it while the result says to keep waiting, until the outcome is final. End your turn instead only in an app that shows your reply only when the turn ends, and call `get_purchase_status` when the owner says they approved;
+- find what a budget can pay and its listed price: `find_budget_services` (`once` for Single purchase on superstables.com, `chain` to narrow) and `preflight_budget_purchase` (with `agent`, it says whether what is left covers the price);
+- read the linked agents' budget amounts and current state: `list_my_budgets`, or one agent with `get_budget_status`, which also says whether the owner's last action is final. Neither establishes readiness on this machine;
+- read or follow an approval on superstables.com: `get_budget_request`, or `wait_budget_request` with `wait_seconds` 25 until `final` is `true`. Both take the complete approval link; neither takes a local approval page or the account link returned by `request_budget_revoke`;
+- remove an agent from the account once it has no spending permission: `remove_budget_agent` with the agent's `id` from `list_my_budgets`;
+- revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. When the owner says they've revoked, call `get_budget_status` and quote its `revoke` and the budget's `remaining` and `state`. Treat a revoke as done only once `revoke` says it is final; `remaining` and `state` alone prove neither that a revoke landed nor that it is final. Count the revoke as unresolved until confirmed evidence establishes its outcome.
 
-Local signatures: creating the agent key, `budget setup` and `grant`, `budget buy` and `recover`. Two more things stay on the CLI today, because the connector has no tool for them yet: `budget find` and `budget preflight`. `budget wait` and `budget status` also stay on the CLI for a request this machine signed, because they settle this machine's own record, and the CLI reports an outcome only from a confirmed basis. Use the CLI for everything else too, `budget revoke` included, whenever the connector tools are missing or signed out.
+Local signatures stay on the CLI: creating the agent key, `--sign-only` signing, `budget buy` (the agent key signs), `pay`, `recover` and `reconcile`. `budget wait` and `budget status` also stay on the CLI for an approval page on this machine, which the connector cannot read. Use the CLI for everything else too, `budget revoke` and the `find`, `preflight` and `status` forms included, whenever the connector tools are missing or signed out, or the owner declines to connect.
 
 When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. Use the CLI if they decline.
 
@@ -113,6 +115,8 @@ superstables budget find --chain devnet  # only that chain: any --chain key the 
 superstables budget find --once          # the services Single purchase on superstables.com can pay (Superstables' own), with the chain of each
 ```
 
+With the connector signed in, `find_budget_services` gives the same budget list as `budget find` (`once: true` for `budget find --once`, `chain` for `--chain`); call it instead of the CLI form.
+
 If the user names a listing that `find` does not show, run `find --all` (or `quote --service ID`) before saying it is not listed.
 
 With a budget set up through superstables.com, look in `superstables budget find` first: it lists sellers on the chains with approvals on superstables.com that the index may not have (for example on Arc Testnet). Its URL goes straight to `budget preflight` and `budget buy`. Its `simulated` column (`simulated` in `--json`) says whether each listing is marked as returning prepared sample output, read the same way as below.
@@ -133,6 +137,8 @@ If the user gave a URL, skip this step. Details: [references/discovery.md](refer
 
 With the connector signed in, call `list_my_budgets`. Find the entry whose `chain.key` and `agent` address match this machine's agent on the chain you need; never pick by chain alone. Read `cap`, `remaining`, `used` and `state`. No matching entry means this connector cannot show a budget for this agent on the signed-in account. It does not prove that no budget exists. Note the missing match, price the service, and report that the budget could not be confirmed. Do not buy or start a replacement budget on that basis.
 
+For one agent, `get_budget_status` with its `id` from `list_my_budgets` reads the budget from the chain now, with the owner's last action and whether it is final.
+
 With the connector missing or signed out, run `superstables budget status --rail R --chain C`. `--rail` is required; `--chain` is needed unless it is the rail's default (`base-sepolia` on `evm`). The rail and chain come from `routes.budget` in `find --json`, or from `budget --help` for a URL. Exit 1 means no budget here: note it and go on to step 3. Do not decide or ask anything yet.
 
 If the CLI's `status` finds no budget, it names the home it checked (`home` in its result). If the user says a budget exists, say in your reply which home and chain you checked, and ask whether the budget is under another home or chain. Still price the seller first (step 3). Do not re-run `status` (or any command) with `SUPERSTABLES_HOME` set to another home, `~/.superstables` included, unless the user gives you that path (safety rule 9).
@@ -142,7 +148,8 @@ If the CLI's `status` finds no budget, it names the home it checked (`home` in i
 Do this whatever step 2 said, before you report or ask the user anything.
 
 - For `pay`: `superstables quote --service ID --param k=v` (or `quote URL`). It records the seller's terms, checks them against the spend policy and prints a quote id; with `--json` the id is the `id` field. A quote lasts 10 minutes, so take it just before `pay`. Nothing is signed.
-- For a budget: `superstables budget preflight --rail R --url URL [--chain C]`. On `tempo` and `solana`, add the `--method` and `--body` the purchase will send (`evm` is GET only). `amount` is the price and `payTo` the seller's address. It needs no setup and no budget (on `evm`, its `note: no owner address in the public file` lines are expected then, not an error). Nothing is signed.
+- For a budget, with the connector signed in: `preflight_budget_purchase` with the URL exactly as `find_budget_services` lists it (and `agent` for whether what is left covers it). It gives the listed price; `budget buy` still reads the seller's live price before it pays.
+- For a budget, otherwise: `superstables budget preflight --rail R --url URL [--chain C]`. On `tempo` and `solana`, add the `--method` and `--body` the purchase will send (`evm` is GET only). `amount` is the price and `payTo` the seller's address. It needs no setup and no budget (on `evm`, its `note: no owner address in the public file` lines are expected then, not an error). Nothing is signed.
 
 The price is the seller's ask, not your ceiling. Say the price and whether it fits the ceiling. If it is above the ceiling the user set, stop and say so.
 
