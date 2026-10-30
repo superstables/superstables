@@ -16,7 +16,7 @@ import "./cli-guard.mjs";
 import { isAddress } from "viem";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS, assertReadChain } from "./lib.ts";
+import { OPS_DIR, SYM, cmd, oneLine, arg, flag, agentCtx, toUsdc, usdc, usdcBalance, nativeBalance, gasFmt, tx, usageError, posInt, CFG, GAS, assertReadChain, rpcPause } from "./lib.ts";
 import { purchase, MAX_RESPONSE_BYTES } from "./purchase.ts";
 import { checkOpId, newOpId, resultLine, type ResponseInfo } from "./ops.ts";
 import { refusedChainWords } from "../next-steps.mjs";
@@ -53,7 +53,7 @@ console.log(`before: owner ${usdc(before.owner)} ${SYM}, agent ${usdc(before.age
 const r = await purchase({ url, c, op, max, payTo, quoteOnly: flag("quote-only"), httpTimeoutMs, recoveryOrder, termsReads });
 const j = r.journal;
 
-await new Promise((res) => setTimeout(res, 3000)); // let the public RPC catch up before the closing balance read
+await rpcPause(3000); // let the public RPC catch up before the closing balance read
 const after = await bal();
 console.log(`after:  owner ${usdc(after.owner)} ${SYM} (net debit ${usdc(before.owner - after.owner)}), agent ${usdc(after.agent)} ${SYM} (${GAS.isUsdc ? "was " + usdc(before.agent) + ", the difference is the gas it spent" : after.agent === 0n ? "held 0 before and after" : "not 0 after: a seller refund or stranded funds; the owner runs recover"}), agent gas spent ${gasFmt(before.agentEth - after.agentEth)} ${sym} (native balance, before minus after)`);
 if (r.status !== undefined) console.log(`final HTTP status: ${r.status}${r.settle ? `, seller reports success=${r.settle.success}` : ""}`);
