@@ -69,6 +69,14 @@ export const PUBLIC_ENV = publicFile("evm", CFG.key);
 export const OPS_DIR = opsDir("evm", CFG.key);
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * A pause that lets a public RPC node, or a seller's facilitator, see what was just sent. The tests' local fake chains
+ * see everything at once: they set SUPERSTABLES_TEST_RPC_WAIT_MS=0, which replaces the length of every such pause.
+ */
+export const rpcPause = (ms: number) => {
+  const set = Number(process.env.SUPERSTABLES_TEST_RPC_WAIT_MS ?? NaN);
+  return sleep(set >= 0 ? set : ms);
+};
 export const tx = (h: string) => `${EXPLORER}/tx/${h}`;
 export const usdc = (v: bigint) => formatUnits(v, USDC_DECIMALS);
 /** Native gas token amount (Arc: USDC with 18 decimals; Base: ETH). */
@@ -560,7 +568,7 @@ export async function send(w: Wallet, to: Address, data: Hex, label: string, age
   const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  await sleep(3500);
+  await rpcPause(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
   return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
@@ -587,7 +595,7 @@ export async function sendJournaled(
   await publicClient.sendRawTransaction({ serializedTransaction });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  await sleep(3500);
+  await rpcPause(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber, feeWei: feeOf(r) });
   return { hash, blockNumber: r.blockNumber, feeWei: feeOf(r) };
 }

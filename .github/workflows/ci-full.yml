@@ -50,12 +50,13 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
-      # The runner's service may use 2 CPUs and 4 GB, but vitest sizes its pool by the machine's cores.
-      # Two workers and longer timeouts keep the tests that start the CLI as a process from timing out.
+      # The runner's service may use 6 CPUs and 6 GB, but vitest sizes its pool by the machine's cores.
+      # Four workers leave CPU for the CLI processes the tests start; with longer timeouts, those tests
+      # do not time out.
       # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
       # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
       - name: Test
-        run: npm test -- --maxWorkers=2 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
+        run: npm test -- --maxWorkers=4 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
         env:
           TMPDIR: ${{ runner.temp }}
 
