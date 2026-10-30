@@ -1,7 +1,7 @@
 # Install the client
 
 The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
-that guides an agent through it. Start with a [budget](budget.md), where the owner
+that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
 each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, or pathUSD on Tempo Moderato. No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
 
@@ -18,7 +18,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   superstables.com account. They sign in with an Ethereum or Solana wallet or an email address. An account
   admin links wallets on the account page: an Ethereum wallet for EVM chains and Tempo, or a Solana wallet
   for Solana. The owner approves with the linked wallet. An ordinary remote browser without a compatible
-  wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
+  wallet cannot sign. Choose [Budget on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
 These instructions describe **client 1.0.0** and require that release build. Install it from npm
@@ -27,7 +27,7 @@ as `@superstables/client`, or use the released commit and skill from
 The CLI/skill runs on your own machine or server,
 even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
-[budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
+[Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
 testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
@@ -147,7 +147,7 @@ release yourself some other way, do it under `umask 022`.
 
 ## Set up
 
-For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
+For `pay`, the owner runs `setup` once; Single purchase on superstables.com and Budget don't need it. It creates `~/.superstables`, writes a starting spend
 policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints how the owner
 approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
