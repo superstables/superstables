@@ -32,7 +32,7 @@ import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
 import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../../src/seller/referral.ts";
 import {
   OPS_DIR, SYM, oneLine,
-  sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, sleep,
+  sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, rpcPause,
   agentGas, gasWords, fundAgentNext, GasShort, ChainRefused, assertRpcChain,
   type AgentCtx, type Wallet, type GasNeed, type GasOp,
 } from "./lib.ts";
@@ -662,7 +662,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       res.pullTx = j.pullTx;
       j.pulled = usdc(price);
       writeJournal(j);
-      await sleep(4000); // give the seller's facilitator RPC time to see the new balance
+      await rpcPause(4000); // give the seller's facilitator RPC time to see the new balance
     } catch (e: any) {
       if (e instanceof Stop) stop = e;
       throw e;
@@ -721,7 +721,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
 
   // The seller's word is not evidence. Read the chain (own authorization nonce). RPC lag: a few short retries.
   let s = await readSettlement(j);
-  for (let i = 0; !s.used && !s.canceled && i < 5 && (res.settle?.success || r.ok); i++) { await sleep(3000); s = await readSettlement(j); }
+  for (let i = 0; !s.used && !s.canceled && i < 5 && (res.settle?.success || r.ok); i++) { await rpcPause(3000); s = await readSettlement(j); }
   if (s.used && s.settleTx) {
     const rec = await reconcileJournal(j, { quiet: true });
     res.settleTx = rec.j.settleTx;
