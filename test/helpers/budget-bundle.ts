@@ -13,7 +13,12 @@ const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 /** The folder of the built CLI: `<dir>/cli.mjs`, and each rail script at `<dir>/<rail>/<name>.mjs`. */
 export function budgetBundle(): string {
   const dir = mkdtempSync(join(process.env.TMPDIR ?? tmpdir(), "ss-budget-bundle-"));
-  execFileSync(process.execPath, [resolve(ROOT, "scripts/budget-build.mjs"), "--outdir", dir], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+  try {
+    execFileSync(process.execPath, [resolve(ROOT, "scripts/budget-build.mjs"), "--outdir", dir], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }

@@ -74,8 +74,8 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * see everything at once: they set SUPERSTABLES_TEST_RPC_WAIT_MS=0, which replaces the length of every such pause.
  */
 export const rpcPause = (ms: number) => {
-  const set = Number(process.env.SUPERSTABLES_TEST_RPC_WAIT_MS ?? NaN);
-  return sleep(set >= 0 ? set : ms);
+  const set = process.env.SUPERSTABLES_TEST_RPC_WAIT_MS ? Number(process.env.SUPERSTABLES_TEST_RPC_WAIT_MS) : NaN;
+  return sleep(Number.isFinite(set) && set >= 0 ? set : ms);
 };
 export const tx = (h: string) => `${EXPLORER}/tx/${h}`;
 export const usdc = (v: bigint) => formatUnits(v, USDC_DECIMALS);
