@@ -32,7 +32,7 @@ export function buildPluginZips(root, outDir = join(root, "build", "plugin")) {
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   let time;
   try {
-    time = new Date(execFileSync("git", ["log", "-1", "--format=%cI"], { cwd: root, encoding: "utf8" }).trim());
+    time = new Date(execFileSync("git", ["log", "-1", "--format=%cI"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim());
   } catch {}
   const mtime = time && !Number.isNaN(+time) ? time : new Date("2026-01-01T00:00:00Z");
   process.env.TZ = "UTC";
