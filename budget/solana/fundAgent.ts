@@ -131,4 +131,4 @@ const final = fin.final && !fin.failed;
 if (!final) console.log("The transfer is in a block, but the transaction is not finalized yet.");
 finish?.({ outcome: "confirmed", message: final ? `Done. Your agent received ${sol(amount)} SOL. You can close this page.` : LANDED_SOLANA_FUND, hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : "landed, not finalized yet. Nothing to do: the transfer is final once its transaction is finalized. superstables budget doctor --rail solana reads the balance" }));
+process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : "landed, not finalized yet: the transfer is final once its transaction is finalized. Start the next owner command (grant) only then. superstables budget doctor --rail solana reads the balance" }));

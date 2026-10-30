@@ -30,7 +30,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { finalWords } from "../src/core/finality-policy.js";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, awaitingChain, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -687,7 +688,8 @@ Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), for an owner
+transaction that landed but is not final on chain yet (state landed, or a setup step landed; chain_final is false), and for a
 buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for
 command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
@@ -780,7 +782,7 @@ let pastBackstop = false;
 function resultFacts(fields) {
   const { complete: _removed, ...rest } = fields;
   const final = fields.state === "settled" && fields.paid === true || fields.final !== false && fields.state !== "waiting_owner";
-  const chain_final = fields.state === "settled" && fields.paid === true ? fields.chain_final ?? null : null;
+  const chain_final = fields.state === "settled" && fields.paid === true ? fields.chain_final ?? null : fields.state === "landed" || (fields.final === false && Array.isArray(fields.steps) && fields.steps.some((st) => st?.state === "landed")) ? false : null;
   return { ...rest, final, chain_final };
 }
 
@@ -2399,7 +2401,7 @@ async function fundAgent({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
-  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet. Nothing to do: the transfer is final once its block is. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet: the transfer is final once its block is. Start the next owner command (grant) only then. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 
@@ -2660,11 +2662,16 @@ const stillWaiting = (id) => `the owner has not finished. Say so in one line and
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
 function refusePending(ctx, pending) {
-  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is still waiting for the owner on ${pending.rail} ${pending.chain}`);
+  const onChain = awaitingChain(readApproval(pending.id));
+  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is ${onChain ? "approved and waiting for the chain to make it final" : "still waiting for the owner"} on ${pending.rail} ${pending.chain}`);
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
-    next: `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
-    reason: `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
+    next: onChain
+      ? `nothing was started. The owner has already approved ${pending.id} and has nothing to do: its transaction is on the chain and the chain has not made it final yet${finalWords(pending.rail, pending.chain) ? `, usually ${finalWords(pending.rail, pending.chain)}` : ""}. Run superstables budget wait --id ${pending.id} --shown later, and start this command again once it ends`
+      : `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
+    reason: onChain
+      ? `owner approval ${pending.id} (${pending.command}) is approved and its transaction is on this chain; it holds the chain until the chain makes it final`
+      : `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
   });
 }
 
@@ -2898,6 +2905,17 @@ function waitUnknown(id, record, reason, next) {
   process.exit(5);
 }
 
+/**
+ * The next step of an owner command that landed: the transaction is in a block the chain has not made final. The command
+ * itself is complete, but the budget is not usable and the site keeps the agent's request open until then, so the owner
+ * has nothing to do and the agent starts nothing new.
+ */
+function landedNext(r) {
+  const usually = finalWords(r.rail, r.chain);
+  const budget = r.command === "grant" || r.command === "setup" ? " Do not rely on the budget until it is final." : "";
+  return `landed, not final yet: the chain has not made the block final${usually ? `, usually ${usually}` : ""}. The owner does not need to approve again, and this is not done: run ${statusCommand({ rail: r.rail, chain: r.chain })} later, and start the next owner command only once it is final: until then superstables.com can refuse a new request as still open.${budget}`;
+}
+
 async function wait({ f }) {
   // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
   const file = readApprovalFile(f.id);
@@ -2991,6 +3009,12 @@ async function wait({ f }) {
     // before this rule, once its wallet was asked, is answered by it as well.
     const sent = OWNER_COMMANDS.has(r.result.command) && (recordMayHaveSent(r.record) || carriesTx(r.result.tx));
     const a = sent ? afterSend(r.code, r.result, checkCommand(r.result)) : { code: r.code, fields: r.result };
+    // a transaction in a block the chain has not made final: the command ended, the outcome did not
+    const landed = a.fields.state === "landed";
+    if (landed || (Array.isArray(a.fields.steps) && a.fields.steps.some((st) => st?.state === "landed"))) {
+      writeResult({ ...a.fields, ok: a.code === 0, final: false, chain_final: false, ...(landed ? { next: landedNext(a.fields) } : {}) });
+      process.exit(a.code);
+    }
     writeResult({ ...a.fields, ok: a.code === 0, final: true });
     process.exit(a.code);
   }

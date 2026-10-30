@@ -1004,9 +1004,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   }, 180_000);
 
   it.each([
-    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. Nothing to do for the gas transfer: it is final once its block is/],
+    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. The gas transfer is final once its block is/],
     ["grant only", ["--grant", "0.01"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then$/],
-    ["gas only", ["--fund"], /^landed, not final yet\. Nothing to do: the gas transfer is final once its block is/],
+    ["gas only", ["--fund"], /^landed, not final yet: the gas transfer is final once its block is.* Start the next owner command only then$/],
   ])("the final head below the owner's block (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     await prepare("0x10");
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
@@ -1017,7 +1017,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     for (const st of r.steps!) Object.assign(st, { state: "confirmed", tx_hash: hashes[st.kind], wallet_asked: true });
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(done.code, done.stderr).toBe(0);
-    expect(done.result).toMatchObject({ state: "ok" }); // wait keeps `final` as the command having ended
+    expect(done.result).toMatchObject({ state: "ok", final: false, chain_final: false }); // included, not final: wait does not present it as done
     expect(done.result.steps.map((x: any) => x.state)).toEqual(flags.includes("--grant") && flags.includes("--fund") ? ["landed", "landed"] : ["landed"]);
     expect(String(done.result.next).split("Then: ").pop()).toMatch(want); // the dispatcher puts the owner notice first, then "Then: " and the rail's next
     expect(done.result.next).not.toMatch(/\. [a-z]/);

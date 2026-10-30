@@ -1313,6 +1313,11 @@ export function walletWasAsked(record, page = null) {
   return [record?.url, ...(record?.earlierUrls ?? [])].some((url) => lastPageStatus(url).sending);
 }
 
+/** Whether the owner's page reported a transaction for this approval: it is past the owner, and its command is waiting on the chain. */
+export function awaitingChain(record) {
+  return ["sent", "confirmed", "hosted:sent", "hosted:confirmed"].includes(lastPageStatus(record?.url).status);
+}
+
 /** The page id in a link: the loopback page's 32 hex digits, or a hosted request id (bl_..., ba_...). */
 const pageIdOf = (url) => /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1] ?? /\/approve\/budget\/(b[la]_[A-Za-z0-9_-]+)/.exec(url ?? "")?.[1];
 
