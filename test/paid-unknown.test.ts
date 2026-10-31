@@ -245,7 +245,9 @@ const payEnv = (home: string, env: Record<string, string> = {}) => ({
 });
 /** `superstables ...` in one process, as the installed command runs (a signal reaches the process that pays). */
 const superstables = (home: string, args: string[], env: Record<string, string> = {}) => exec(["--import", "tsx", MAIN, ...args], payEnv(home, env));
-const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, ...env });
+/** Rail runs skip readUntil's two-second catch-up pauses (helpers/skip-waits.mjs): the fake chains answer at once, and every read still happens. */
+const SKIP_WAITS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("helpers/skip-waits.mjs", import.meta.url))}`].filter(Boolean).join(" ");
+const budgetEnv = (home: string, env: Record<string, string> = {}) => ({ SUPERSTABLES_HOME: home, SUPERSTABLES_SITE: undefined, SUPERSTABLES_BUDGET_APPROVAL_ID: undefined, NODE_OPTIONS: SKIP_WAITS, ...env });
 const budget = (home: string, args: string[], env: Record<string, string> = {}, onChild?: (child: ReturnType<typeof spawn>) => void) => exec([evmTable(env.B4_RPC), ...args], budgetEnv(home, env), onChild);
 const resultOf = (stdout: string) => {
   const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
