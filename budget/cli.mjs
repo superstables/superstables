@@ -2597,7 +2597,7 @@ async function rotateLocked({ f, ctx }) {
   // recover, which rotate runs after it retires the old address, refuses this key file, so the rotation would stop half done
   if (rail === "evm" && !existing && existsSync(agentKeyFile(rail))) {
     let fileOwner;
-    try { fileOwner = /^(?:export\s+)?B4_OWNER_ADDRESS=(.*)$/m.exec(readRegularFile(agentKeyFile(rail), "the agent key file"))?.[1]?.trim().replace(/^['"]|['"]$/g, ""); } catch {}
+    try { fileOwner = [...readRegularFile(agentKeyFile(rail), "the agent key file").matchAll(/^(?:export\s+)?B4_OWNER_ADDRESS=(.*)$/gm)].at(-1)?.[1]?.trim().replace(/^['"]|['"]$/g, ""); } catch {}
     for (const c of fileOwner ? chains : []) {
       let lines = {};
       try { lines = Object.fromEntries([...readRegularFile(publicFile(rail, c), "the public file").matchAll(/^(?:export\s+)?([A-Z0-9_]+)=(.*)$/gm)].map((m) => [m[1], m[2].trim().replace(/^['"]|['"]$/g, "")])); } catch {}
