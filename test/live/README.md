@@ -9,6 +9,8 @@ changed terms fails the check. Normal `npm test` excludes this directory.
 chains, pathUSD's decimals, the devnet USDC mint's decimals) from the public RPCs and compares them with the client's
 chain table. It needs no wallet and sends nothing.
 
+`connector-contract.live.test.ts` asks the live Superstables connector for `tools/list` and `initialize` (no sign-in) and compares them with `test/scripts/connector-contract.json`, the generated copy the plugin skill is tested against. It sends nothing and spends nothing.
+
 Paid checks require a separate opt-in home for each rail:
 
 | Variable | Check | Test tokens spent per successful run |
