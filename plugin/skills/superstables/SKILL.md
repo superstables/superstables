@@ -63,9 +63,13 @@ each client command out in full, as shown in `references/cli.md`. Do not use a
 shell variable or alias: these can prevent the host from checking the command
 before it runs.
 
-In a chat app without a terminal, there is no budget set-up, grant, fund, buy
-or `pay`. Chat can find services, request a purchase the owner approves on
-superstables.com, and read, follow or revoke a budget through the tools above.
+Run budget set-up, grant, fund and buy only where the CLI can reach the services
+it needs and keep the agent key and its records between turns, as on the owner's
+computer with Claude Code or Codex. A shell in a temporary sandbox is not enough.
+If this chat can't meet that, stop: say why and point the owner to a coding agent
+on their computer. `pay` also needs the owner's local wallet approval. The tools
+can find services, request a purchase the owner approves on superstables.com,
+read budgets, follow a budget approval and give the revoke link.
 
 ## When the connector is missing or signed out
 

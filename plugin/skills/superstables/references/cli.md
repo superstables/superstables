@@ -30,7 +30,7 @@ When a connector call fails because it is not signed in, ask the owner to connec
 
 ## Running the CLI
 
-**This reference needs an agent that can run commands.** In a chat app without a terminal, the connector tools in SKILL.md are the route.
+**This reference needs an agent that can run commands.** If this chat can't run the CLI with the storage, network access and wallet approval a command needs, use the connector tools in SKILL.md.
 
 Run the CLI as `npx --yes @superstables/client@1.0.0 <command>`, for example `npx --yes @superstables/client@1.0.0 find weather` or `npx --yes @superstables/client@1.0.0 budget doctor --rail evm`. In the commands below, `superstables` is shorthand for `npx --yes @superstables/client@1.0.0`. If `superstables` is already installed at version 1.0.0, that works too. Node 22 or newer is required. Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`), shared with any other copy of the tool on this machine. Never run unscoped `npx superstables`: it can download a different package. Use the scoped, pinned package above.
 
