@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { PLUGIN_LISTING as listing } from "../../scripts/plugin-data.mjs";
 import { refuseSymlinkPath, syncPlugin } from "../../scripts/plugin-sync.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -29,6 +30,8 @@ function fixture() {
   write(root, `${skill}/references/pay.md`, "Payment instructions. See SKILL.md and [budgets](budget.md).\n");
   write(root, `${skill}/references/budget.md`, "Budgets.\n");
   write(root, `${pluginSkill}/SKILL.md`, "---\nname: superstables\n---\n\nRoute.\n");
+  write(root, "plugin/assets/icon.png", "png");
+  write(root, "plugin/assets/icon.svg", "<svg/>");
   execFileSync("git", ["add", "skills"], { cwd: root });
   return root;
 }
@@ -77,6 +80,30 @@ describe("plugin synchronization", () => {
     }
   });
 
+  it("writes the one listing into every manifest, the marketplace entry and the skill's openai.yaml, with icons that exist", () => {
+    const read = (file: string) => readFileSync(join(repo, file), "utf8");
+    const json = (file: string) => JSON.parse(read(file));
+    const { shortDescription, longDescription } = listing;
+    expect(json("plugin/.claude-plugin/plugin.json")).toMatchObject({ displayName: "Superstables", description: shortDescription, icon: "./assets/icon.png" });
+    expect(json("plugin/plugin.json").extensions["com.openai"].interface).toMatchObject({ displayName: "Superstables", shortDescription, longDescription, logo: "./assets/icon.png", composerIcon: "./assets/icon.png", brandColor: "#CBFF00" });
+    expect(json("plugin/.cursor-plugin/plugin.json")).toMatchObject({ description: shortDescription, logo: "assets/icon.png" });
+    expect(json(".claude-plugin/marketplace.json").plugins[0]).toMatchObject({ displayName: "Superstables", description: shortDescription, category: "Payments" });
+    expect(read(`${pluginSkill}/agents/openai.yaml`)).toContain(`short_description: ${JSON.stringify(shortDescription)}`);
+    for (const icon of ["plugin/assets/icon.png", "plugin/assets/icon.svg", `${pluginSkill}/assets/icon-large.png`, `${pluginSkill}/assets/icon-small.svg`]) expect(statSync(join(repo, icon)).size, icon).toBeGreaterThan(100);
+    expect(shortDescription.length).toBeLessThanOrEqual(100);
+    expect(`${shortDescription} ${longDescription}`).not.toMatch(/recommend/i);
+  });
+
+  it("fails the check when a manifest or icon copy drifts from the listing", () => {
+    const root = fixture();
+    syncPlugin({ root });
+    write(root, "plugin/.cursor-plugin/plugin.json", '{"version":"1.2.3"}');
+    expect(() => syncPlugin({ root, check: true })).toThrow("plugin/.cursor-plugin/plugin.json: differs from the plugin listing");
+    syncPlugin({ root });
+    write(root, `${pluginSkill}/assets/icon-large.png`, "other");
+    expect(() => syncPlugin({ root, check: true })).toThrow("icon-large.png: differs from the plugin listing");
+  });
+
   it("keeps the single-purchase order in references/cli.md: buy-once first, local pay as the fallback", () => {
     const cli = readFileSync(join(repo, bundle, "cli.md"), "utf8");
     const source = readFileSync(join(repo, skill, "SKILL.md"), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
@@ -110,10 +137,10 @@ describe("plugin synchronization", () => {
     symlinkSync(dirname(root), join(ancestor, "linked"), "dir");
     const linkedRoot = join(ancestor, "linked", basename(root));
     mkdirSync(join(root, "scripts"));
-    for (const script of ["plugin-sync.mjs", "package-root.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
+    for (const script of ["plugin-sync.mjs", "package-root.mjs", "plugin-data.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
     const result = spawnSync(process.execPath, [join(linkedRoot, "scripts/plugin-sync.mjs")], { encoding: "utf8" });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe("Plugin references and versions synchronized.\n");
+    expect(result.stdout).toBe("Plugin references, listing and versions synchronized.\n");
     expect(readFileSync(join(root, bundle, "pay.md"), "utf8")).toBe("Payment instructions. See cli.md and [budgets](budget.md).\n");
     expect(() => syncPlugin({ root: linkedRoot, check: true })).not.toThrow();
   });
@@ -271,7 +298,7 @@ describe("plugin synchronization", () => {
     const root = fixture();
     syncPlugin({ root });
     mkdirSync(join(root, "scripts"));
-    for (const script of ["plugin-sync.mjs", "package-root.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
+    for (const script of ["plugin-sync.mjs", "package-root.mjs", "plugin-data.mjs"]) cpSync(join(repo, "scripts", script), join(root, "scripts", script));
     if (kind === "skill") write(root, `${bundle}/cli.md`, "Changed.\n");
     else write(root, manifests[0], JSON.stringify({ version: "0.0.0" }));
     const result = spawnSync(process.execPath, [join(root, "scripts/plugin-sync.mjs"), "--check"], { encoding: "utf8" });
@@ -299,7 +326,10 @@ describe("plugin connections and marketplace", () => {
   it("keeps manifest metadata aligned and the marketplace source resolvable", () => {
     const { $schema, ...portable } = json("plugin/plugin.json");
     expect($schema).toBe("https://agent-plugins.org/schemas/1.0.0/plugin.schema.json");
-    expect(json("plugin/.claude-plugin/plugin.json")).toEqual(portable);
+    const { icon, displayName, ...claude } = json("plugin/.claude-plugin/plugin.json");
+    const { extensions, ...common } = portable;
+    expect([icon, displayName, Object.keys(extensions)]).toEqual(["./assets/icon.png", "Superstables", ["com.openai"]]);
+    expect(claude).toEqual(common);
     const marketplace = json(".claude-plugin/marketplace.json");
     expect(marketplace.metadata.description).toBeTruthy();
     expect(marketplace.plugins).toHaveLength(1);

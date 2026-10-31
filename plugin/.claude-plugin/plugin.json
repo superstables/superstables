@@ -1,7 +1,8 @@
 {
   "name": "superstables",
+  "displayName": "Superstables",
   "version": "1.0.0",
-  "description": "Find services and request purchases with approval on superstables.com, through one skill that uses the Superstables tools and, for what needs a local signature, the CLI. Testnet-first.",
+  "description": "Find paid services and request single purchases that you approve. Testnet only.",
   "author": {
     "name": "Superstables"
   },
@@ -14,5 +15,6 @@
     "mcp",
     "cli",
     "testnet"
-  ]
+  ],
+  "icon": "./assets/icon.png"
 }

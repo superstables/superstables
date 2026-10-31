@@ -1,5 +1,8 @@
 interface:
   display_name: "Superstables"
-  short_description: "Find paid services, request a purchase the owner approves, and manage testnet budgets, through the Superstables tools or the superstables CLI"
+  short_description: "Find paid services and request single purchases that you approve. Testnet only."
+  icon_small: "./assets/icon-small.svg"
+  icon_large: "./assets/icon-large.png"
+  brand_color: "#CBFF00"
 policy:
   allow_implicit_invocation: true
