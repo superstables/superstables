@@ -27,15 +27,9 @@ Only operations needing a local signature go through the CLI; everything else go
 - `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
 
 With every approval link, `request_purchase` and `submit_budget_request` return
-a line that names the wallets of the account the request is on, by their last
-four characters, for example "This request is on the Superstables account with
-wallet ending 1065." Show that line with the link. A successful sign-in does not
-confirm that the intended account is connected. If the line names another
-account than the owner meant, tell them not to approve, and ask them to sign the
-connector in again with the intended account. Then make the request again and
-check the new line. If Codex still names the old account, ask the owner to start
-a new session and make the request there. If Claude Code still names the old
-account, stop and report the mismatch.
+a line naming the request account's wallets by their last four characters, or
+saying it has no wallet. Show that line with the link. If that is not the account
+the owner meant, tell them not to approve and stop to resolve the mismatch.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
