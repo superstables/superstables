@@ -79,6 +79,12 @@ describe("the superstables CLI", () => {
     expect(result.stdout.trim()).toBe(version);
   });
 
+  it("prints the version from package.json when it runs from the sources", async () => {
+    const out = execFileSync(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), resolve(ROOT, "src/cli/main.ts"), "--version"], { cwd: ROOT, encoding: "utf8" });
+    const { version } = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8")) as { version: string };
+    expect(out.trim()).toBe(version);
+  });
+
   it("prints its own help", async () => {
     const result = await run(["--help"]);
     expect(result.code).toBe(0);
