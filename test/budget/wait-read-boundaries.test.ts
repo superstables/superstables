@@ -233,6 +233,8 @@ async function run(form: Form, mutate?: { kind: string; n: number; change: (r: a
         }
       }
       Object.assign(hooked, form.env?.(c));
+      // a restarted worker (it ends at once anyway) would register itself on the record at any moment after the restart, over the change
+      if (form.launches) hooked.INERT_RESUMED_WORKER = "1";
       const chainBefore = existsSync(chainPath) ? readFileSync(chainPath, "utf8") : null;
       const out = await new Promise<{ code: number; stdout: string; stderr: string }>((done, fail) => {
         const child = spawn(process.execPath, ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs"), resolve(ROOT, "budget/cli.mjs"), ...form.args(c)], { cwd: ROOT, env: hooked });
