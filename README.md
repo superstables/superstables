@@ -14,7 +14,7 @@ Payments also need a compatible wallet and test funds, as described in the guide
 ### The plugin
 
 The [plugin](plugin/) adds one Superstables skill and the Superstables tools at `https://mcp.superstables.com`.
-From the next release, each GitHub Release carries one plugin zip per app, `superstables-plugin-<app>-<version>.zip`, with a `.sha256` file beside it:
+From version 1.1.0, each GitHub Release carries one plugin zip per app, `superstables-plugin-<app>-<version>.zip`, with a `.sha256` file beside it:
 
 | App | Zip | Install |
 | --- | --- | --- |
