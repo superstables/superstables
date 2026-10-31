@@ -64,7 +64,7 @@ afterEach(async () => {
 type Out = { code: number; stdout: string; stderr: string; result: any };
 function budget(args: string[]): Promise<Out> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url, ...extraEnv };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url, ...extraEnv };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     // a fake evm RPC: the copy's Base Sepolia table names it twice, as two operators
@@ -84,7 +84,7 @@ function budget(args: string[]): Promise<Out> {
 
 /** Runs the CLI until its APPROVE line (then stops it) or its end; a timeout fails the test instead of hanging it. */
 const untilApproveOrEnd = (args: string[], ms = 30_000) => new Promise<{ code: number | null; approved: boolean; result: any; stdout: string }>((done, fail) => {
-  const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
+  const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
   delete env.SUPERSTABLES_SITE;
   delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
   const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });

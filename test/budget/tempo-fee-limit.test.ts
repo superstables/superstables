@@ -157,7 +157,7 @@ async function run(setup: Setup, name: string, script = "budget/tempo/buy.ts", e
   const child = await guardedNode(script === "budget/cli.mjs"
     ? [script, "buy", "--rail", "tempo", "--url", seller.url, "--max", "0.01", "--op", name]
     : ["--import=tsx", script, "--url", seller.url, ...extra, "--op", name], {
-    HOME: home, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, SUPERSTABLES_NETWORK_GUARD_LOG: guardLog,
+    SUPERSTABLES_TEST_RPC_WAIT_MS: "0", HOME: home, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, SUPERSTABLES_NETWORK_GUARD_LOG: guardLog,
   });
   const line = child.output.split("\n").filter((l) => l.startsWith("RESULT ")).pop();
   const result = line ? JSON.parse(line.slice(7)) : null;

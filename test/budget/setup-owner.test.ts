@@ -44,7 +44,7 @@ afterEach(async () => {
 
 function budget(args: string[]): Promise<{ code: number; stdout: string; stderr: string; result: any }> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
@@ -346,7 +346,7 @@ describe("revoke while the owner files disagree", () => {
       write(r.agentFile, r.agentText(r.C));
       write(r.publicFile, r.publicText(r.A), 0o644);
       const out = await new Promise<{ code: number; stdout: string }>((done, fail) => {
-        const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
+        const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
         const child = spawn(resolve(ROOT, "node_modules/.bin/tsx"), [resolve(ROOT, "budget", r.name, "revokeBudget.ts"), "--no-open"], { cwd: resolve(ROOT, "budget", r.name), env });
         let stdout = "";
         child.stdout.on("data", (c) => (stdout += String(c)));
@@ -363,7 +363,7 @@ describe("revoke while the owner files disagree", () => {
 describe("revoke never waits on the agent key file", () => {
   /** Runs the CLI until its APPROVE line (then stops it) or its end; a timeout fails the test instead of hanging it. */
   const untilApproveOrEnd = (args: string[], ms = 30_000) => new Promise<{ code: number | null; approved: boolean; result: any; stdout: string }>((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });

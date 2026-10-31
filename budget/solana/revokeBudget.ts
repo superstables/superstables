@@ -21,9 +21,10 @@
 // npx tsx budget/solana/revokeBudget.ts [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 revoked (or the owner has no USDC account: nothing sent, revoked null), 1 failed on chain, never landed, or a delegate still reads, 3 refused (the
 // owner rejected or the link expired, no SOL for the fee), 5 unknown (read the chain).
+import { rpcPause } from "../rpc-pause.mjs";
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -143,7 +144,7 @@ if (OWNER_KEY_FILE) {
 
 let after = await retryRead(() => getAccount(conn, ata));
 for (let i = 0; i < 8 && (after.delegate || after.delegatedAmount !== 0n); i++) {
-  await sleep(2000);
+  await rpcPause(2000);
   after = await retryRead(() => getAccount(conn, ata));
 }
 console.log(`After: delegate=${after.delegate?.toBase58() ?? "none"} remaining=${formatUnits(after.delegatedAmount)} USDC`);
