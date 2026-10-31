@@ -512,6 +512,7 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
 let home: string;
 let rpc: TestServer | undefined;
 let tree: EndpointTree;
+let sourceRail = false;
 const chain = { approved: false };
 /** Every call the fake chain answered, in order. */
 const rpcCalls: { method: string; params: any[] }[] = [];
@@ -524,7 +525,7 @@ function start(args: string[], extraEnv: Record<string, string> = {}, terminal?:
   for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
   tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }] });
   const preload = terminal === undefined ? [] : ["--import", fileURLToPath(new URL("../helpers/budget-owner-terminal.mjs", import.meta.url))];
-  const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+  const child = spawn(process.execPath, [...preload, resolve(sourceRail ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env });
   if (terminal !== undefined) child.stdin!.end(terminal);
   const done = new Promise<Run>((ok, fail) => {
     let stdout = "";
@@ -726,7 +727,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
       const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: arc.url };
       for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
       const out = await new Promise<{ code: number; stderr: string }>((ok) => {
-        const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...grantArgs, "--chain", "arc-testnet", "--sign-only"], { cwd: tree.root, env });
+        const child = spawn(process.execPath, [resolve(sourceRail ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...grantArgs, "--chain", "arc-testnet", "--sign-only"], { cwd: tree.root, env });
         let stderr = "";
         child.stderr!.on("data", (c) => (stderr += String(c)));
         child.once("close", (code) => ok({ code: code ?? 0, stderr }));
@@ -1202,8 +1203,8 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     {
       path: "the check crashes after the request was kept",
       fault: () => ({
-        on: () => { script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
-        off: () => writeFileSync(railScript(), script),
+        on: () => { sourceRail = true; script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
+        off: () => { writeFileSync(railScript(), script); sourceRail = false; },
         local: /injected crash after the write-ahead/,
       }),
     },

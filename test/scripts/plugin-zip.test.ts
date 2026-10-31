@@ -5,8 +5,9 @@ import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
 import { createHash } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
+import { checkSkill, OTHER_FILES, SKILL_FILE } from "../../scripts/connector-contract-check.mjs";
 import { buildPluginZips } from "../../scripts/plugin-zip.mjs";
-import { CLI_FORMS_WITH_TOOLS, CONNECTOR_TOOLS, LOCAL_ONLY, PLUGIN_ZIPS, zipName } from "../../scripts/plugin-data.mjs";
+import { CLI_FORMS_WITH_TOOLS, LOCAL_ONLY, PLUGIN_ZIPS, zipName } from "../../scripts/plugin-data.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const out = mkdtempSync(join(tmpdir(), "plugin-zip-"));
@@ -14,6 +15,10 @@ afterAll(() => rmSync(out, { recursive: true, force: true }));
 const { version } = JSON.parse(readFileSync(join(repo, "package.json"), "utf8"));
 const text = (file: string) => readFileSync(join(repo, file), "utf8");
 const pluginSkill = text("plugin/skills/superstables/SKILL.md");
+// The server's tools and waiting rule, a generated copy from the connector's code (test/scripts/connector-contract.json).
+// When this file is out of date the server changed: regenerate it there (`npm run contract`) and copy it here.
+const contract = JSON.parse(text("test/scripts/connector-contract.json")) as { tools: string[]; waits: Record<string, number>; purchaseWait: { tool: string; param: string; seconds: number } };
+const CONNECTOR_TOOLS = contract.tools;
 const cliSkill = text("skills/superstables-payments/SKILL.md");
 
 describe("plugin zips", () => {
@@ -60,14 +65,9 @@ describe("plugin zips", () => {
 });
 
 describe("connector and local operations", () => {
-  it("names every connector tool in the plugin skill", () => {
-    for (const tool of CONNECTOR_TOOLS) expect(pluginSkill, tool).toContain(`\`${tool}\``);
-  });
-
-  it("names no connector tool the server does not have", () => {
-    const named = new Set([...pluginSkill.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((m) => m[1]));
-    const toolLike = [...named].filter((n) => n !== "wait_seconds" && /^(get|find|request|submit|wait|list|remove|preflight)_/.test(n));
-    for (const n of toolLike) expect(CONNECTOR_TOOLS, n).toContain(n);
+  it("matches the server: names every tool it serves and none it lacks, states its waiting rule, says nothing it contradicts", () => {
+    const read = (path: string) => ({ path, text: text(path) });
+    expect(checkSkill(contract, read(SKILL_FILE), OTHER_FILES.map(read))).toEqual([]);
   });
 
   it("keeps the local-only operations on the CLI and says so", () => {
@@ -88,19 +88,26 @@ describe("connector and local operations", () => {
     }
   });
 
-  it("no longer says the connector lacks a tool", () => {
-    for (const file of ["plugin/skills/superstables/SKILL.md", "plugin/skills/superstables/references/cli.md", "skills/superstables-payments/SKILL.md", "skills/superstables-payments/references/budget.md"]) {
-      expect(text(file)).not.toMatch(/connector has no tool/);
+  it("gives install commands, in the README and the skill, that name the marketplace and plugin in .claude-plugin/marketplace.json", () => {
+    const market = JSON.parse(text(".claude-plugin/marketplace.json")) as { name: string; plugins: { name: string }[] };
+    const ref = `${market.plugins[0].name}@${market.name}`;
+    const readme = text("README.md");
+    const lines = [...readme.matchAll(/(?:claude plugin install|codex plugin add) (\S+?)(?=`|\s|$)/g)];
+    expect(lines.length, "README.md has no plugin install command").toBeGreaterThanOrEqual(2);
+    for (const [line, got] of lines) expect(got, `README.md: "${line}" must name ${ref}, from .claude-plugin/marketplace.json`).toBe(ref);
+    for (const file of ["plugin/skills/superstables/SKILL.md", "plugin/skills/superstables/references/cli.md"]) {
+      for (const [line, got] of text(file).matchAll(/(?:claude plugin install|codex plugin add) (\S+?)(?=`|\s|$)/g)) expect(got, `${file}: "${line}"`).toBe(ref);
     }
   });
+});
 
-  it("states the server's waiting rule", () => {
-    expect(pluginSkill).toMatch(/`get_purchase_status` with `wait_seconds` 25/);
-    expect(pluginSkill).toMatch(/only when the turn\s+ends|shows your reply only when the turn\s+ends/);
-    expect(pluginSkill).not.toMatch(/Do not approve for them or poll/);
-  });
-
-  it("does not use the word recommended in the skill or README", () => {
-    for (const file of ["plugin/skills/superstables/SKILL.md", "README.md"]) expect(text(file), file).not.toMatch(/recommended/i);
+describe("the contract check catches a changed waiting rule", () => {
+  const skill = text("plugin/skills/superstables/SKILL.md");
+  const run = (t: string) => checkSkill(contract, { path: "SKILL.md", text: t }, []);
+  it("fails when same-turn polling is replaced by ending the turn, wrapped or not", () => {
+    const bad = skill.replace(/Then, in the same turn, call\s+`get_purchase_status`[\s\S]*?Report what it establishes\./, "End your turn now. Never poll for purchase approval.");
+    expect(bad).not.toBe(skill);
+    expect(run(bad).length).toBeGreaterThan(0);
+    expect(run(`${skill}\nDo not approve for them or\npoll while waiting.`).length).toBeGreaterThan(0);
   });
 });

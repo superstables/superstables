@@ -9,8 +9,9 @@
 // npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 sent, 1 failed on chain or never landed, 2 bad flags, 3 refused (too little SOL, the owner rejected or the link
 // expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
+import { rpcPause } from "../rpc-pause.mjs";
 import { SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead, sleep } from "./lib.mjs";
+import { CLUSTER_NEXT, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort, finalizedOf, LANDED_SOLANA_FUND } from "./owner.ts";
@@ -103,7 +104,7 @@ if (OWNER_KEY_FILE) {
 
 let after = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 for (let i = 0; i < 8 && after < agentHas + amount; i++) {
-  await sleep(2000);
+  await rpcPause(2000);
   after = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 }
 console.log(`agent ${sol(after)} SOL${delta !== null ? ` (this transaction added ${sol(delta)})` : ""}. explorer: ${explorerTx(sig)}`);

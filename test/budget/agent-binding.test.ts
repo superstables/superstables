@@ -330,7 +330,7 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     Object.assign(env, extraEnv);
     tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }] });
-    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => {

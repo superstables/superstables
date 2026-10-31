@@ -53,7 +53,7 @@ const track = <T extends { close(): Promise<void> }>(s: T): T => { toClose.push(
 type Out = { code: number; stdout: string; stderr: string; result: any };
 function spawnIn(argv: string[], env: Record<string, string>): Promise<Out> {
   return new Promise((done, fail) => {
-    const all: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, ...env };
+    const all: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, ...env };
     delete all.SUPERSTABLES_SITE;
     delete all.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(argv[0], argv.slice(1), { cwd: tree.root, env: all });

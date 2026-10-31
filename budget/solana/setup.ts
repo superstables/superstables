@@ -20,11 +20,12 @@
 // signature from the chain with fund-agent's and grant's checks before it reports it.
 // npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]] [--timeout <s>] [--no-open]
 //                                [--owner-key-file <path>] [--key-store file|os-keychain]
+import { rpcPause } from "../rpc-pause.mjs";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
@@ -521,7 +522,7 @@ async function finishBundle(): Promise<never> {
           after.delegatedAmount !== CAP && `the delegated amount is ${formatUnits(after.delegatedAmount)} USDC, not ${formatUnits(CAP!)}`,
         ].filter(Boolean) as string[]);
         for (let i = 0; i < 8 && problems().length; i++) {
-          await sleep(2000);
+          await rpcPause(2000);
           after = await retryRead(() => getAccount(conn, ata)).catch(() => after);
         }
         if (problems().length) { report("mismatch", `the chain does not show the planned budget: ${problems().join("; ")}`); continue; }
