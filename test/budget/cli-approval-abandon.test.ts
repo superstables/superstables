@@ -14,6 +14,7 @@ import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { evmOwner, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import type { TestServer } from "../helpers/servers.js";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const OWNER = evmOwner("22");
@@ -53,17 +54,17 @@ function budget(args: string[], extraEnv: Record<string, string> = {}, terminal?
     const preload = terminal === undefined ? [] : ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs")];
     const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
     // `beforeInput` runs when the command has shown its confirmation prompt and before the answer is typed
-    if (beforeInput === undefined) child.stdin.end(terminal ?? "");
+    if (beforeInput === undefined) endStdin(child, terminal ?? "");
     else {
       let seen = "";
       let typed = false;
-      const answer = () => { if (!typed) { typed = true; beforeInput(); child.stdin.end(terminal ?? ""); } };
+      const answer = () => { if (!typed) { typed = true; beforeInput(); endStdin(child, terminal ?? ""); } };
       child.stderr.on("data", (c) => {
         seen += String(c);
         if (/abandon exactly:/.test(seen)) answer();
       });
       // a prompt that never comes must fail the test quickly, not hold stdin open until the test's own timeout
-      setTimeout(() => { if (!typed) child.stdin.end(""); }, 30_000).unref();
+      setTimeout(() => { if (!typed) endStdin(child); }, 30_000).unref();
     }
     let stdout = "";
     let stderr = "";

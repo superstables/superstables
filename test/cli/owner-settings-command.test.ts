@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { applyChange } from "../../src/cli/owner-settings.js";
 import { defaultOwnerSettings, settingsPayload, settingsSignedAt, signatureRecord } from "../../src/core/owner-settings.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const MAIN = resolve(ROOT, "src/cli/main.ts");
@@ -29,7 +30,7 @@ function cli(args: string[], h: string, opts: { stdin?: string; terminal?: boole
     child.stderr.on("data", (c) => (stderr += String(c)));
     child.once("error", fail);
     child.once("close", (code) => done({ code: code ?? 0, stdout, stderr }));
-    child.stdin.end(opts.stdin ?? "");
+    endStdin(child, opts.stdin ?? "");
   });
 }
 
