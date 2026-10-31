@@ -100,3 +100,14 @@ describe("connector and local operations", () => {
     }
   });
 });
+
+describe("the contract check catches a changed waiting rule", () => {
+  const skill = text("plugin/skills/superstables/SKILL.md");
+  const run = (t: string) => checkSkill(contract, { path: "SKILL.md", text: t }, []);
+  it("fails when same-turn polling is replaced by ending the turn, wrapped or not", () => {
+    const bad = skill.replace(/Then, in the same turn, call\s+`get_purchase_status`[\s\S]*?Report what it establishes\./, "End your turn now. Never poll for purchase approval.");
+    expect(bad).not.toBe(skill);
+    expect(run(bad).length).toBeGreaterThan(0);
+    expect(run(`${skill}\nDo not approve for them or\npoll while waiting.`).length).toBeGreaterThan(0);
+  });
+});

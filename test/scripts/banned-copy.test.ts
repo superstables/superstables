@@ -25,4 +25,10 @@ describe("banned copy", () => {
     expect(findBanned(line(ok), "2026-12-02")[0].message).toMatch(/expired on 2026-12-01/);
     expect(findBanned(line("copy-ok(recommended): reason"), "2026-11-01")).toHaveLength(1);
   });
+
+  it("rejects impossible or future dates in an exception", () => {
+    const line = (e: string, a: string) => [{ path: "a.md", text: `recommended // copy-ok(recommended): r; expires ${e}; approved by a human, ${a}` }];
+    expect(findBanned(line("9999-99-99", "9999-99-99"), "2026-11-01")).toHaveLength(1);
+    expect(findBanned(line("2026-12-01", "2026-12-01"), "2026-11-01")).toHaveLength(1);
+  });
 });

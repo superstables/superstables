@@ -17,11 +17,15 @@ export const OTHER_FILES = ["plugin/skills/superstables/references/cli.md", "ski
 const FORBIDDEN = [
   { pattern: /connector has no tool/i, why: "the connector has the tool; send the person to it" },
   { pattern: /Do not approve for (?:them|the user) or poll/i, why: "the server tells the agent to keep calling get_purchase_status with wait_seconds in the same turn" },
+  { pattern: /\b(?:never|do not|don't) poll/i, skillOnly: true, why: "the server tells the agent to keep calling get_purchase_status with wait_seconds in the same turn" },
 ];
 const TOOL_LIKE = /^(get|find|request|submit|wait|list|remove|preflight)_/;
 
 /** Problems, each naming the file and the fix. `files` is { path, text } for the skill and the other files. */
-export function checkSkill(contract, skill, others = []) {
+export function checkSkill(contract, skillIn, others = []) {
+  const flat = (f) => ({ path: f.path, text: f.text.replace(/\s+/g, " ") });
+  const skill = flat(skillIn);
+  others = others.map(flat);
   const problems = [];
   const named = new Set([...skill.text.matchAll(/`([a-z]+(?:_[a-z]+)+)`/g)].map((m) => m[1]));
   for (const tool of contract.tools) {
@@ -33,9 +37,12 @@ export function checkSkill(contract, skill, others = []) {
   for (const [tool, max] of Object.entries(contract.waits)) {
     if (!new RegExp(`\`${tool}\` with \`wait_seconds\` ${max}\\b`).test(skill.text)) problems.push(`${skill.path} must say to call \`${tool}\` with \`wait_seconds\` ${max}, as the server's instructions do.`);
   }
-  if (!/only when the turn\s+ends|shows your reply only when the turn\s+ends/.test(skill.text)) problems.push(`${skill.path} must say to end the turn only if the app shows the reply only when the turn ends (the server's waiting rule).`);
+  const { tool, param, seconds } = contract.purchaseWait;
+  if (!new RegExp(`in the same turn, call \`${tool}\` with \`${param}\` ${seconds}, and keep calling it while`).test(skill.text)) problems.push(`${skill.path} must say, after request_purchase, "in the same turn, call \`${tool}\` with \`${param}\` ${seconds}, and keep calling it while ..." (the server's waiting rule).`);
+  if (!/If your app shows your reply only when the turn ends, end your turn/.test(skill.text)) problems.push(`${skill.path} must say to end the turn only "If your app shows your reply only when the turn ends" (the server's waiting rule).`);
   for (const file of [skill, ...others]) {
-    for (const { pattern, why } of FORBIDDEN) {
+    for (const { pattern, why, skillOnly } of FORBIDDEN) {
+      if (skillOnly && file !== skill) continue;
       const m = pattern.exec(file.text);
       if (m) problems.push(`${file.path} says "${m[0]}": ${why}.`);
     }

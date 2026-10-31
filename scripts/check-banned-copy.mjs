@@ -27,7 +27,8 @@ export function findBanned(files, today = new Date().toISOString().slice(0, 10))
       for (const { id, pattern, fix } of BANNED) {
         if (!pattern.test(line)) continue;
         const ok = OK(id).exec(line);
-        if (ok && ok[2] >= today) continue;
+        const real = (d) => !Number.isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d;
+        if (ok && real(ok[2]) && real(ok[3]) && ok[2] >= today && ok[3] <= today) continue;
         found.push({ file: path, line: i + 1, id, message: `${path}:${i + 1} says "${pattern.exec(line)[0]}". ${fix}${ok ? ` Its copy-ok exception expired on ${ok[2]}.` : ` An exception needs a copy-ok(${id}) marker on that line: reason, expiry date, human approval.`}` });
       }
     });
