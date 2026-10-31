@@ -4,6 +4,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Challenge } from "mppx";
 import type { Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -21,6 +22,7 @@ const AGENT = privateKeyToAccount(KEY).address;
 const hex = (n: bigint | number) => `0x${BigInt(n).toString(16)}`;
 const nowS = () => Math.floor(Date.now() / 1000);
 const PRICE = 10_000n;
+const SKIP_WAIT = fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url));
 
 const { feeOf } = await import(new URL("../../budget/tempo/lib/chain.ts", import.meta.url).href);
 const { failedNext, feeSentence, notFoundFee, notFoundNext } = await import(new URL("../../budget/tempo/lib/words.ts", import.meta.url).href);
@@ -161,7 +163,7 @@ async function run(setup: Setup, name: string, script = "budget/tempo/buy.ts", e
     ? [join(tree.bundle(), "cli.mjs"), "buy", "--rail", "tempo", "--url", seller.url, "--max", "0.01", "--op", name]
     : [join(tree.bundle(), "tempo/buy.mjs"), "--url", seller.url, ...extra, "--op", name], {
     SUPERSTABLES_TEST_RPC_WAIT_MS: "0", HOME: home, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, SUPERSTABLES_NETWORK_GUARD_LOG: guardLog,
-  });
+  }, undefined, [SKIP_WAIT]);
   const line = child.output.split("\n").filter((l) => l.startsWith("RESULT ")).pop();
   const result = line ? JSON.parse(line.slice(7)) : null;
   return { child, result, sends: calls.filter((c) => c.startsWith("eth_sendRawTransaction")), feeEstimates, guard: readFileSync(guardLog, "utf8") };
