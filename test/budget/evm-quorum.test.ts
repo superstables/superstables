@@ -1,7 +1,7 @@
 // Budget EVM verdicts need agreement, and every RPC read checks its chain. The first half runs the real `budget` CLI against
 // in-memory chains (test/helpers/fake-evm.ts) on this computer; the second half runs reconcile and the authorization checks
 // in-process against two chains over one state (two operators), one of which lies. Loopback only.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { keccak256, toBytes, pad, toHex, type Hex } from "viem";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 import { ARC_USDC, AGENT, OWNER, makeChain, makeHome, startSeller, usdc, type FakeEvm, type FakeMirror } from "../helpers/fake-evm.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -19,10 +20,24 @@ const cleanups: (() => unknown)[] = [];
 afterAll(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
 
 type Run = { code: number | null; stdout: string; stderr: string; result: any };
-/** The dispatcher, or one rail script of the same tree (`script`, run with tsx). */
+const rootBundle = budgetBundle();
+const treeBundles = new Map<string, { table: string; dir: string }>();
+/** The built bundle of a tree: the repo's, or a copy's, rebuilt when its endpoint table changed. */
+function bundleOf(tree: string): string {
+  if (tree === ROOT) return rootBundle;
+  const table = readFileSync(join(tree, "src/core/rpc-endpoints.mjs"), "utf8");
+  const have = treeBundles.get(tree);
+  if (have?.table === table) return have.dir;
+  const dir = join(tree, "dist", "budget");
+  execFileSync(process.execPath, [join(tree, "scripts/budget-build.mjs"), "--outdir", dir], { cwd: tree, stdio: ["ignore", "ignore", "inherit"] });
+  treeBundles.set(tree, { table, dir });
+  return dir;
+}
+
+/** The dispatcher, or one rail script of the same tree (`script`), both from its built bundle. */
 function run(tree: string, argv: string[], env: Record<string, string>, script?: string): Promise<Run> {
   return new Promise((done) => {
-    const [cmd, args] = script ? [join(tree, "node_modules/.bin/tsx"), [join(tree, script), ...argv]] : [process.execPath, [join(tree, "budget/cli.mjs"), ...argv]];
+    const [cmd, args] = script ? [process.execPath, [join(bundleOf(tree), script.replace(/^budget\//, "").replace(/\.ts$/, ".mjs")), ...argv]] : [process.execPath, [join(bundleOf(tree), "cli.mjs"), ...argv]];
     const child = spawn(cmd, args, { cwd: tree, env: { ...process.env, B4_CHAIN: "", ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
@@ -193,8 +208,8 @@ describe("every command that reads checks the chain id first, strictly (the real
 
 describe("status: an allowance of 0 is a revoke only when the endpoints agree (a copy of the client with two endpoints)", () => {
   const tree = mkdtempSync(join(scratch, "evm-quorum-tree-"));
-  for (const dir of ["budget", "src"]) cpSync(join(ROOT, dir), join(tree, dir), { recursive: true });
-  for (const file of ["package.json", "tsconfig.json"]) cpSync(join(ROOT, file), join(tree, file));
+  for (const dir of ["budget", "src", "scripts"]) cpSync(join(ROOT, dir), join(tree, dir), { recursive: true });
+  for (const file of ["package.json", "package-lock.json", "tsconfig.json"]) cpSync(join(ROOT, file), join(tree, file));
   symlinkSync(join(ROOT, "node_modules"), join(tree, "node_modules"), "dir");
   cleanups.push(() => rmSync(tree, { recursive: true, force: true }));
   const table = join(tree, "src/core/rpc-endpoints.mjs");
