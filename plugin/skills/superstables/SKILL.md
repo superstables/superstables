@@ -71,7 +71,7 @@ each client command out in full, as shown in `references/cli.md`. Do not use a
 shell variable or alias: these can prevent the host from checking the command
 before it runs.
 
-In a chat app (Claude, ChatGPT, Grok or any other hosted app), don't run
+In a chat app (Claude, ChatGPT, Grok Bot or any other hosted app), don't run
 commands to check what is available: decline budget set-up, grant, fund, budget
 buy and the CLI's `pay` straight away, because each needs a signature on the
 owner's machine. Say so and point the owner to Claude Code, Codex or the CLI there. The

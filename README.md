@@ -8,6 +8,7 @@ With Budgets, you approve an amount in your wallet and the agent can spend withi
 ## Get started with your agent
 
 You need Node 22+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
+In a chat app, the plugin and the connector need none of these, but they can't set up or spend a budget.
 Payments also need a compatible wallet and test funds, as described in the guides below.
 
 ### The plugin
@@ -19,7 +20,7 @@ From the next release, each GitHub Release carries one plugin zip per app, `supe
 | --- | --- | --- |
 | Claude Code | `superstables-plugin-claude-code-<version>.zip` | Unzip it, then `claude plugin marketplace add <folder>` and `claude plugin install superstables@superstables` |
 | Codex | `superstables-plugin-codex-<version>.zip` | Unzip it, then `codex plugin marketplace add <folder>` and `codex plugin add superstables@superstables` |
-| Claude apps | `superstables-plugin-claude-apps-<version>.zip` | Add the zip as a plugin in the app's plugin settings |
+| Claude apps | `superstables-plugin-claude-apps-<version>.zip` | Upload the zip in Customize › Plugins |
 | Cursor | `superstables-plugin-cursor-<version>.zip` | Unzip it into `~/.cursor/plugins/local/superstables`, then reload the window |
 
 In Claude Code or Codex you can also add this repository as the marketplace:
@@ -36,7 +37,7 @@ codex plugin add superstables@superstables
 
 If you previously added a local folder in Claude Code and see "its source doesn't match", run `claude plugin marketplace remove superstables`. This also uninstalls plugins from that marketplace. Then repeat the two Claude Code commands above.
 
-Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The plugin uses the website for everything that needs no key on your machine, and the CLI (run with `npx`) only for what needs a signature from it. If you decline to connect, the CLI does it all.
+Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The plugin uses the connector where a tool is available, and the CLI (run with `npx` at the plugin's pinned `@superstables/client` version) for operations that need your machine. In a coding agent, the CLI also handles operations when connector tools are missing or you decline to connect.
 
 ### Or the connector
 
