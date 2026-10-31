@@ -16,6 +16,7 @@ import { TESTNET_LINE } from "../../budget/once.mjs";
 /** The testnet line as a regular expression fragment: the product sets its words (budget/once.mjs). */
 const TESTNET = TESTNET_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const SKIP_WAITS = fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
 const OWNER = evmOwner("22");
@@ -61,6 +62,10 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     });
   });
 }
+
+/** Env that skips the worker's poll gaps (helpers/skip-waits.mjs), but only once the test has created `skipFlag()`. */
+const skipFlag = () => join(home, "skip-poll-gaps");
+const skipPollGaps = () => ({ NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${SKIP_WAITS}`].filter(Boolean).join(" "), SUPERSTABLES_TEST_SKIP_WAITS_AFTER: skipFlag() });
 
 /** The Approval(owner, spender, value) log a token's approve leaves in its receipt: the effect the client checks for. */
 const approvalLog = (token: string, owner: string, spender: string, value: bigint, blockNumber: string) => ({
@@ -1131,12 +1136,13 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
 
   it("stops waiting after the link: the grant the wallet was not asked for is withdrawn on the site before it is called unsent", async () => {
     await prepare();
-    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"], skipPollGaps());
     expect(first.code, first.stderr).toBe(0);
     const r = site.requests[0];
     Object.assign(r, { state: "linked", owner: OWNER });
     Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
     Object.assign(r.steps![1], { state: "awaiting_owner" });
+    writeFileSync(skipFlag(), "");
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(r.cancels).toBe(1);
     expect(r.steps![1].state).toBe("cancelled");
@@ -1147,12 +1153,13 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
 
   it("stops waiting after the link and can't withdraw the steps: they are unknown (exit 5), never nothing sent", async () => {
     await prepare();
-    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"], skipPollGaps());
     expect(first.code, first.stderr).toBe(0);
     site.cancelFails = true;
     const r = site.requests[0];
     Object.assign(r, { state: "linked", owner: OWNER });
     Object.assign(r.steps![0], { state: "awaiting_owner" });
+    writeFileSync(skipFlag(), "");
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "150"]);
     expect(r.cancels).toBe(1);
     expect(done.code, done.stderr).toBe(5);
