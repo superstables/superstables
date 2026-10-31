@@ -30,9 +30,9 @@ With every approval link, `request_purchase` and `submit_budget_request` return
 a line naming the request account's wallets by their last four characters, or
 saying it has no wallet. Show that line with the link. If that is not the account
 the owner meant, tell them not to approve and stop to resolve the mismatch. For
-a purchase, tell them to sign the connector in to the intended account, then
-request again. In Codex, start a new session after they sign in, because a
-running session keeps the old account.
+a purchase, tell them to sign the connector in to the intended account and, in
+Codex, start a new session because the running session keeps the old token. Then
+request the purchase again.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
