@@ -4,6 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
+import { rpcPause } from "../rpc-pause.mjs";
 import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
@@ -69,14 +70,7 @@ export const PUBLIC_ENV = publicFile("evm", CFG.key);
 export const OPS_DIR = opsDir("evm", CFG.key);
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/**
- * A pause that lets a public RPC node, or a seller's facilitator, see what was just sent. The tests' local fake chains
- * see everything at once: they set SUPERSTABLES_TEST_RPC_WAIT_MS=0, which replaces the length of every such pause.
- */
-export const rpcPause = (ms: number) => {
-  const set = process.env.SUPERSTABLES_TEST_RPC_WAIT_MS ? Number(process.env.SUPERSTABLES_TEST_RPC_WAIT_MS) : NaN;
-  return sleep(Number.isFinite(set) && set >= 0 ? set : ms);
-};
+export { rpcPause } from "../rpc-pause.mjs";
 export const tx = (h: string) => `${EXPLORER}/tx/${h}`;
 export const usdc = (v: bigint) => formatUnits(v, USDC_DECIMALS);
 /** Native gas token amount (Arc: USDC with 18 decimals; Base: ETH). */

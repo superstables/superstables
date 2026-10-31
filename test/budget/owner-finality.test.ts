@@ -41,7 +41,7 @@ const homeDir = (prefix: string) => { const h = mkdtempSync(join(scratch, prefix
 type Run = { code: number | null; stdout: string; stderr: string; result: any };
 function cli(args: string[], env: Record<string, string>): Promise<Run> {
   return new Promise((done) => {
-    const e: Record<string, string | undefined> = { ...process.env, B4_CHAIN: "", ...env };
+    const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env: e });
@@ -65,7 +65,7 @@ function script(argv: string[], env: Record<string, string>): Promise<{ code: nu
   return new Promise((done) => {
     const [first, ...rest] = argv;
     const isNode = first.endsWith(".mjs");
-    const child = spawn(isNode ? process.execPath : first, isNode ? argv : rest, { cwd: tree.root, env: { ...process.env, B4_CHAIN: "", ...env } });
+    const child = spawn(isNode ? process.execPath : first, isNode ? argv : rest, { cwd: tree.root, env: { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (x) => (stdout += x));
     child.stderr.on("data", (x) => (stderr += x));
