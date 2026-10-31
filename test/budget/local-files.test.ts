@@ -1,7 +1,8 @@
 // Small things about the budget's own files: operation ids carry 64 random bits on every rail, and `budget doctor` flags an
-// old owner key file that other users on this machine can read.
-import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+// old owner key file.
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,6 @@ const CLI = resolve(ROOT, "budget/cli.mjs");
 const OWNER = "0x1563915e194D8CfBA1943570603F7606A3115508";
 const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
 const KEY = `0x${"11".repeat(32)}`;
-const OWNER_KEY = `0x${"22".repeat(32)}`;
 
 let home: string;
 beforeEach(() => {
@@ -95,19 +95,59 @@ describe("operation ids", () => {
 
 describe("budget doctor and a leftover owner key file", () => {
   const ownerFile = () => join(home, "keys", "budget", "evm-owner.env");
+  const generated = () => `0x${randomBytes(32).toString("hex")}`;
+  const strace = spawnSync("strace", ["-V"]).status === 0;
 
-  it("fails the check when other users can read it", async () => {
-    writeFileSync(ownerFile(), `B4_OWNER_KEY=${OWNER_KEY}\n`, { mode: 0o644 });
-    chmodSync(ownerFile(), 0o644);
+  it("fails the check at mode 600 and says what to do, without printing the key", async () => {
+    const secret = generated();
+    writeFileSync(ownerFile(), `B4_OWNER_KEY=${secret}\n`, { mode: 0o600 });
     const r = await budget(["doctor", "--rail", "evm"]);
-    expect(r.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env: mode is 644/);
-    expect(r.stderr).toMatch(/an owner key file is on this machine/);
+    expect(r.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env: .*600/);
+    expect(r.stderr).toMatch(/do not open it/i);
+    expect(r.stderr).toMatch(/tell the owner/i);
+    expect(r.stderr).not.toContain(secret);
+    expect(r.stdout).not.toContain(secret);
   }, 60_000);
 
-  it("only prints the note when it is 0600", async () => {
-    writeFileSync(ownerFile(), `B4_OWNER_KEY=${OWNER_KEY}\n`, { mode: 0o600 });
+  it("says when other users can read it", async () => {
+    writeFileSync(ownerFile(), `B4_OWNER_KEY=${generated()}\n`, { mode: 0o644 });
+    chmodSync(ownerFile(), 0o644);
     const r = await budget(["doctor", "--rail", "evm"]);
-    expect(r.stderr).not.toMatch(/FAIL\s+owner key file/);
-    expect(r.stderr).toMatch(/an owner key file is on this machine/);
+    expect(r.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env: .*644.*other users on this machine can read it/);
+  }, 60_000);
+
+  it("does not claim that others can read it when they can only write it", async () => {
+    writeFileSync(ownerFile(), `B4_OWNER_KEY=${generated()}\n`, { mode: 0o600 });
+    chmodSync(ownerFile(), 0o620);
+    const r = await budget(["doctor", "--rail", "evm"]);
+    expect(r.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env: mode 620/);
+    expect(r.stderr).not.toMatch(/can read it/);
+  }, 60_000);
+
+  it("never reads it: a file nobody can read does not stop doctor, and a pipe in its place does not hang it", async () => {
+    writeFileSync(ownerFile(), `B4_OWNER_KEY=${generated()}\n`, { mode: 0o600 });
+    chmodSync(ownerFile(), 0o000);
+    const unreadable = await budget(["doctor", "--rail", "evm"]);
+    expect(unreadable.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env/);
+    expect(unreadable.stderr).toMatch(/agent key matches the agent address/);
+    rmSync(ownerFile());
+    execFileSync("mkfifo", [ownerFile()]);
+    const pipe = await budget(["doctor", "--rail", "evm"]);
+    expect(pipe.stderr).toMatch(/FAIL\s+owner key file .*evm-owner\.env: .*not a regular file/);
+  }, 60_000);
+
+  it.skipIf(!strace)("never opens it", async () => {
+    writeFileSync(ownerFile(), `B4_OWNER_KEY=${generated()}\n`, { mode: 0o600 });
+    const trace = join(home, "trace.txt");
+    const env = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: "http://127.0.0.1:9" };
+    spawnSync("strace", ["-f", "-qq", "-e", "trace=open,openat,openat2", "-o", trace, process.execPath, CLI, "doctor", "--rail", "evm"], { cwd: ROOT, env });
+    const opened = readFileSync(trace, "utf8");
+    expect(opened).toContain("evm-agent.env");
+    expect(opened).not.toContain("evm-owner.env");
+  }, 60_000);
+
+  it("says nothing when there is no owner key file", async () => {
+    const r = await budget(["doctor", "--rail", "evm"]);
+    expect(r.stderr).not.toMatch(/owner key file/);
   }, 60_000);
 });
