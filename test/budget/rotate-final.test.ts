@@ -7,6 +7,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Keypair } from "@solana/web3.js";
 import bs58 from "bs58";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -21,6 +22,7 @@ afterAll(() => tree.close());
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
 
+const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
 const scratch = join(homedir(), ".cache", "superstables-tests");
 mkdirSync(scratch, { recursive: true });
 const homeDir = (prefix: string) => { const h = mkdtempSync(join(scratch, prefix)); cleanups.push(() => rmSync(h, { recursive: true, force: true })); return h; };
@@ -28,7 +30,7 @@ const homeDir = (prefix: string) => { const h = mkdtempSync(join(scratch, prefix
 type Out = { code: number | null; stdout: string; stderr: string; result: any };
 function budget(args: string[], env: Record<string, string>): Promise<Out> {
   return new Promise((done) => {
-    const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
+    const e: Record<string, string | undefined> = { ...process.env, NODE_OPTIONS, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env: e });
@@ -266,7 +268,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     const c = await solCase();
     c.solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
     c.solana.confirmationStatus = "confirmed";
-    const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
+    const env = { ...process.env, NODE_OPTIONS, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const sweep = (args: string[]) => new Promise<Out>((done) => {
       const child = spawn(process.execPath, [resolve(tree.bundle(), "solana/rotate.mjs"), ...args], { cwd: tree.root, env });
       let stdout = "", stderr = "";
@@ -302,7 +304,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     c.solana.overrides = {
       getSignatureStatuses: (params) => ({ context: { slot: c.solana.slot }, value: (params[0] as string[]).map((s) => (s === solSig ? { slot: 1, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: solStatus } : { slot: 1, confirmations: null, err: null, confirmationStatus: usdcStatus })) }),
     };
-    const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
+    const env = { ...process.env, NODE_OPTIONS, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const confirm = () => new Promise<Out>((done) => {
       const child = spawn(process.execPath, [resolve(tree.bundle(), "solana/rotate.mjs"), "--confirm", `${usdcSig},${solSig}`], { cwd: tree.root, env });
       let stdout = "", stderr = "";
