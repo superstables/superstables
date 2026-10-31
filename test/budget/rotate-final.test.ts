@@ -28,7 +28,7 @@ const homeDir = (prefix: string) => { const h = mkdtempSync(join(scratch, prefix
 type Out = { code: number | null; stdout: string; stderr: string; result: any };
 function budget(args: string[], env: Record<string, string>): Promise<Out> {
   return new Promise((done) => {
-    const e: Record<string, string | undefined> = { ...process.env, B4_CHAIN: "", ...env };
+    const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env: e });
@@ -266,7 +266,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     const c = await solCase();
     c.solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: null, delegated: 0n });
     c.solana.confirmationStatus = "confirmed";
-    const env = { ...process.env, SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
+    const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const sweep = (args: string[]) => new Promise<Out>((done) => {
       const child = spawn(process.execPath, [resolve(tree.root, "budget/solana/rotate.mjs"), ...args], { cwd: tree.root, env });
       let stdout = "", stderr = "";
@@ -302,7 +302,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     c.solana.overrides = {
       getSignatureStatuses: (params) => ({ context: { slot: c.solana.slot }, value: (params[0] as string[]).map((s) => (s === solSig ? { slot: 1, confirmations: null, err: { InstructionError: [0, "Custom"] }, confirmationStatus: solStatus } : { slot: 1, confirmations: null, err: null, confirmationStatus: usdcStatus })) }),
     };
-    const env = { ...process.env, SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
+    const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const confirm = () => new Promise<Out>((done) => {
       const child = spawn(process.execPath, [resolve(tree.root, "budget/solana/rotate.mjs"), "--confirm", `${usdcSig},${solSig}`], { cwd: tree.root, env });
       let stdout = "", stderr = "";
