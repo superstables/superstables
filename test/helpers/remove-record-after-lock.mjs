@@ -13,12 +13,16 @@
 //     was replaced, a chain lock was created or removed, a worker was started: its log was opened for appending), each with `locked` or
 //     `open` as well, `unlock` (this process released the record's lock) and `mutate <kind> N` (the hook changed the file right after that
 //     event)
+//   INERT_RESUMED_WORKER: a worker that a wait restarts (it has the resume variable) ends as soon as the hook loads, before it writes
+//     anything: its own registration on the record would land at any moment after the restart, and with it the file would no longer be as
+//     the change left it
 // Only the process the hook was loaded into first acts and counts: a worker that command starts inherits the hook, and does nothing.
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 
 const first = !process.env.RECORD_HOOK_PID || process.env.RECORD_HOOK_PID === String(process.pid);
 process.env.RECORD_HOOK_PID ??= String(process.pid);
+if (!first && process.env.INERT_RESUMED_WORKER && process.env.SUPERSTABLES_BUDGET_RESUME) process.exit(0);
 const unlink = fs.unlinkSync;
 const read = fs.readFileSync;
 const append = fs.appendFileSync;
