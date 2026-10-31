@@ -36,6 +36,11 @@ testnet RPCs, the Superstables index and, when switched on, the demo catalogue o
 
 Pick one. All of them run the same commands on the same state, in `~/.superstables`.
 
+**The plugin.** In Claude Code, Codex or Cursor, the [plugin](../README.md#the-plugin) adds the
+Superstables skill and connector. It uses the connector where a tool is available, and runs this
+client with `npx` for operations that need your machine or when connector tools are missing or you
+decline to connect. Its install steps are in the README and on superstables.com's Get started page.
+
 **The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
 has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
@@ -190,7 +195,7 @@ waiting on it, the page takes a free port instead, and the approval link names t
 
 ## Set up your agent app
 
-An agent uses the client through the `superstables-payments` skill and a shell. The skill guides
+The plugin brings its own skill, so a plugin install needs nothing here. Without the plugin, an agent uses the client through the `superstables-payments` skill and a shell. The skill guides
 it through finding a service, pricing it and both ways to pay, with their safety rules. Use the
 skill zip installed above, or link the `skills/superstables-payments/` folder from a checkout into
 your agent's skills folder. Keep `SKILL.md`, `references/` and `agents/openai.yaml` together.
