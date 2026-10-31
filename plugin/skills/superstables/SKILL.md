@@ -50,6 +50,8 @@ with `request_budget_revoke` (it returns the owner's link on superstables.com
 and signs nothing). Check a revoke with `get_budget_status`, and count it done
 only when its `revoke` says it is final.
 
+**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on their machine or on superstables.com, may be offered only as a question. Request it (`request_purchase`, `buy-once` or `pay`) only when the owner says yes. They asked for the budget, so do not switch the way of paying on your own.
+
 ## What stays on the CLI
 
 Use the CLI for what needs this machine: creating the agent key, `--sign-only`
