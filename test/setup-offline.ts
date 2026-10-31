@@ -7,6 +7,8 @@
 //   test starts.
 // - The account's own ~/.superstables/policy.yaml is never the developer's real one (test/account-guard.mjs), here and in every
 //   node process a test starts.
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
 
@@ -18,6 +20,11 @@ try {
 } catch {
   /* a worker thread cannot set it; the pool runs forks */
 }
+
+// The node processes a test starts load the same built bundle and dependencies again and again. V8's code cache
+// (NODE_COMPILE_CACHE) lets each one after the first skip compiling them; nothing a test checks depends on it. A value the
+// developer set is kept.
+process.env.NODE_COMPILE_CACHE ??= join(tmpdir(), `superstables-test-compile-cache-${process.getuid?.() ?? 0}`);
 
 // Mainnet stays off in every test unless the test turns it on (SUPERSTABLES_ALLOW_MAINNET, src/core/chain-gate.js): an inherited
 // value must not change what a test sees.
