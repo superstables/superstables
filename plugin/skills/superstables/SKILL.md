@@ -26,17 +26,10 @@ Only operations needing a local signature go through the CLI; everything else go
 - `remove_budget_agent`: remove an agent from the account, off chain, once it has no spending permission. Moves no funds.
 - `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
 
-Once per session, before requesting a budget or a purchase, call `get_my_account`.
-Tell the owner which account this chat is connected to and show the last four characters of each wallet it lists, for example
-"wallet ending 1065." Ask them to confirm that this is
-the account and wallet they intend to use, and wait for their answer. If no wallet
-is returned, do not assume one. A successful sign-in does not confirm that the
-intended account is connected. If the account or wallet is wrong, stop and ask the
-owner to sign the connector in again with the intended account. Then call
-`get_my_account` again and ask for confirmation. If Codex still reports the old
-account, ask the owner to start a new session and repeat the check there. If
-Claude Code still reports the old account, stop and report the mismatch. Do not
-continue until the owner confirms the intended account and wallet.
+With every approval link, `request_purchase` and `submit_budget_request` return
+a line naming the request account's wallets by their last four characters, or
+saying it has no wallet. Show that line with the link. If that is not the account
+the owner meant, tell them not to approve and stop to resolve the mismatch.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
