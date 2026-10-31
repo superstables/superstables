@@ -9,11 +9,13 @@ import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import { Confirmed, HostedApprovals, type HostedRecord } from "../../budget/hosted.js";
 import { cancelSiteRequest, readSiteRequest } from "../../budget/site.mjs";
 import { evmOwner, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
+
+vi.setConfig({ maxConcurrency: 4 });
 
 const KEY = `0x${"11".repeat(32)}` as const;
 const AGENT = privateKeyToAccount(KEY).address;
@@ -159,12 +161,12 @@ describe("readSiteRequest with own: the answer must be about this request, check
   });
 });
 
-describe("every path that cannot rest on the site's word parks a restarted worker", () => {
-  let site: FakeSite;
-  let dir: string;
-  let records: HostedRecord[];
-  let unresolved: string[];
-  let taken: number;
+async function sinkFixture() {
+  const site = await startFakeSite();
+  const dir = mkdtempSync(join(tmpdir(), "ss-hosted-sink-"));
+  const records: HostedRecord[] = [];
+  const unresolved: string[] = [];
+  const state = { taken: 0 };
   /** After the first worker's request exists nothing it sends reaches the site (it is gone). */
   let gone = false;
   const deadFetch: typeof fetch = (input, init) => (gone ? new Promise<Response>(() => {}) : fetch(input, init));
@@ -173,7 +175,7 @@ describe("every path that cannot rest on the site's word parks a restarted worke
   // a client left polling by an earlier test must not write into this test's list: each takes the list of its own test
   const restarted = (record: HostedRecord, over: Partial<ConstructorParameters<typeof HostedApprovals>[0]> = {}) => {
     const mine = unresolved;
-    return client({ resume: { ...record, deadline: Date.now() - 1000 }, onTakeover: () => taken++, onUnresolved: (why) => { mine.push(why); }, sendingGraceMs: 50, quietGraceMs: 50, ...over });
+    return client({ resume: { ...record, deadline: Date.now() - 1000 }, onTakeover: () => state.taken++, onUnresolved: (why) => { mine.push(why); }, sendingGraceMs: 50, quietGraceMs: 50, ...over });
   };
   const grant = (c: HostedApprovals) => c.request({ kind: "evm-transaction", action: "grant", account: OWNER, transaction: GRANT_TX, terms: TERMS, timeoutMs: 60_000 });
   const link = (c: HostedApprovals, then?: typeof THEN) => c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, ...(then ? { then } : {}) });
@@ -192,7 +194,7 @@ describe("every path that cannot rest on the site's word parks a restarted worke
   /** Whether the outcome was delivered within a moment. */
   const delivered = async (what: "tx" | "link" | "bundle", h: Awaited<ReturnType<typeof grant>>, ms = 1500) =>
     (await Promise.race([(what === "bundle" ? h.bundle! : h.settled).then(() => true), new Promise<boolean>((x) => setTimeout(() => x(false), ms))]));
-  const complete = (what: "tx" | "link" | "bundle", r: ReturnType<typeof site.requests.at> & object) => {
+  const complete = (what: "tx" | "link" | "bundle", r: ReturnType<FakeSite["requests"]["at"]> & object) => {
     if (what === "tx") Object.assign(r, { state: "confirmed", tx_hash: HASH, wallet_asked: true });
     else {
       Object.assign(r, { state: what === "bundle" ? "confirmed" : "linked", owner: OWNER });
@@ -200,17 +202,22 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     }
   };
 
-  beforeEach(async () => {
-    site = await startFakeSite();
-    dir = mkdtempSync(join(tmpdir(), "ss-hosted-sink-"));
-    records = []; unresolved = []; taken = 0; gone = false;
-  });
-  afterEach(async () => { await site.close(); rmSync(dir, { recursive: true, force: true }); });
+  return { site, dir, unresolved, state, first, ask, grant, link, restarted, delivered, complete, client };
+}
 
+const sinkTest = it.extend<{ sink: Awaited<ReturnType<typeof sinkFixture>> }>({
+  sink: async ({}, use) => {
+    const sink = await sinkFixture();
+    try { await use(sink); } finally { await sink.site.close(); rmSync(sink.dir, { recursive: true, force: true }); }
+  },
+});
+
+describe("every path that cannot rest on the site's word parks a restarted worker", () => {
   const KINDS = ["tx", "link", "bundle"] as const;
 
   describe.each(KINDS)("%s", (what) => {
-    it("a timeout after a read that shows nothing final", async () => {
+    sinkTest.concurrent("a timeout after a read that shows nothing final", async ({ sink }) => {
+      const { site, unresolved, state, first, ask, restarted, delivered } = sink;
       const { record, r } = await first(what);
       site.expiresInMs = 100;
       site.cancelFails = true;
@@ -221,11 +228,12 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(await delivered(what, h, 4000)).toBe(false);
       expect(unresolved).toHaveLength(1);
       expect(unresolved[0]).toMatch(/in time|came back|expired|confirmed/i);
-      expect(taken).toBe(1);
+      expect(state.taken).toBe(1);
       void r;
     });
 
-    it("the site refuses the agent's token after the first read (401 that cannot be renewed, 403)", async () => {
+    sinkTest.concurrent("the site refuses the agent's token after the first read (401 that cannot be renewed, 403)", async ({ sink }) => {
+      const { site, unresolved, state, first, ask, restarted } = sink;
       for (const refusal of [{ status: 401, body: { error: { code: "token_expired" } } }, { status: 403, body: { error: { code: "forbidden" } } }]) {
         unresolved.length = 0;
         site.readAnswer = undefined;
@@ -245,7 +253,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       }
     });
 
-    it("an exception while polling (a renewed token that cannot be written)", async () => {
+    sinkTest.concurrent("an exception while polling (a renewed token that cannot be written)", async ({ sink }) => {
+      const { unresolved, first, ask, restarted, delivered } = sink;
       const { record, r } = await first(what);
       r.expired = true;
       const h = await ask(what, restarted(record, { onRecord: () => { throw new Error("the record lock timed out"); } }));
@@ -254,7 +263,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(unresolved[0]).toMatch(/stopped reading the request/);
     });
 
-    it("close() while it polls", async () => {
+    sinkTest.concurrent("close() while it polls", async ({ sink }) => {
+      const { site, first, ask, restarted, delivered } = sink;
       const { record } = await first(what);
       const c = restarted(record);
       const h = await ask(what, c);
@@ -264,24 +274,26 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(site.requests.at(-1)!.cancels).toBe(0);
     });
 
-    it("a successful read that names another request decides nothing about this one: it is read again until the site answers about it", async () => {
-      taken = 0;
+    sinkTest.concurrent("a successful read that names another request decides nothing about this one: it is read again until the site answers about it", async ({ sink }) => {
+      const { site, unresolved, state, first, ask, restarted, delivered, complete } = sink;
+      state.taken = 0;
       site.readAnswer = undefined;
       const { record, r } = await first(what);
       site.readAnswer = (_r, view) => ({ status: 200, body: { ...view, id: OTHER_ID, state: "rejected", final: true } });
       const h = await ask(what, restarted(record));
       expect(await delivered(what, h, 700)).toBe(false);
-      expect(taken).toBe(0);
+      expect(state.taken).toBe(0);
       expect(r.cancels).toBe(0);
       // the site answers about this request: the outcome is delivered
       site.readAnswer = undefined;
       complete(what, r);
       expect(await delivered(what, h, 3000)).toBe(true);
-      expect(taken).toBe(1);
+      expect(state.taken).toBe(1);
       expect(unresolved).toEqual([]);
     });
 
-    it("the owner is not the one on record and the cancel cannot be confirmed", async () => {
+    sinkTest.concurrent("the owner is not the one on record and the cancel cannot be confirmed", async ({ sink }) => {
+      const { site, unresolved, first, ask, restarted, delivered } = sink;
       const { record } = await first(what);
       if (what === "link") return; // a link names no expected owner here
       site.owner = evmOwner("33");
@@ -291,13 +303,14 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(unresolved.length).toBeGreaterThanOrEqual(0);
     });
 
-    it("what the site confirms is delivered: a terminal read, with this request's id", async () => {
+    sinkTest.concurrent("what the site confirms is delivered: a terminal read, with this request's id", async ({ sink }) => {
+      const { unresolved, state, first, ask, restarted, delivered, complete } = sink;
       const { record, r } = await first(what);
       complete(what, r);
       const h = await ask(what, restarted(record));
       expect(await delivered(what, h, 3000)).toBe(true);
       expect(unresolved).toEqual([]);
-      expect(taken).toBe(1);
+      expect(state.taken).toBe(1);
     });
   });
 
@@ -320,13 +333,14 @@ describe("every path that cannot rest on the site's word parks a restarted worke
 
   describe.each(KINDS)("a read that is a 400, 404 or 410 (%s)", (what) => {
     for (const status of [400, 404, 410]) for (const [name, body] of BODIES) {
-      it(`${status} with ${name} parks, and nothing is delivered or cancelled`, async () => {
+      sinkTest.concurrent(`${status} with ${name} parks, and nothing is delivered or cancelled`, async ({ sink }) => {
+      const { unresolved, state, first, ask, restarted, delivered } = sink;
         const { record, r } = await first(what);
         const fetchImpl = readsAnswered(() => new Response(body()?.toString().replace("__ID__", r.id) ?? null, { status }));
         const h = await ask(what, restarted(record, { fetchImpl }));
         expect(await delivered(what, h, 1500)).toBe(false);
         expect(unresolved).toHaveLength(1);
-        expect(taken).toBe(0);
+        expect(state.taken).toBe(0);
         expect(r.cancels).toBe(0);
       });
     }
@@ -334,12 +348,13 @@ describe("every path that cannot rest on the site's word parks a restarted worke
 
   describe.each(KINDS)("any other read that was not a 2xx (%s)", (what) => {
     for (const status of [401, 403, 429, 500, 502, 503]) {
-      it(`${status} delivers nothing`, async () => {
+      sinkTest.concurrent(`${status} delivers nothing`, async ({ sink }) => {
+      const { state, first, ask, restarted, delivered } = sink;
         const { record, r } = await first(what);
         const fetchImpl = readsAnswered(() => new Response(JSON.stringify({ error: { code: "x" } }), { status }));
         const h = await ask(what, restarted(record, { fetchImpl }));
         expect(await delivered(what, h, 1200)).toBe(false);
-        expect(taken).toBe(0);
+        expect(state.taken).toBe(0);
         expect(r.cancels).toBe(0);
       });
     }
@@ -347,10 +362,11 @@ describe("every path that cannot rest on the site's word parks a restarted worke
 
   describe("a bundle's refusal branches need a whole-bundle terminal read or a confirmed cancel", () => {
     const other = evmOwner("33");
-    const bundleView = (r: ReturnType<typeof site.requests.at> & object, over: object) => ({ id: r.id, kind: "link", state: "sent", final: false, owner: OWNER, owner_proof: undefined as unknown, steps: [{ index: 0, kind: "fund_agent", state: "sent", tx_hash: FUND_HASH, wallet_asked: true, reason: null, reason_code: null }, { index: 1, kind: "grant", state: "queued", tx_hash: null, wallet_asked: false, reason: null, reason_code: null }], ...over });
+    const bundleView = (r: ReturnType<FakeSite["requests"]["at"]> & object, over: object) => ({ id: r.id, kind: "link", state: "sent", final: false, owner: OWNER, owner_proof: undefined as unknown, steps: [{ index: 0, kind: "fund_agent", state: "sent", tx_hash: FUND_HASH, wallet_asked: true, reason: null, reason_code: null }, { index: 1, kind: "grant", state: "queued", tx_hash: null, wallet_asked: false, reason: null, reason_code: null }], ...over });
     const expectOther = (c: HostedApprovals) => c.request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: THEN, expectedOwner: other });
 
-    it("an owner that is not the one on record, in a bundle that is not final: parks, with the funding step sent and the grant open", async () => {
+    sinkTest.concurrent("an owner that is not the one on record, in a bundle that is not final: parks, with the funding step sent and the grant open", async ({ sink }) => {
+      const { site, unresolved, first, restarted, delivered } = sink;
       const { record, r } = await first("bundle");
       site.cancelFails = true;
       site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id }) });
@@ -359,7 +375,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(unresolved.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("an owner proof that fails, in a bundle that is not final: parks", async () => {
+    sinkTest.concurrent("an owner proof that fails, in a bundle that is not final: parks", async ({ sink }) => {
+      const { site, unresolved, first, link, restarted, delivered } = sink;
       const { record, r } = await first("bundle");
       site.cancelFails = true;
       site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id, owner_proof: { scheme: "eip191", message: "not the text", signature: "0x00" } }) });
@@ -368,7 +385,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(unresolved.length).toBeGreaterThanOrEqual(1);
     });
 
-    it("the same refusals in a bundle the site calls final are delivered: the whole bundle is terminal", async () => {
+    sinkTest.concurrent("the same refusals in a bundle the site calls final are delivered: the whole bundle is terminal", async ({ sink }) => {
+      const { site, unresolved, state, first, link, restarted } = sink;
       const { record, r } = await first("bundle");
       site.cancelFails = true;
       site.readAnswer = (_r, v) => ({ status: 200, body: bundleView(r, { account_id: v.account_id, state: "confirmed", final: true }) });
@@ -391,19 +409,21 @@ describe("every path that cannot rest on the site's word parks a restarted worke
 
   describe.each(KINDS)("a refusal to know the request after a valid non-final read (%s)", (what) => {
     for (const status of [400, 404, 410]) for (const [name, body] of BODIES) {
-      it(`${status} with ${name}: an earlier takeover gives it no authority to settle`, async () => {
+      sinkTest.concurrent(`${status} with ${name}: an earlier takeover gives it no authority to settle`, async ({ sink }) => {
+      const { site, unresolved, state, first, ask, restarted, delivered } = sink;
         const { record, r } = await first(what);
         site.cancelFails = true;
         const fetchImpl = afterFirstRead(() => new Response(body()?.toString().replace("__ID__", r.id) ?? null, { status }));
         const h = await ask(what, restarted(record, { fetchImpl }));
         expect(await delivered(what, h, 1800)).toBe(false);
-        expect(taken).toBe(1);
+        expect(state.taken).toBe(1);
         expect(unresolved.length).toBeGreaterThanOrEqual(1);
       });
     }
   });
 
-  it("a 404 whose error says money may have moved parks, and the audit log says the wallet may have been asked", async () => {
+  sinkTest.concurrent("a 404 whose error says money may have moved parks, and the audit log says the wallet may have been asked", async ({ sink }) => {
+      const { dir, unresolved, first, grant, restarted, delivered } = sink;
     const { record } = await first("tx");
     const fetchImpl = readsAnswered(() => new Response(JSON.stringify({ error: { code: "not_found", money_moved: "unknown" } }), { status: 404 }));
     const h = await grant(restarted(record, { fetchImpl }));
@@ -412,15 +432,17 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     expect(readFileSync(join(dir, "audit.jsonl"), "utf8")).toMatch(/"sending":true/);
   });
 
-  it.each(KINDS)("a final: true read whose state is not a string decides nothing (%s)", async (what) => {
+  for (const what of KINDS) sinkTest.concurrent(`a final: true read whose state is not a string decides nothing (${what})`, async ({ sink }) => {
+      const { state, first, ask, restarted, delivered } = sink;
     const { record, r } = await first(what);
     const fetchImpl = readsAnswered(() => new Response(JSON.stringify({ id: r.id, state: 7, final: true, steps: [] }), { status: 200 }));
     const h = await ask(what, restarted(record, { fetchImpl }));
     expect(await delivered(what, h, 1500)).toBe(false);
-    expect(taken).toBe(0);
+    expect(state.taken).toBe(0);
   });
 
-  it("F3: the token was rotated and the record kept the old one: a clean JSON 404 not_found for the stale token parks, whatever it looks like", async () => {
+  sinkTest.concurrent("F3: the token was rotated and the record kept the old one: a clean JSON 404 not_found for the stale token parks, whatever it looks like", async ({ sink }) => {
+      const { unresolved, state, first, grant, restarted, delivered } = sink;
     const { record, r } = await first("tx");
     r.expired = true;
     const tokenBefore = r.token;
@@ -431,7 +453,7 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     expect(r.token).not.toBe(tokenBefore);
     expect(record.token).toBe(tokenBefore);
     unresolved.length = 0;
-    taken = 0;
+    state.taken = 0;
     // the next worker reads with the stale token: the real site answers 404 not_found, as it does for an unknown request
     const asProduction: typeof fetch = async (input, init) => {
       const res = await fetch(input, init);
@@ -441,20 +463,22 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     const hb = await grant(restarted(record, { fetchImpl: asProduction }));
     expect(await delivered("tx", hb, 1500)).toBe(false);
     expect(unresolved).toHaveLength(1);
-    expect(taken).toBe(0);
+    expect(state.taken).toBe(0);
     expect(r.state).toBe("awaiting_owner");
     expect(r.cancels).toBe(0);
   });
 
   describe("a confirmed cancel is a basis, and the one documented cancel answer with no id is a deliberate exception", () => {
-    it.each(KINDS)("the deadline cancel the site confirms finishes a restarted worker (%s)", async (what) => {
+    for (const what of KINDS) sinkTest.concurrent(`the deadline cancel the site confirms finishes a restarted worker (${what})`, async ({ sink }) => {
+      const { unresolved, first, ask, restarted, delivered } = sink;
       const { record } = await first(what);
       const h = await ask(what, restarted(record));
       expect(await delivered(what, h, 3000)).toBe(true);
       expect(unresolved).toEqual([]);
     });
 
-    it("cancelSiteRequest accepts the site's id-less 409 not_open/cancelled (no id in the answer), and refuses it with another request's id", async () => {
+    sinkTest.concurrent("cancelSiteRequest accepts the site's id-less 409 not_open/cancelled (no id in the answer), and refuses it with another request's id", async ({ sink }) => {
+      const { site, state, first } = sink;
       const { r } = await first("tx");
       const notOpen = (error: object) => () => ({ status: 409, body: { error: { code: "not_open", state: "cancelled", wallet_asked: false, tx_hash: null, ...error } } });
       site.cancelAnswer = notOpen({});
@@ -465,7 +489,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(await cancelSiteRequest({ site: site.url, id: r.id, token: r.token })).toMatchObject({ cancelled: false });
     });
 
-    it("a restarted worker finishes on that id-less answer (the exception to 'every basis carries the request's id', stated on the PR)", async () => {
+    sinkTest.concurrent("a restarted worker finishes on that id-less answer (the exception to 'every basis carries the request's id', stated on the PR)", async ({ sink }) => {
+      const { site, unresolved, state, first, grant, restarted, delivered } = sink;
       const { record } = await first("tx");
       site.cancelAnswer = () => ({ status: 409, body: { error: { code: "not_open", state: "cancelled", wallet_asked: false, tx_hash: null } } });
       const h = await grant(restarted(record));
@@ -476,23 +501,25 @@ describe("every path that cannot rest on the site's word parks a restarted worke
 
   describe("the bundle's refusals, and the completed request a cancel can answer with", () => {
     /** The request as the site would show it linked, with its valid owner proof, captured while it is in that state. */
-    const captured = async (r: { id: string; token: string }) => (await (await fetch(`${site.url}/api/v1/budget/requests/${r.id}`, { headers: { authorization: `Bearer ${r.token}` } })).json()) as Record<string, any>;
+    const captured = async (site: FakeSite, r: { id: string; token: string }) => (await (await fetch(`${site.url}/api/v1/budget/requests/${r.id}`, { headers: { authorization: `Bearer ${r.token}` } })).json()) as Record<string, any>;
     const BAD_PROOF = { scheme: "eip191", message: "not the add-agent text", signature: `0x${"11".repeat(65)}` };
 
-    it("a link that is linked but not final, whose cancel is answered with that same non-final request, decides nothing", async () => {
+    sinkTest.concurrent("a link that is linked but not final, whose cancel is answered with that same non-final request, decides nothing", async ({ sink }) => {
+      const { site, state, first, link, restarted, delivered } = sink;
       const { record, r } = await first("bundle");
       Object.assign(r, { state: "linked", owner: OWNER });
-      const view = { ...(await captured(r)), final: false };
+      const view = { ...(await captured(site, r)), final: false };
       Object.assign(r, { state: "awaiting_owner", owner: null });
       site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, state: "awaiting_owner", final: false, owner: null } });
       site.cancelAnswer = () => ({ status: 200, body: view });
       const h = await link(restarted(record), THEN);
       // the link is taken in (its proof is valid) and the steps get their own time: nothing is delivered from a non-final answer
       expect(await delivered("bundle", h, 2000)).toBe(false);
-      expect(taken).toBe(1);
+      expect(state.taken).toBe(1);
     });
 
-    it("a bad owner proof on a linked, non-final bundle parks; a cancel answered with the whole bundle final settles it in the same worker", async () => {
+    sinkTest.concurrent("a bad owner proof on a linked, non-final bundle parks; a cancel answered with the whole bundle final settles it in the same worker", async ({ sink }) => {
+      const { site, unresolved, state, first, link, restarted, delivered } = sink;
       const { record, r } = await first("bundle");
       site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, state: "linked", final: false, owner: OWNER, owner_proof: BAD_PROOF } });
       site.cancelFails = true;
@@ -508,7 +535,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
       expect(unresolved).toEqual([]);
     });
 
-    it("the next worker settles the same bundle on its first read that is final", async () => {
+    sinkTest.concurrent("the next worker settles the same bundle on its first read that is final", async ({ sink }) => {
+      const { site, state, first, link, restarted, delivered, complete } = sink;
       const { record, r } = await first("bundle");
       site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, state: "linked", final: false, owner: OWNER, owner_proof: BAD_PROOF } });
       site.cancelFails = true;
@@ -522,7 +550,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     });
   });
 
-  it("a deadline cancel that the site answers with the completed bundle: the owner proof is checked and the outcome is the bundle, never expired", async () => {
+  sinkTest.concurrent("a deadline cancel that the site answers with the completed bundle: the owner proof is checked and the outcome is the bundle, never expired", async ({ sink }) => {
+      const { site, unresolved, state, first, link, restarted, complete } = sink;
     const { record, r } = await first("bundle");
     // the request as the site will show it once completed, captured for the cancel's answer
     complete("bundle", r);
@@ -540,7 +569,8 @@ describe("every path that cannot rest on the site's word parks a restarted worke
     expect(unresolved).toEqual([]);
   });
 
-  it("a first worker has no sink: it settles on its own timeout as it always did", async () => {
+  sinkTest.concurrent("a first worker has no sink: it settles on its own timeout as it always did", async ({ sink }) => {
+      const { site, state, grant, client } = sink;
     site.owner = OWNER;
     site.expiresInMs = 100;
     const c = client({ sendingGraceMs: 50 });
