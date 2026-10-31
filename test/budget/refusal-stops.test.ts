@@ -17,7 +17,10 @@ describe("a refused budget purchase stops the agent", () => {
     "plugin/skills/superstables/references/budget.md",
   ]) {
     it(`${file} says to report the refusal, ask before a single purchase and request it only on a yes`, () => {
-      expect(read(file)).toMatch(RULE);
+      const text = read(file);
+      expect(text).toMatch(RULE);
+      expect(text).toMatch(/per-purchase limit/);
+      expect(text).toMatch(/\(`request_purchase`, `buy-once` or `pay`\) only when the owner says yes/);
     });
   }
 });
