@@ -9,6 +9,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- On Base Sepolia, budget and owner-action messages now say a block usually takes about 20 minutes to become final, and `budget wait` explains that an earlier `unknown` does not establish failure. The finality check is unchanged.
 - `superstables budget doctor` now fails when it finds an owner key file for the selected rail, whatever its permissions, and no longer opens it.
 
 ## [1.0.0] - Agent plugin, seller tools and safer payments

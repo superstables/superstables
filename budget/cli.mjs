@@ -44,6 +44,7 @@ import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteReq
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { mainnetSwitchRefusal } from "../src/core/chain-gate.js";
+import { finalWords } from "../src/core/finality-policy.js";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
@@ -3003,7 +3004,7 @@ async function wait({ f }) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, send the new message_for_owner first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
   }
   if (walletWasAsked(rec, r.page)) {
-    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${finalWait(rec)}Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
   }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true) : stillWaiting(rec.id), reason: words });
 }
@@ -3026,6 +3027,9 @@ function signedWait(record) {
     next: `if submit_budget_request returned request_id, approval_link and match_code for this request, adopt it: superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. Only if the tool never sent it, sign a new request: ${again}. While a request for this agent is open, the site refuses a new one (request_open)`,
   });
 }
+
+/** "This chain usually takes about N minutes to make a transaction final. " when that is measured, else "". */
+const finalWait = (rec) => { const w = finalWords(rec.rail, rec.chain); return w ? `The chain usually makes a transaction final ${w} after it lands, so returning before then does not by itself mean the transaction failed. ` : ""; };
 
 /**
  * What to do about a site request kept unsettled for a signed approval: its outcome is unknown until a later wait adopts it. `fix`: the
