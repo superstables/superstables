@@ -70,9 +70,10 @@ function spawnIn(argv: string[], env: Record<string, string>): Promise<Out> {
     });
   });
 }
-const budget = (args: string[], env: Record<string, string>) => spawnIn([process.execPath, resolve(tree.root, "budget/cli.mjs"), ...args], env);
+// The built bundle of the tree, so a rail runs with node alone where the sources start each one through tsx.
+const budget = (args: string[], env: Record<string, string>) => spawnIn([process.execPath, resolve(tree.bundle(), "cli.mjs"), ...args], env);
 const script = (file: string, args: string[], env: Record<string, string>) =>
-  spawnIn(file.endsWith(".ts") ? [resolve(tree.root, "node_modules/.bin/tsx"), resolve(tree.root, file), ...args] : [process.execPath, resolve(tree.root, file), ...args], env);
+  spawnIn([process.execPath, resolve(tree.bundle(), file.replace(/^budget\//, "").replace(/\.ts$/, ".mjs")), ...args], env);
 
 const file = (...p: string[]) => join(home, ...p);
 const write = (path: string, text: string, mode = 0o600) => {

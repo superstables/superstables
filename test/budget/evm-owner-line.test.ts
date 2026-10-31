@@ -9,10 +9,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 import { startFakeEvm, startSeller, usdc, type FakeEvm, type Seller } from "../helpers/fake-evm.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+const CLI = resolve(budgetBundle(), "cli.mjs");
 const REPAIR = "superstables budget setup --rail evm";
 
 let home: string;
