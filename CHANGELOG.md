@@ -7,8 +7,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.0] - Plugin installation and budget guidance
+
+Testnet only.
+
+### Changed
+
+- **Plugin zips:** this release attaches one plugin zip per app, each with a `.sha256` file, and the plugin has the same name, description and icon in every app. Installation is checked in Claude Code and Codex. The README gives the installation steps and explains how to replace an older local marketplace.
+- **Budgets through the connector:** the plugin skill now uses available connector tools to find budget services, check listed prices, read status and follow approvals. Setup, grants and budget purchases still need the CLI on your machine; chat apps are instructed to decline those operations. The skills treat the amount you specify as the whole budget and require your agreement before requesting a single purchase after a budget purchase is refused.
+- **Single purchase and approval links:** the plugin skill uses the connector first and shows the account wallet line when the connector returns one with a purchase or budget-request approval link. It follows purchase status in the same turn when the app can show the link before the turn ends; otherwise it waits for you to say you approved. For a purchase on the wrong account, it explains how to reconnect; Codex also needs a new session.
+
 ### Fixed
 
+- **Older EVM owner records:** `budget doctor` identifies a stale owner address in the agent key file and gives the setup command to repair it. Rotation stops before retiring the key when that mismatch is found. Setup removes the stale line once the recorded owner is backed by a signature.
 - On Base Sepolia, budget and owner-action messages now say a block usually takes about 20 minutes to become final, and `budget wait` explains that an earlier `unknown` does not establish failure. The finality check is unchanged.
 - `superstables budget doctor` now fails when it finds an owner key file for the selected rail, whatever its permissions, and no longer opens it.
 
