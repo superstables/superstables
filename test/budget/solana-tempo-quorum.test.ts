@@ -66,7 +66,7 @@ function spawnIn(argv: string[], env: Record<string, string>): Promise<Out> {
     child.once("close", (code) => {
       clearTimeout(timer);
       const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
-      done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null });
+      done({ code: code ?? -1, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null });
     });
   });
 }
@@ -320,10 +320,11 @@ describe("solana: owner commands use the owner's endpoints", () => {
   }, 120_000);
 
   it("an RPC set in the environment that is the owner's own is used", async () => {
-    const owners = await solana();
+    const owners = track(await startFakeSolana({ websocket: true }));
     tree.set({ "solana-devnet": [owners.url] });
     solanaSetup(owners);
-    await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], solEnv(owners));
+    const r = await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], solEnv(owners));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(owners.calls).toContain("getLatestBlockhash");
   }, 120_000);
 });
