@@ -356,7 +356,9 @@ describe("wait --abandon on a background owner approval", () => {
       await new Promise((x) => setTimeout(x, 100));
       const f = existsSync(approvals()) ? readdirSync(approvals()).find((n) => /^oa-.*\.json$/.test(n)) : undefined;
       const r = f ? JSON.parse(readFileSync(join(approvals(), f), "utf8")) : null;
-      if (r?.pid && Array.isArray(r.workerArgs)) id = r.id;
+      // the worker's own writes (the rail script marked, then named by its group) are done before the test rewrites the record without its lock:
+      // a rewrite from an earlier read would put the mark back or drop the group
+      if (r?.pid && Array.isArray(r.workerArgs) && r.railPgid && !r.railSpawning) id = r.id;
     }
     expect(id).not.toBe("");
     // the rail script has asked the site by now in a real run: its request is in the record, and the approval can be resumed
