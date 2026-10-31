@@ -39,7 +39,6 @@ import { readRetired, retire, retiredProblem } from "./retired.mjs";
 import { rotate as rotateKey, stoppedFinal, sweepSignatures } from "./rotate.mjs";
 import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
-import { staleOwnerLine } from "./evm-owner-line.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteRequestId, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteRequestProblem, siteText } from "./site.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
@@ -2597,6 +2596,7 @@ async function rotateLocked({ f, ctx }) {
   if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
   // recover, which rotate runs after it retires the old address, refuses this key file, so the rotation would stop half done
   if (rail === "evm" && !existing && existsSync(agentKeyFile(rail))) {
+    const { staleOwnerLine } = await import("./evm-owner-line.mjs");
     let fileOwner;
     try { fileOwner = [...readRegularFile(agentKeyFile(rail), "the agent key file").matchAll(/^(?:export\s+)?B4_OWNER_ADDRESS=(.*)$/gm)].at(-1)?.[1]?.trim().replace(/^['"]|['"]$/g, ""); } catch {}
     for (const c of fileOwner ? chains : []) {
