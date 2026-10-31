@@ -8,9 +8,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EVM_CHAIN_KEYS } from "../../budget/evm/chains.mjs";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const TSX = resolve(ROOT, "node_modules/.bin/tsx");
+const BUNDLE = budgetBundle();
+const CLI = resolve(BUNDLE, "cli.mjs");
 
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ss-chain-guard-")); });
@@ -23,8 +25,8 @@ function run(cmd: string, args: string[], extraEnv: Record<string, string> = {})
   const line = r.stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
   return { code: r.status, stdout: r.stdout, stderr: r.stderr, result: line ? JSON.parse(line.slice(7)) : null };
 }
-const budget = (args: string[]) => run(process.execPath, [resolve(ROOT, "budget/cli.mjs"), ...args]);
-const script = (args: string[], env: Record<string, string> = {}) => run(TSX, [resolve(ROOT, "budget/evm/read.ts"), ...args], env);
+const budget = (args: string[]) => run(process.execPath, [CLI, ...args]);
+const script = (args: string[], env: Record<string, string> = {}) => run(process.execPath, [resolve(BUNDLE, "evm/read.mjs"), ...args], env);
 
 const MAINNET = ["robinhood", "4663", "eip155:4663", "robinhood-mainnet"];
 
@@ -64,10 +66,10 @@ describe("Robinhood Chain in the budget", () => {
     expect(s.code).toBe(2);
     expect(s.stderr).not.toMatch(/is a mainnet/);
     expect(script(["--mainnet"], on).code).toBe(2);
-    const d = run(process.execPath, [resolve(ROOT, "budget/cli.mjs"), "status", "--rail", "evm", "--chain", "robinhood"], on);
+    const d = run(process.execPath, [CLI, "status", "--rail", "evm", "--chain", "robinhood"], on);
     expect(d.code).toBe(2);
     expect(d.result?.reason).toMatch(/--chain for evm must be one of/);
-    const flag = run(process.execPath, [resolve(ROOT, "budget/cli.mjs"), "status", "--rail", "evm", "--mainnet"], on);
+    const flag = run(process.execPath, [CLI, "status", "--rail", "evm", "--mainnet"], on);
     expect(flag.result?.state).not.toBe("refused_precheck");
   }, 60_000);
 
@@ -76,7 +78,7 @@ describe("Robinhood Chain in the budget", () => {
     const s = script(["--chain", "robinhood"], bad);
     expect(s.code).toBe(3);
     expect(s.result?.reason).toContain('SUPERSTABLES_ALLOW_MAINNET is "yes"');
-    const d = run(process.execPath, [resolve(ROOT, "budget/cli.mjs"), "status", "--rail", "evm", "--chain", "robinhood"], bad);
+    const d = run(process.execPath, [CLI, "status", "--rail", "evm", "--chain", "robinhood"], bad);
     expect(d.code).toBe(3);
     expect(d.result?.reason).toContain("SUPERSTABLES_ALLOW_MAINNET");
     expect(script(["--chain", "robinhood-testnet"], bad).code).not.toBe(3);
