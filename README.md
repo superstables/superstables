@@ -34,6 +34,8 @@ codex plugin marketplace add superstables/superstables
 codex plugin add superstables@superstables
 ```
 
+If you previously added a local folder in Claude Code and see "its source doesn't match", run `claude plugin marketplace remove superstables`. This also uninstalls plugins from that marketplace. Then repeat the two Claude Code commands above.
+
 Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The plugin uses the website for everything that needs no key on your machine, and the CLI (run with `npx`) only for what needs a signature from it. If you decline to connect, the CLI does it all.
 
 ### Or the connector

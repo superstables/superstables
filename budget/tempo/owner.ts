@@ -14,6 +14,7 @@
 // A chain set up with --hosted (APPROVALS=hosted and SITE in the public file) asks through that site instead (../hosted.ts):
 // the same transaction, sent by the owner's wallet from superstables.com; the agent key being granted or revoked signs the
 // request, and the site must act for the owner recorded here. The command reads the chain the same way afterwards.
+import { rpcPause } from "../rpc-pause.mjs";
 import { encodeFunctionData, getAddress, type Address, type Hex } from 'viem'
 import { privateKeyToAddress } from 'viem/accounts'
 import { Abis, Addresses } from 'viem/tempo'
@@ -288,7 +289,7 @@ export async function readUntilMatches(owner: Address, agent: Address, plan: Gra
   let key = await readFullKey(owner, agent)
   let problems = grantProblems(key, plan, authorizedAt)
   for (let i = 0; i < 8 && problems.length; i++) {
-    await sleep(2000)
+    await rpcPause(2000)
     key = await readFullKey(owner, agent)
     problems = grantProblems(key, plan, authorizedAt)
   }
