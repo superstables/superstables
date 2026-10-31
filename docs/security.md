@@ -250,7 +250,7 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
 authorization — and the balance of the account. Testnet by default.
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.0,
 even with the switch enabled.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
@@ -290,7 +290,7 @@ matters is the one a wallet you keep apart from the agent makes.
 
 ## Testnet by default
 
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.0,
 even with the switch enabled.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
