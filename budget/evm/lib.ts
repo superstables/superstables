@@ -19,6 +19,7 @@ import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { noteBinding } from "../page-facts.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
@@ -627,7 +628,13 @@ export async function agentCtx() {
   const key = need(env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
   const agent = walletFor(key);
   if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the agent address in the public file, ${pub.agent}`);
-  if (env.B4_OWNER_ADDRESS && env.B4_OWNER_ADDRESS.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`owner address in ${AGENT_ENV} differs from the public state`);
+  const stale = staleOwnerLine(env, publicEnv(), CFG.key);
+  if (stale) {
+    // Refused here, before any signature, and not by editing the record: the owner's signature in the public file is the record.
+    const reason = `the agent key file records owner ${stale.fileOwner}, the public state records ${stale.publicOwner}. Nothing was signed`;
+    console.log(`REFUSED: ${reason}. ${AGENT_ENV} and ${PUBLIC_ENV} name different owners.`);
+    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason, owner: stale.publicOwner, agent: pub.agent, next: `${stale.repair} on the machine with the agent key. It asks the owner to sign only when the record needs a new signature. Do not edit the files by hand` }));
+  }
   return { ...pub, wallet: agent, agentKey: key };
 }
 export type AgentCtx = Awaited<ReturnType<typeof agentCtx>>;

@@ -1549,6 +1549,7 @@ function refusalNext(f, rail) {
   const why = `${rail.reason ?? ""} ${rail.next ?? ""}`;
   const r = `--rail ${f.rail}${chainFlag(f)}${agentFlag(f)}`;
   if (/superstables budget (recover|fund-agent)/.test(rail.next ?? "")) return rail.next;
+  if (/^the agent key file records owner /.test(rail.reason ?? "") && /^superstables budget setup /.test(rail.next ?? "")) return rail.next;
   // A spent, revoked or expired budget is reported, never worked around: an offer of a new or bigger grant is the owner's to
   // make (in agent test runs, "ask the owner to run grant" here made agents propose a revoke and a new grant).
   const stop = "Report what you bought, what is left and the price in one reply (message_for_owner), and end your turn. Do not propose or start a revoke, a new or bigger grant or gas unless the owner explicitly asks for one, and never raise --max to get around it";
