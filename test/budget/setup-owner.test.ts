@@ -17,11 +17,9 @@ import { KEYCHAIN, startFakeSolana, startFakeTempo, type FakeSolana, type FakeTe
 // command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
 let tree: EndpointTree;
 let ROOT = "";
-let CLI = "";
 beforeAll(() => {
   tree = endpointTree();
   ROOT = tree.root;
-  CLI = resolve(ROOT, "budget/cli.mjs");
 });
 afterAll(() => tree.close());
 const SITE = "https://staging.superstables.com";
@@ -47,7 +45,7 @@ function budget(args: string[]): Promise<{ code: number; stdout: string; stderr:
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -347,7 +345,7 @@ describe("revoke while the owner files disagree", () => {
       write(r.publicFile, r.publicText(r.A), 0o644);
       const out = await new Promise<{ code: number; stdout: string }>((done, fail) => {
         const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
-        const child = spawn(resolve(ROOT, "node_modules/.bin/tsx"), [resolve(ROOT, "budget", r.name, "revokeBudget.ts"), "--no-open"], { cwd: resolve(ROOT, "budget", r.name), env });
+        const child = spawn(process.execPath, [resolve(tree.bundle(), r.name, "revokeBudget.mjs"), "--no-open"], { cwd: resolve(ROOT, "budget", r.name), env });
         let stdout = "";
         child.stdout.on("data", (c) => (stdout += String(c)));
         child.once("error", fail);
@@ -366,7 +364,7 @@ describe("revoke never waits on the agent key file", () => {
     const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let approved = false;
     const timer = setTimeout(() => { child.kill("SIGKILL"); fail(new Error(`no APPROVE or RESULT within ${ms / 1000} s: revoke is waiting on something\n${stdout}`)); }, ms);

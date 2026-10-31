@@ -19,11 +19,9 @@ import type { TestServer } from "../helpers/servers.js";
 // command uses, come from that table or the owner's settings, never from an RPC that only the environment names.
 let tree: EndpointTree;
 let ROOT = "";
-let CLI = "";
 beforeAll(() => {
   tree = endpointTree();
   ROOT = tree.root;
-  CLI = resolve(ROOT, "budget/cli.mjs");
 });
 afterAll(() => tree.close());
 const OWNER = evmOwner("22");
@@ -69,7 +67,7 @@ function budget(args: string[]): Promise<Out> {
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     // a fake evm RPC: the copy's Base Sepolia table names it twice, as two operators
     if (env.B4_RPC) tree.set({ "tempo-moderato": [tempo.url], "solana-devnet": [solana.url], "base-sepolia": [{ url: env.B4_RPC, operator: "fake-a" }, { url: `${env.B4_RPC}/`, operator: "fake-b" }] });
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -87,7 +85,7 @@ const untilApproveOrEnd = (args: string[], ms = 30_000) => new Promise<{ code: n
   const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: tempo.url, SUPERSTABLES_SOLANA_RPC: solana.url };
   delete env.SUPERSTABLES_SITE;
   delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-  const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+  const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
   let stdout = "";
   let approved = false;
   const timer = setTimeout(() => { child.kill("SIGKILL"); fail(new Error(`no APPROVE or RESULT within ${ms / 1000} s\n${stdout}`)); }, ms);

@@ -31,7 +31,7 @@ function budget(args: string[], env: Record<string, string>): Promise<Out> {
     const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env: e });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env: e });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
@@ -268,7 +268,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     c.solana.confirmationStatus = "confirmed";
     const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const sweep = (args: string[]) => new Promise<Out>((done) => {
-      const child = spawn(process.execPath, [resolve(tree.root, "budget/solana/rotate.mjs"), ...args], { cwd: tree.root, env });
+      const child = spawn(process.execPath, [resolve(tree.bundle(), "solana/rotate.mjs"), ...args], { cwd: tree.root, env });
       let stdout = "", stderr = "";
       child.stdout.on("data", (x) => (stdout += x));
       child.stderr.on("data", (x) => (stderr += x));
@@ -304,7 +304,7 @@ describe("solana: rotate needs the revoke finalized", () => {
     };
     const env = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: c.home, SUPERSTABLES_SOLANA_RPC: c.solana.url } as Record<string, string>;
     const confirm = () => new Promise<Out>((done) => {
-      const child = spawn(process.execPath, [resolve(tree.root, "budget/solana/rotate.mjs"), "--confirm", `${usdcSig},${solSig}`], { cwd: tree.root, env });
+      const child = spawn(process.execPath, [resolve(tree.bundle(), "solana/rotate.mjs"), "--confirm", `${usdcSig},${solSig}`], { cwd: tree.root, env });
       let stdout = "", stderr = "";
       child.stdout.on("data", (x) => (stdout += x));
       child.stderr.on("data", (x) => (stderr += x));

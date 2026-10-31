@@ -10,6 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { afterAll, describe, expect, it } from "vitest";
 import { budgetShortfall, maxFeeUnits, ownerPaysFee } from "../../budget/tempo/lib/precheck.mjs";
 import { PATH_USD, startFakeTempo } from "../helpers/fake-chains.js";
+import { endpointTree } from "../helpers/endpoint-tree.js";
 import { guardedNode } from "../helpers/guarded-process.js";
 import { readBody, sendJson, startServer } from "../helpers/servers.js";
 
@@ -92,8 +93,10 @@ describe("what a refused payment is said to have cost", () => {
   });
 });
 
+const tree = endpointTree();
 const closers: (() => Promise<void>)[] = [];
 afterAll(async () => {
+  tree.close();
   while (closers.length) await closers.pop()!();
 });
 
@@ -155,8 +158,8 @@ async function run(setup: Setup, name: string, script = "budget/tempo/buy.ts", e
     rmSync(home, { recursive: true, force: true });
   });
   const child = await guardedNode(script === "budget/cli.mjs"
-    ? [script, "buy", "--rail", "tempo", "--url", seller.url, "--max", "0.01", "--op", name]
-    : ["--import=tsx", script, "--url", seller.url, ...extra, "--op", name], {
+    ? [join(tree.bundle(), "cli.mjs"), "buy", "--rail", "tempo", "--url", seller.url, "--max", "0.01", "--op", name]
+    : [join(tree.bundle(), "tempo/buy.mjs"), "--url", seller.url, ...extra, "--op", name], {
     SUPERSTABLES_TEST_RPC_WAIT_MS: "0", HOME: home, SUPERSTABLES_HOME: home, SUPERSTABLES_TEMPO_RPC: rpc.url, SUPERSTABLES_NETWORK_GUARD_LOG: guardLog,
   });
   const line = child.output.split("\n").filter((l) => l.startsWith("RESULT ")).pop();
