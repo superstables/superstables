@@ -20,8 +20,15 @@ import { referralKey, signReferral } from "../helpers/referrals.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const TSX = resolve(ROOT, "node_modules/tsx/dist/cli.mjs");
-const CLI = resolve(ROOT, "src/cli/main.ts");
+const bundle = mkdtempSync(join(tmpdir(), "ss-cli-bundle-"));
+try {
+  execFileSync(process.execPath, [resolve(ROOT, "scripts/cli-build.mjs"), "--outdir", bundle], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+} catch (error) {
+  rmSync(bundle, { recursive: true, force: true });
+  throw error;
+}
+afterAll(() => rmSync(bundle, { recursive: true, force: true }));
+const CLI = join(bundle, "superstables.mjs");
 
 interface Run {
   code: number;
@@ -41,7 +48,7 @@ afterEach(() => {
 
 function run(args: string[], env: Record<string, string> = {}): Promise<Run> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [TSX, CLI, ...args], {
+    const child = spawn(process.execPath, [CLI, ...args], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -315,7 +322,7 @@ const COMMANDS = [
 
 describe("the help", () => {
   it("says, for every command, whether it moves money, who runs it, an example and its exit codes", async () => {
-    // A few at a time: each one is two node processes (tsx and the CLI), and a CI runner may cap
+    // A few at a time: a CI runner may cap
     // the number of threads its service can start.
     const results: Awaited<ReturnType<typeof run>>[] = [];
     for (let i = 0; i < COMMANDS.length; i += 4) {
@@ -512,7 +519,7 @@ describe("quote, pay and status against a local seller", () => {
     const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
     // One process, as the installed command is. tsx's own CLI would run pay in a child behind a wrapper that passes a
     // signal on, and kills the child (exit 143) when it has not said within 30 ms that it took it.
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
+    const child = spawn(process.execPath, [CLI, "pay", quote.id, "--json"], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -584,7 +591,7 @@ describe("quote, pay and status against a local seller", () => {
 
   it("ends an attempt whose pay was killed outright: status says abandoned by stopped, and it stops counting", async () => {
     const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
+    const child = spawn(process.execPath, [CLI, "pay", quote.id, "--json"], {
       cwd: ROOT,
       env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_DOCTOR_OFFLINE: "1", SUPERSTABLES_WALLET_URL: "http://127.0.0.1:1", ...env },
     });
@@ -984,8 +991,8 @@ describe("superstables budget, stopped by a signal", () => {
     await new Promise<void>((ready) => seller.listen(0, "127.0.0.1", ready));
     const url = `http://127.0.0.1:${(seller.address() as { port: number }).port}/paid`;
     try {
-      // one process, as an installed `superstables` is: node with tsx's loader, not tsx's own wrapper process
-      const child = spawn(process.execPath, ["--import", "tsx", CLI, "budget", "buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped"], {
+      // One process, as the standalone installed command is.
+      const child = spawn(process.execPath, [CLI, "budget", "buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped"], {
         cwd: ROOT,
         env: { ...process.env, SUPERSTABLES_HOME: home },
       });
