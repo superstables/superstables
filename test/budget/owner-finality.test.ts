@@ -44,7 +44,7 @@ function cli(args: string[], env: Record<string, string>): Promise<Run> {
     const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env: e });
+    const child = spawn(process.execPath, [resolve(env.NODE_OPTIONS ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env: e });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
@@ -305,7 +305,7 @@ describe("evm: records of the owner's last action, and the other paths that must
     const c = await evmCase({ lag: 0 });
     const keys = ["B4_CAP=1000000", "B4_SET_AT=1", "B4_SET_TX=0xa", "B4_SET_BLOCK=3", "B4_REVOKED_AT=2", "B4_REVOKED_TX=0xb", "B4_REVOKED_BLOCK=4", "LINK_ID=x", "LINK_CODE=y"];
     writeFileSync(join(c.home, "budget", "public", "evm-base-sepolia.env"), `${c.pub()}${keys.join("\n")}\n`);
-    const r = await script([resolve(tree.root, "node_modules/.bin/tsx"), resolve(tree.root, "budget/evm/rotate.ts"), "--clear-agent", c.agent.address], { SUPERSTABLES_HOME: c.home, B4_RPC: c.chain.url });
+    const r = await script([resolve(tree.bundle(), "evm/rotate.mjs"), "--clear-agent", c.agent.address], { SUPERSTABLES_HOME: c.home, B4_RPC: c.chain.url });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(c.pub()).not.toMatch(/^(B4_AGENT_ADDRESS|B4_CAP|B4_SET_AT|B4_SET_TX|B4_SET_BLOCK|B4_REVOKED_AT|B4_REVOKED_TX|B4_REVOKED_BLOCK|LINK_ID|LINK_CODE)=/m);
     expect(c.pub()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${c.owner.address}$`, "m"));
@@ -548,7 +548,7 @@ describe("solana: confirmed is not finalized", () => {
     const c = await solanaCase();
     const keys = ["REVOKED_AT=1", "REVOKED_TX=sigR", "REVOKED_SLOT=5", "GRANT_TX=sigG", "GRANT_SLOT=4", "LINK_ID=x", "LINK_CODE=y"];
     writeFileSync(join(c.home, "budget", "public", "solana-devnet.env"), `${c.pub()}${keys.join("\n")}\n`);
-    const r = await script([resolve(tree.root, "budget/solana/rotate.mjs"), "--clear-agent", SOL_AGENT], { SUPERSTABLES_HOME: c.home });
+    const r = await script([resolve(tree.bundle(), "solana/rotate.mjs"), "--clear-agent", SOL_AGENT], { SUPERSTABLES_HOME: c.home });
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(c.pub()).not.toMatch(/^(SOLANA_AGENT_ADDRESS|REVOKED_AT|REVOKED_TX|REVOKED_SLOT|GRANT_TX|GRANT_SLOT|LINK_ID|LINK_CODE)=/m);
     expect(c.pub()).toMatch(new RegExp(`^SOLANA_OWNER_ADDRESS=${SOL_OWNER}$`, "m"));
