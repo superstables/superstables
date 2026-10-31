@@ -22,7 +22,7 @@ const AGENT = privateKeyToAccount(KEY).address;
 const hex = (n: bigint | number) => `0x${BigInt(n).toString(16)}`;
 const nowS = () => Math.floor(Date.now() / 1000);
 const PRICE = 10_000n;
-const SKIP_WAIT = fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url));
+const SKIP_WAIT = fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url));
 
 const { feeOf } = await import(new URL("../../budget/tempo/lib/chain.ts", import.meta.url).href);
 const { failedNext, feeSentence, notFoundFee, notFoundNext } = await import(new URL("../../budget/tempo/lib/words.ts", import.meta.url).href);

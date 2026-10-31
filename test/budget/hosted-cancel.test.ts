@@ -14,6 +14,7 @@ import { cancelSiteRequest } from "../../budget/site.mjs";
 import { evmOwner, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
 
+const SKIP_WAITS = fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
 // a grant is asked for only when the endpoints agree, at a final block, that the allowance is 0: a copy names the fake twice
@@ -1077,9 +1078,10 @@ describe("through the CLI", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  function budget(args: string[]): Promise<{ code: number; stdout: string; stderr: string; result: any }> {
+  function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string; result: any }> {
     return new Promise((done, fail) => {
       const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: rpc.url };
+      Object.assign(env, extraEnv);
       delete env.SUPERSTABLES_SITE;
       delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
       tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }] });
@@ -1119,6 +1121,8 @@ describe("through the CLI", () => {
     mkdirSync(join(home, "keys", "budget"), { recursive: true });
     writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=${KEY}\nB4_AGENT_ADDRESS=${AGENT}\n`, { mode: 0o600 });
   };
+  /** These two tests drive the site by poll count, not by time, so the poll gaps can be skipped from the start. */
+  const SKIP_POLL_GAPS = { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${SKIP_WAITS}`].filter(Boolean).join(" ") };
   const SETUP = ["setup", "--rail", "evm", "--hosted", "--fund", "--wait", "--no-open", "--timeout", "10"];
 
   it("setup --fund: wallet_asked in the envelope of GET 1, then an expired link and a skipped step: unknown (exit 5), and next says to read the chain", async () => {
@@ -1196,7 +1200,7 @@ describe("through the CLI", () => {
       r.steps![0].state = "awaiting_owner";
     };
     site.cancelAnswer = (r) => ({ status: 200, body: { id: "bl_other123", state: "cancelled", final: true, wallet_asked: false, tx_hash: null, steps: r.steps?.map((st) => ({ ...st, state: "skipped", wallet_asked: false, tx_hash: null })) } });
-    const r = await budget([...SETUP, "--site", site.url]);
+    const r = await budget([...SETUP, "--site", site.url], SKIP_POLL_GAPS);
     expect(r.code, r.stdout + r.stderr).toBe(5);
     expect(r.result).toMatchObject({ state: "unknown" });
     expect(r.result.next).toMatch(NEXT_STATUS);
@@ -1207,7 +1211,7 @@ describe("through the CLI", () => {
   it("setup --fund: the timeout cancel answers {} and the link is still open: unknown (exit 5), no 'nothing was sent', next reads the chain", async () => {
     agentOnly();
     site.cancelAnswer = () => ({ status: 200, body: {} });
-    const r = await budget([...SETUP, "--site", site.url]);
+    const r = await budget([...SETUP, "--site", site.url], SKIP_POLL_GAPS);
     expect(r.code, r.stdout + r.stderr).toBe(5);
     expect(r.result).toMatchObject({ state: "unknown" });
     expect(r.result.reason).not.toMatch(/nothing was sent/);

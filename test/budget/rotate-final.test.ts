@@ -22,7 +22,7 @@ afterAll(() => tree.close());
 const cleanups: (() => unknown)[] = [];
 afterEach(async () => { for (const c of cleanups.splice(0).reverse()) await c(); });
 
-const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
+const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url))}`].filter(Boolean).join(" ");
 const scratch = join(homedir(), ".cache", "superstables-tests");
 mkdirSync(scratch, { recursive: true });
 const homeDir = (prefix: string) => { const h = mkdtempSync(join(scratch, prefix)); cleanups.push(() => rmSync(h, { recursive: true, force: true })); return h; };

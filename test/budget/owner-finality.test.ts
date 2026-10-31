@@ -448,7 +448,7 @@ async function solanaCase(o: { delegate?: boolean } = {}) {
   solana.usdc.set(SOL_OWNER, { amount: 5_000_000n, delegate: o.delegate === false ? null : SOL_AGENT, delegated: o.delegate === false ? 0n : 50_000n });
   solana.balances.set(SOL_OWNER, 1_000_000_000n);
   // The client process does not spend the real minute `finalizedOf` waits for a signature that is only confirmed (see the helper).
-  const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`].filter(Boolean).join(" ");
+  const NODE_OPTIONS = [process.env.NODE_OPTIONS, `--import=${fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url))}`].filter(Boolean).join(" ");
   const run = (args: string[]) => cli(args, { SUPERSTABLES_HOME: home, SUPERSTABLES_SOLANA_RPC: solana.url, NODE_OPTIONS });
   const keyArgs = ["--owner-key-file", join(home, "owner.env"), "--yes"];
   return { solana, home, run, keyArgs, pub: () => readFileSync(pubFile, "utf8") };
