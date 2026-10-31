@@ -41,7 +41,7 @@ describe("chainPrerequisitesMissing", () => {
     setPrerequisiteCheck("ownerRpc", yes);
     expect(chainPrerequisitesMissing({ ...skale, token: undefined })).toEqual([TOKEN]);
     expect(chainPrerequisitesMissing({ ...skale, token: { ...SKALE_BASE_SEPOLIA.token, decimals: 6.5 } })).toEqual([TOKEN]);
-    expect(chainPrerequisitesMissing({ ...skale, key: "base-sepolia" })).toEqual([FINALITY]);
+    expect(chainPrerequisitesMissing({ ...skale, key: "polygon-amoy" })).toEqual([FINALITY]);
     setPrerequisiteCheck("agentKeyStore", () => false);
     expect(chainPrerequisitesMissing(skale)).toEqual([KEYS]);
   });
