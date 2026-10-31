@@ -27,8 +27,8 @@ Only operations needing a local signature go through the CLI; everything else go
 - `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
 
 Once per session, before requesting a budget or a purchase, call `get_my_account`.
-Tell the owner which account this chat is connected to and show the wallet's last
-four characters, for example "wallet ending 1065." Ask them to confirm that this is
+Tell the owner which account this chat is connected to and show the last four characters of each wallet it lists, for example
+"wallet ending 1065." Ask them to confirm that this is
 the account and wallet they intend to use, and wait for their answer. If no wallet
 is returned, do not assume one. A successful sign-in does not confirm that the
 intended account is connected. If the account or wallet is wrong, stop and ask the
