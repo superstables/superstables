@@ -75,20 +75,21 @@ each client command out in full, as shown in `references/cli.md`. Do not use a
 shell variable or alias: these can prevent the host from checking the command
 before it runs.
 
-Run budget set-up, grant, fund and buy only where the CLI can reach the services
-it needs and keep the agent key and its records between turns, as on the owner's
-computer with Claude Code or Codex. A shell in a temporary sandbox is not enough.
-If this chat can't meet that, stop: say why and point the owner to a coding agent
-on their computer. `pay` also needs the owner's local wallet approval. The tools
-can find services, request a purchase the owner approves on superstables.com,
-read budgets, follow a budget approval and give the revoke link.
+In a chat app (Claude, ChatGPT, Grok or any other hosted app), don't run
+commands to check what is available: decline budget set-up, grant, fund, budget
+buy and the CLI's `pay` straight away, because each needs a signature on the
+owner's machine. Say so and point the owner to Claude Code, Codex or the CLI there. The
+tools can find services, request a purchase the owner approves on
+superstables.com, read budgets, follow a budget approval and give the revoke
+link: offer those.
 
 ## When the connector is missing or signed out
 
 If these tools are missing, the CLI does all of it, `budget revoke` included:
 follow [references/cli.md](references/cli.md). If a call fails because the
 connector is not signed in, ask the owner to connect it once and end your turn.
-If they decline, use the CLI.
+Only an agent on the owner's machine, such as Claude Code or Codex, falls back to
+the CLI when the owner declines. In a chat app, stop without running commands.
 
 ## References
 

@@ -160,7 +160,7 @@ describe("plugin synchronization", () => {
     const root = fixture();
     syncPlugin({ root });
     const bundled = readFileSync(join(root, bundle, "cli.md"), "utf8");
-    expect(bundled).toContain("**This reference needs an agent that can run commands.** If this chat can't run the CLI with the storage, network access and wallet approval a command needs, use the connector tools in SKILL.md.");
+    expect(bundled).toContain("**This reference needs an agent on the owner's machine, such as Claude Code or Codex.** In a chat app, don't run commands to check; decline operations that need a local signature and use the connector tools in SKILL.md.");
     expect(bundled).not.toContain("the `superstables` skill");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 find weather");
     expect(bundled).toContain("npx --yes @superstables/client@1.2.3 budget doctor --rail evm");

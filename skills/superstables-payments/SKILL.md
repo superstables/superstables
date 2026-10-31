@@ -29,9 +29,11 @@ When the Superstables connector tools are available, use them for every operatio
 - remove an agent from the account once it has no spending permission: `remove_budget_agent` with the agent's `id` from `list_my_budgets`;
 - revoke a budget: `request_budget_revoke` with the agent's `id` from `list_my_budgets`. It signs and sends nothing. It returns the owner's link on superstables.com; send it to the owner and end your turn. They revoke with their wallet there. When the owner says they've revoked, call `get_budget_status` and quote its `revoke` and the budget's `remaining` and `state`. Treat a revoke as done only once `revoke` says it is final; `remaining` and `state` alone prove neither that a revoke landed nor that it is final. Count the revoke as unresolved until confirmed evidence establishes its outcome.
 
-Local signatures stay on the CLI: creating the agent key, `--sign-only` signing, `budget buy` (the agent key signs), `pay`, `recover` and `reconcile`. `budget wait` and `budget status` also stay on the CLI for an approval page on this machine, which the connector cannot read. Use the CLI for everything else too, `budget revoke` and the `find`, `preflight` and `status` forms included, whenever the connector tools are missing or signed out, or the owner declines to connect.
+Local signatures stay on the CLI: creating the agent key, `--sign-only` signing, `budget buy` (the agent key signs), `pay`, `recover` and `reconcile`. `budget wait` and `budget status` also stay on the CLI for an approval page on this machine, which the connector cannot read. Use the CLI for everything else too, `budget revoke` and the `find`, `preflight` and `status` forms included, whenever the connector tools are missing or signed out, or the owner declines to connect, as an agent on the owner's machine.
 
-When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. Use the CLI if they decline.
+When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. An agent on the owner's machine uses the CLI if they decline; in a chat app, stop without running commands.
+
+In a chat app, don't run commands to check what is available; decline operations that need a local signature (set-up, grant, fund, `budget buy` and the CLI's `pay`) and offer the connector's reads and revoke link. Only an agent on the owner's machine, such as Claude Code or Codex, runs this skill's commands.
 
 ## Running the CLI
 
