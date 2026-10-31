@@ -168,6 +168,25 @@ describe("rotate, evm", () => {
     expect(e.chain.allowanceOf(OWNER.address, e.agent.address)).toBe(usdc("1"));
   }, 120_000);
 
+  it("with two owner lines in the key file the last one counts, as the rails read it", async () => {
+    const dead = "0x000000000000000000000000000000000000dEaD";
+    for (const [lines, refused] of [[[OWNER.address, dead], true], [[dead, OWNER.address], false]] as const) {
+      const e = await evmCase();
+      const keyFile = file("keys", "budget", "evm-agent.env");
+      write(keyFile, `${readFileSync(keyFile, "utf8")}${lines.map((o) => `B4_OWNER_ADDRESS=${o}\n`).join("")}`);
+      const r = await e.run(["rotate", "--rail", "evm", "--plan"]);
+      if (refused) {
+        expect(r.code, all(r)).toBe(3);
+        expect(r.result).toMatchObject({ state: "refused_precheck", retired: false });
+      } else {
+        expect(r.code, all(r)).toBe(0);
+        expect(r.result.state).toBe("planned");
+      }
+      expect(sendsOf(e.chain)).toBe(0);
+      expect(existsSync(file("keys", "budget", "retired.json"))).toBe(false);
+    }
+  }, 240_000);
+
   it("a step that fails stops it with the old address already retired; the next run finishes", async () => {
     const e = await evmCase();
     e.chain.hook = (method) => (method === "eth_sendRawTransaction" ? { error: { code: -32000, message: "the node refuses" } } : undefined);
