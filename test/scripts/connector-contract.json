@@ -1,0 +1,29 @@
+{
+  "comment": "Generated from the connector's server code. Do not edit by hand.",
+  "tools": [
+    "get_my_account",
+    "find_services",
+    "request_purchase",
+    "get_purchase_status",
+    "list_my_budgets",
+    "get_budget_request",
+    "request_budget_revoke",
+    "remove_budget_agent",
+    "submit_budget_request",
+    "find_budget_services",
+    "preflight_budget_purchase",
+    "wait_budget_request",
+    "get_budget_status"
+  ],
+  "waits": {
+    "get_purchase_status": 25,
+    "wait_budget_request": 25
+  },
+  "purchaseWait": {
+    "tool": "get_purchase_status",
+    "param": "wait_seconds",
+    "seconds": 25,
+    "rule": "After request_purchase, show the approval link and match code, then in the same turn call get_purchase_status with wait_seconds at its maximum and repeat while the owner has not approved. Only a host that shows the reply at the end of the turn ends the turn instead and calls get_purchase_status when the owner says they approved.",
+    "instructionsStateIt": true
+  }
+}
