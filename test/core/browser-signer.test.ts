@@ -38,6 +38,7 @@ import bs58 from "bs58";
 import { createServer, request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 import { startPaidEndpoint, type PaidEndpoint } from "../helpers/paid-endpoint.js";
 
 const PRICE = 0.01;
@@ -1488,7 +1489,7 @@ describe("the tempo owner calldata", () => {
 // the dispatcher uses. `wait` and the refusal of a second approval run through the real CLI.
 
 const REPO = join(import.meta.dirname, "..", "..");
-const CLI = join(REPO, "budget", "cli.mjs");
+const CLI = join(budgetBundle(), "cli.mjs");
 const TSX = join(REPO, "node_modules", ".bin", "tsx");
 type Approvals = typeof import("../../budget/approvals.mjs");
 let approvals: Approvals;

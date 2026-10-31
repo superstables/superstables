@@ -44,7 +44,7 @@ function cli(args: string[], env: Record<string, string>): Promise<Run> {
     const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", B4_CHAIN: "", ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [resolve(env.NODE_OPTIONS ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env: e });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env: e });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
