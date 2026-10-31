@@ -57,7 +57,9 @@ function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
   return `**This reference needs an agent that can run commands.** In a chat app without a terminal, the connector tools in SKILL.md are the route.
 
-Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
+Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.
+
+If \`npx\` reports that the pinned \`@superstables/client\` version is unavailable (E404 or ETARGET), stop and ask the owner to check the plugin installation against the public marketplace, \`superstables/superstables\`. Do not substitute another version, package or download source.`;
 }
 
 function statIfPresent(path) {
