@@ -25,6 +25,7 @@ import { noteBinding } from "../page-facts.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
+import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -71,7 +72,7 @@ export const PUBLIC_ENV = publicFile("evm", CFG.key);
 export const OPS_DIR = opsDir("evm", CFG.key);
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-export { rpcPause } from "../rpc-pause.mjs";
+export { rpcPause };
 export const tx = (h: string) => `${EXPLORER}/tx/${h}`;
 export const usdc = (v: bigint) => formatUnits(v, USDC_DECIMALS);
 /** Native gas token amount (Arc: USDC with 18 decimals; Base: ETH). */
@@ -186,7 +187,7 @@ export const newKey = () => generatePrivateKey();
 // every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs). Every answer is read through
 // cappedRpcFetch (../rpc.mjs): at most EVM_RPC_MAX_BYTES, RPC error text as one short line, a non-JSON answer named so.
 const rpcFetch = cappedRpcFetch(EVM_RPC_MAX_BYTES);
-const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
+const transport = () => http(RPC, { retryCount: 5, retryDelay: rpcWaitMs(400), onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
 export const publicClient = createPublicClient({ chain, transport: transport() });
 export const walletFor = (key: Hex, opts?: { nonceManager?: NonceManager }) => {
   const account = privateKeyToAccount(key, opts?.nonceManager ? { nonceManager: opts.nonceManager } : undefined);
@@ -212,7 +213,7 @@ export const erc20Abi = parseAbi([
 export async function retry<T>(fn: () => Promise<T>, tries = 4, gap = 1500): Promise<T> {
   let last: any;
   for (let i = 0; i < tries; i++) {
-    try { return await fn(); } catch (e) { last = e; await sleep(gap); }
+    try { return await fn(); } catch (e) { last = e; await rpcPause(gap); }
   }
   throw last;
 }
