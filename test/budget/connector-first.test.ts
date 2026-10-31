@@ -23,6 +23,13 @@ describe("connector-first routing in the references", () => {
       expect(before).toMatch(/missing|declined|signed out/);
     });
 
+    it(`${base} tells a chat app to decline local-signature operations without running commands`, () => {
+      const text = read(base.startsWith("plugin") ? "plugin/skills/superstables/SKILL.md" : "skills/superstables-payments/SKILL.md");
+      expect(text).toMatch(/In a chat app[\s\S]*?don.t run\s+commands to check[\s\S]*?decline/);
+      expect(text).toMatch(/signature/);
+      expect(text).not.toMatch(/temporary sandbox is not enough/);
+    });
+
     it(`${base}/budget.md sends a signed-in evm hosted setup through submit_budget_request before the direct command`, () => {
       const text = read(`${base}/budget.md`);
       const step = text.indexOf("2. **One approval link.**");
