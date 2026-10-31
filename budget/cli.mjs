@@ -1550,6 +1550,7 @@ function refusalNext(f, rail) {
   const why = `${rail.reason ?? ""} ${rail.next ?? ""}`;
   const r = `--rail ${f.rail}${chainFlag(f)}${agentFlag(f)}`;
   if (/superstables budget (recover|fund-agent)/.test(rail.next ?? "")) return rail.next;
+  if (/^the agent key file records owner /.test(rail.reason ?? "") && /^superstables budget setup /.test(rail.next ?? "")) return rail.next;
   // A spent, revoked or expired budget is reported, never worked around: an offer of a new or bigger grant is the owner's to
   // make (in agent test runs, "ask the owner to run grant" here made agents propose a revoke and a new grant).
   const stop = "Report what you bought, what is left and the price in one reply (message_for_owner), and end your turn. Do not propose or start a revoke, a new or bigger grant or gas unless the owner explicitly asks for one, and never raise --max to get around it";
@@ -2593,6 +2594,18 @@ async function rotateLocked({ f, ctx }) {
   for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
   const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
   if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
+  // recover, which rotate runs after it retires the old address, refuses this key file, so the rotation would stop half done
+  if (rail === "evm" && !existing && existsSync(agentKeyFile(rail))) {
+    const { staleOwnerLine } = await import("./evm-owner-line.mjs");
+    let fileOwner;
+    try { fileOwner = [...readRegularFile(agentKeyFile(rail), "the agent key file").matchAll(/^(?:export\s+)?B4_OWNER_ADDRESS=(.*)$/gm)].at(-1)?.[1]?.trim().replace(/^['"]|['"]$/g, ""); } catch {}
+    for (const c of fileOwner ? chains : []) {
+      let lines = {};
+      try { lines = Object.fromEntries([...readRegularFile(publicFile(rail, c), "the public file").matchAll(/^(?:export\s+)?([A-Z0-9_]+)=(.*)$/gm)].map((m) => [m[1], m[2].trim().replace(/^['"]|['"]$/g, "")])); } catch {}
+      const stale = staleOwnerLine({ B4_OWNER_ADDRESS: fileOwner }, lines, c);
+      if (stale) return refusal(`the agent key file records owner ${stale.fileOwner}, the public file for ${c} records ${stale.publicOwner}. Nothing was retired or sent`, `${stale.repair} on the machine with the agent key, then run rotate again`);
+    }
+  }
 
   // The owner's steps are the commands of the same name, run in the foreground so each approval is waited for. A test key file
   // signs them (setup takes none for a chain approved on the site: there the owner signs in).

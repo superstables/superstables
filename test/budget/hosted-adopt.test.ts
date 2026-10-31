@@ -31,13 +31,14 @@ import { pad, toEventSelector } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { HostedAdopted, HostedApprovals, HostedRefusal, HostedSigned, givesUp, type Evidence, type HostedRecord, type SignedRecord, type SignedRequest } from "../../budget/hosted.js";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
-import { startFakeRpc, startFakeSite, submitSigned, type FakeSite } from "../helpers/fake-site.js";
+import { evmOwner, startFakeRpc, startFakeSite, submitSigned, type FakeSite } from "../helpers/fake-site.js";
 import { walletEvidence } from "../../budget/site.mjs";
 import type { TestServer } from "../helpers/servers.js";
 
 import { KEY, OTHER_KEY, AGENT, OWNER, USDC, GRANT_HASH, FUND_HASH, FUND_VALUE, TERMS, approveData, grantTx, NONE, isEvmTx, NEVER_SIGNED_CODES, OTHER_CODES, PROOF_HEADERS } from "../helpers/hosted-adopt-fixtures.js";
 
 let site: FakeSite;
+const OTHER_OWNER = evmOwner("55");
 
 describe("signed here, adopted by id (HostedApprovals)", () => {
   /** Every request a client sends that is not to the fake site's reads: none may leave a --sign-only client. */
@@ -785,6 +786,32 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     // token: never in any output, log or file but the approval record
     const tokens = [r.token, ...Array.from({ length: r.renewals ?? 0 }, (_, i) => `ssbt_test_${r.id}renewed${i + 1}`)];
     for (const text of [...outputs, ...filesOutsideRecords()]) for (const t of tokens) expect(text).not.toContain(t);
+  }, 300_000);
+
+  it("setup --hosted --sign-only, adopted: a stale B4_OWNER_ADDRESS line in the agent key file is gone once the owner's proof is recorded", async () => {
+    onRecord(false);
+    const agentPath = join(home, "keys", "budget", "evm-agent.env");
+    const kept = `B4_AGENT_KEY=${KEY}\nB4_AGENT_ADDRESS=${AGENT}\n# kept\nB4_LABEL=mine\n`;
+    writeFileSync(agentPath, `B4_AGENT_KEY=${KEY}\nB4_AGENT_ADDRESS=${AGENT}\nB4_OWNER_ADDRESS=${OTHER_OWNER}\n# kept\nB4_LABEL=mine\n`, { mode: 0o600 });
+    const signed = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--sign-only"]);
+    expect(signed.code, signed.stderr).toBe(0);
+    const id = signed.result.id;
+    const v = await connector(signed.result.request);
+    const adopted = await budget(adoptArgs(id, v));
+    expect(adopted.code, adopted.stderr).toBe(0);
+    expect(readFileSync(agentPath, "utf8")).toContain(`B4_OWNER_ADDRESS=${OTHER_OWNER}`);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    chain.approved = true;
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ command: "setup", state: "ok", owner: OWNER });
+    expect(readFileSync(agentPath, "utf8")).toBe(kept);
+    expect(statSync(agentPath).mode & 0o777).toBe(0o600);
+    expect(lines("B4_OWNER_ADDRESS")).toBe(1);
+    expect(publicFile()).toContain(`B4_OWNER_ADDRESS=${OWNER}`);
   }, 300_000);
 
   it("a link whose read garbles the owner, the owner proof version or a step does not match what was signed: unknown, the request kept and the chain held", async () => {

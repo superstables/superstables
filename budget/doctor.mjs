@@ -17,6 +17,7 @@ import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
+import { staleOwnerLine } from "./evm-owner-line.mjs";
 import { TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
@@ -72,6 +73,11 @@ const RAILS = {
       setup: `superstables budget setup --rail evm${flag}`, newOwner: `superstables budget setup --rail evm${flag} --new-owner`,
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
+      allowance: async (owner, agent) => {
+        const word = (a) => a.slice(2).toLowerCase().padStart(64, "0");
+        const raw = BigInt(await rpc(c.rpc, "eth_call", [{ to: tok.address, data: `0xdd62ed3e${word(owner)}${word(agent)}` }, "latest"]));
+        return { amount: Number(raw) / 10 ** tok.decimals, token: tok.symbol, label: c.label };
+      },
       balances: async (owner, agent) => {
         // what the gas costs at the current fee (null when the fee cannot be read: then only the fixed minimums apply)
         const fee = await evmFeeCap(c.rpc).catch(() => null);
@@ -272,6 +278,11 @@ export async function runDoctor(f) {
     }
   }
 
+  if (f.rail === "evm" && existsSync(agentKeyFile(f.rail)) && !unsafe.has(agentKeyFile(f.rail))) {
+    const stale = staleOwnerLine(agent, pub, f.chain);
+    if (stale) line(false, "owner on record", `the agent key file ${agentKeyFile(f.rail)} records ${stale.fileOwner}, the public file records ${stale.publicOwner}. Buy refuses while these owners differ. Run ${stale.repair} where the agent key is. It asks the owner to sign only when the record needs a new signature`);
+  }
+
   if (!existsSync(r.pub)) line(false, `public file ${r.pub}`, `does not exist (run ${r.setup})`);
   else {
     const secrets = await publicKeyNames(pub, { keyAddress: r.keyAddress, caseSensitive: r.caseSensitive, addresses: [ownerAddress, agentAddress] });
@@ -290,6 +301,12 @@ export async function runDoctor(f) {
       }
     } catch (e) { line(false, "balances", siteText(e.message, 300)); }
   } else if (rpcOk) line(false, "balances", "no owner or agent address to read");
+  if (rpcOk && r.allowance && ownerAddress && agentAddress) {
+    try {
+      const a = await r.allowance(ownerAddress, agentAddress);
+      process.stderr.write(`  info  allowance: ${a.amount} ${a.token} from ${ownerAddress} to the agent on ${a.label}. 0 means none was granted, or it is spent or revoked\n`);
+    } catch (e) { process.stderr.write(`  info  allowance: could not be read (${siteText(e.message, 200)})\n`); }
+  }
   for (const t of topUps) process.stderr.write(`  ${t}\n`);
   return failed;
 }
