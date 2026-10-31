@@ -39,22 +39,7 @@ export const PLUGIN_LISTING = {
 
 export const zipName = (app, version) => `superstables-plugin-${app}-${version}.zip`;
 
-export const CONNECTOR_TOOLS = [
-  "get_my_account",
-  "find_services",
-  "request_purchase",
-  "get_purchase_status",
-  "find_budget_services",
-  "preflight_budget_purchase",
-  "list_my_budgets",
-  "get_budget_status",
-  "get_budget_request",
-  "wait_budget_request",
-  "request_budget_revoke",
-  "remove_budget_agent",
-  "submit_budget_request",
-];
-
+// The connector tools and the waiting rule are not listed here: the server owns them (test/scripts/connector-contract.json is a generated copy).
 // CLI commands that need a signature from this machine. Each is a substring the skill's CLI text must mention.
 export const LOCAL_ONLY = ["--sign-only", "budget buy", "pay", "recover", "reconcile"];
 
