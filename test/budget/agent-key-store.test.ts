@@ -15,9 +15,10 @@ import { startFakeSolana, type FakeSolana } from "../helpers/fake-chains.js";
 import { fakeKeychain, type FakeKeychain } from "../helpers/fake-keychain.js";
 import { endpointTree } from "../helpers/endpoint-tree.js";
 import { rotate } from "../../budget/rotate.mjs";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+const CLI = join(budgetBundle(), "cli.mjs");
 const SOLANA_ROTATE = resolve(ROOT, "budget/solana/rotate.mjs");
 
 let home: string;
