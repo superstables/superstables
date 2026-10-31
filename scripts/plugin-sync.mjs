@@ -55,7 +55,7 @@ const SKILL_ICON_COPIES = [
 
 function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
-  return `**This reference needs an agent that can run commands.** In a chat app without a terminal, the connector tools in SKILL.md are the route.
+  return `**This reference needs an agent that can run commands.** If this chat can't run the CLI with the storage, network access and wallet approval a command needs, use the connector tools in SKILL.md.
 
 Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.
 
