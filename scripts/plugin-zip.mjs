@@ -23,7 +23,7 @@ export function layoutFiles(root, layout) {
   if (layout === "marketplace") {
     return Object.fromEntries([[".claude-plugin/marketplace.json", read(".claude-plugin/marketplace.json")], ...plugin.map(([zip]) => [zip, read(zip)])]);
   }
-  const skip = layout === "claude-root" ? new Set(["plugin.json", "mcp.json"]) : new Set([".claude-plugin/plugin.json", ".mcp.json"]);
+  const skip = layout === "claude-root" ? new Set(["plugin.json", "mcp.json", ".cursor-plugin/plugin.json"]) : new Set([".claude-plugin/plugin.json", ".mcp.json"]);
   if (layout !== "claude-root" && layout !== "cursor-root") throw new Error(`Unknown layout: ${layout}`);
   return Object.fromEntries(plugin.filter(([, f]) => !skip.has(f)).map(([zip, f]) => [f, read(zip)]));
 }
