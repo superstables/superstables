@@ -26,6 +26,17 @@ Only operations needing a local signature go through the CLI; everything else go
 - `remove_budget_agent`: remove an agent from the account, off chain, once it has no spending permission. Moves no funds.
 - `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
 
+Before you request a purchase or a budget, call `get_my_account` and tell the owner
+which account and wallet you are connected as, by the wallet's last four
+characters (for example "wallet ending 1065"). Go on only if that is the one they
+expect. A sign-in that worked does not show it was the right account: the browser
+may have been signed in to another wallet. If it is not theirs, stop. Ask them to
+sign the connector in again with the right wallet, then call `get_my_account`
+again. If it still shows the old account, the app is holding the old sign-in: in
+Codex, tell them to start a new session (the running one keeps its token); Claude
+Code follows the new sign-in, and a new session fixes it if not. Never go on with
+the old account.
+
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
 code, show both to the user in your reply now. Then, in the same turn, call
