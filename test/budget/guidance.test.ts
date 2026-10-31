@@ -8,9 +8,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 
 const REPO = join(import.meta.dirname, "..", "..");
-const CLI = join(REPO, "budget", "cli.mjs");
+const CLI = join(budgetBundle(), "cli.mjs");
 
 let home: string;
 
