@@ -34,6 +34,8 @@ When a connector call fails because it is not signed in, ask the owner to connec
 
 Run the CLI as `npx --yes @superstables/client@1.0.0 <command>`, for example `npx --yes @superstables/client@1.0.0 find weather` or `npx --yes @superstables/client@1.0.0 budget doctor --rail evm`. In the commands below, `superstables` is shorthand for `npx --yes @superstables/client@1.0.0`. If `superstables` is already installed at version 1.0.0, that works too. Node 22 or newer is required. Keys and state are in `$SUPERSTABLES_HOME` (default `~/.superstables`), shared with any other copy of the tool on this machine. Never run unscoped `npx superstables`: it can download a different package. Use the scoped, pinned package above.
 
+If `npx` reports that the pinned `@superstables/client` version is unavailable (E404 or ETARGET), stop and ask the owner to check the plugin installation against the public marketplace, `superstables/superstables`. Do not substitute another version, package or download source.
+
 Every command has `--help` that lists its flags, whether it moves money, who runs it, what it prints and its exit codes. Read a command's `--help` before its first use instead of guessing flags. `superstables budget --help` also maps chain names to rails and lists the owner's steps per rail. Every `superstables budget` command accepts `--site <origin>`; pass one only when the owner gave you that site, and then pass it to each (safety rule 9).
 
 ## First, ask the owner what they would like to try
