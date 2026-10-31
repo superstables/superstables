@@ -39,13 +39,19 @@ describe("plugin zips", () => {
       if (layout === "marketplace") {
         expect(names).toContain(".claude-plugin/marketplace.json");
         expect(names).toContain("plugin/skills/superstables/SKILL.md");
+        expect(names).toContain("plugin/assets/icon.png");
+        expect(names).toContain("plugin/skills/superstables/assets/icon-large.png");
       } else if (layout === "claude-root") {
         expect(claudeManifests).toEqual([".claude-plugin/plugin.json"]);
         expect(names).not.toContain("plugin.json");
+        expect(names).not.toContain(".cursor-plugin/plugin.json");
+        expect(names).toContain("assets/icon.png");
       } else {
         expect(names).toContain("plugin.json");
         expect(names).toContain("mcp.json");
         expect(claudeManifests).toEqual([]);
+        expect(JSON.parse(Buffer.from(files[".cursor-plugin/plugin.json"]).toString()).logo).toBe("assets/icon.png");
+        expect(names).toContain("assets/icon.png");
         expect(JSON.parse(Buffer.from(files["plugin.json"]).toString()).$schema).toMatch(/agent-plugins\.org/);
       }
       if (layout !== "marketplace") expect(names).toContain("skills/superstables/SKILL.md");

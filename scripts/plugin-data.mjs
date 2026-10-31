@@ -15,6 +15,28 @@ export const PLUGIN_ZIPS = [
   { app: "cursor", label: "Cursor", layout: "cursor-root" },
 ];
 
+// The one source for how the plugin is listed. scripts/plugin-sync.mjs writes it into every manifest, the marketplace
+// entry and the skill's agents/openai.yaml, and `plugin:check` fails when one differs. Icons are the Superstables mark from
+// the website's app/icon.svg (plugin/assets/icon.svg, rendered to icon.png).
+export const PLUGIN_LISTING = {
+  name: "superstables",
+  displayName: "Superstables",
+  shortDescription: "Find paid services and request single purchases that you approve. Testnet only.",
+  longDescription:
+    "Superstables lets your agent find services that charge per request and read what they cost. In an app with a terminal, Budgets let you approve a total spending limit in your wallet, on your machine or on superstables.com. The agent can then spend within that limit without approval for each purchase. You can revoke the budget by signing a transaction in your wallet. For a single purchase through the connector, an account member approves and signs in their wallet on superstables.com before payment. Testnet only: test tokens, no real money.",
+  marketplaceDescription: "Superstables tools and skills for finding services and paying with test tokens.",
+  developerName: "Superstables",
+  category: "Payments",
+  homepage: "https://www.superstables.com",
+  repository: "https://github.com/superstables/superstables",
+  license: "Apache-2.0",
+  keywords: ["payments", "services", "mcp", "cli", "testnet"],
+  brandColor: "#CBFF00",
+  // Paths relative to plugin/. The skill keeps its own copies (plugin-sync copies and checks them) because openai.yaml paths are relative to the skill.
+  icon: "assets/icon.png",
+  skillIcons: { small: "assets/icon-small.svg", large: "assets/icon-large.png" },
+};
+
 export const zipName = (app, version) => `superstables-plugin-${app}-${version}.zip`;
 
 export const CONNECTOR_TOOLS = [

@@ -1,6 +1,8 @@
 {
   "name": "superstables",
-  "owner": { "name": "Superstables" },
+  "owner": {
+    "name": "Superstables"
+  },
   "metadata": {
     "description": "Superstables tools and skills for finding services and paying with test tokens."
   },
@@ -8,7 +10,17 @@
     {
       "name": "superstables",
       "source": "./plugin",
-      "description": "Find services and request purchases with approval on superstables.com, through one skill that uses the Superstables tools and, for what needs a local signature, the CLI. Testnet-first."
+      "displayName": "Superstables",
+      "description": "Find paid services and request single purchases that you approve. Testnet only.",
+      "category": "Payments",
+      "tags": [
+        "payments",
+        "services",
+        "mcp",
+        "cli",
+        "testnet"
+      ],
+      "homepage": "https://www.superstables.com"
     }
   ]
 }
