@@ -1819,6 +1819,9 @@ describe("a detached owner approval", () => {
     const record = await detach();
     process.kill(-record.pid, "SIGKILL");
     expect(await gone(record.pid)).toBe(true);
+    // the leader is gone before the rest of its group (tsx's node child, the page's process) has been reaped: wait counts those as alive
+    for (let i = 0; i < 50 && approvals.processesAlive(approvals.readApproval(record.id)); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(approvals.processesAlive(approvals.readApproval(record.id))).toBe(false);
     const outcome = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(outcome.code).toBe(3);
     expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });
