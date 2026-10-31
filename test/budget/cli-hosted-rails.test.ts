@@ -64,7 +64,7 @@ function budget(args: string[], o: { skipFinalityWait?: boolean } = {}): Promise
     if (o.skipFinalityWait) env.NODE_OPTIONS = [process.env.NODE_OPTIONS, SKIP_FINALITY_WAIT].filter(Boolean).join(" ");
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [o.skipFinalityWait ? CLI : resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
