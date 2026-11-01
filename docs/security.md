@@ -806,6 +806,13 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
+The plugin (Claude Code, Codex and Claude) is one of two ways in. It installs from this repository's
+marketplace, `superstables/superstables`, which gives whatever the default branch holds, or from a
+plugin zip attached to the release with a `.sha256` file beside it. The plugin carries no client
+code: it runs the CLI from npm with `npx --yes @superstables/client@<version>`, at the exact version
+its files name, and reaches the Superstables tools at `https://mcp.superstables.com`. The checksum
+caveat below applies to the plugin zip as it does to the skill zip.
+
 For 1.1.0, use the agent skill zip attached to the 1.1.0 release on
 [GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.0.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256

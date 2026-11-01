@@ -1,8 +1,8 @@
 # Single purchase
 
-For `pay` and `status`, `final` keeps its 0.3.0 meaning: the attempt's running workflow has ended, including `uncertain`. It does not prove payment or stop read-only recovery. `chain: verified` means a matching payment was read on chain. `chain_final` separately reports `true` after finality, `false` for matching provisional inclusion, or `null` when no current matching inclusion is established. Read `status` again when finality is pending or the outcome is uncertain. SDK `Attempt.chain` and `Receipt.chain` use the same matching-inclusion meaning; additive `chainFinal` maps to CLI `chain_final`. See [SDK payment records](sdk.md).
+For `pay` and `status`, `final` keeps its meaning from before `chain_final` existed: the attempt's running workflow has ended, including `uncertain`. It does not prove payment or stop read-only recovery. `chain: verified` means a matching payment was read on chain. `chain_final` separately reports `true` after finality, `false` for matching provisional inclusion, or `null` when no current matching inclusion is established. Read `status` again when finality is pending or the outcome is uncertain. SDK `Attempt.chain` and `Receipt.chain` use the same matching-inclusion meaning; additive `chainFinal` maps to CLI `chain_final`. See [SDK payment records](sdk.md).
 
-`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+`budget` keeps the command-completion meaning `final` had before `chain_final` existed. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
 
 <a id="one-purchase-at-a-time"></a>
 
@@ -53,6 +53,11 @@ That wallet must be available on the owner's device to sign. An account admin li
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
+Superstables limits every account to 0.05 per payment and 1 per UTC day, in USDC, USDG and pathUSD token units
+counted together across chains, and the site does not let the owner change them today. If the site switches on
+editable limits, any account member can lower them and an account admin can raise them again with a wallet
+signature, but a single purchase on superstables.com stays at most 0.05.
+
 A purchase is reported paid only once the command has read the payment on chain, and only for the payment
 the site first showed for it. To list the
 services and buy one:
@@ -62,7 +67,7 @@ superstables budget find --once
 superstables budget buy-once --service superstables-demo-market-data --param asset=BTC --max 0.01
 ```
 
-`--max` is the most you accept, in the service's token (USDC, or pathUSD on Tempo): a service that costs more is refused before anything is
+`--max` is the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo): a service that costs more is refused before anything is
 created. The command prints an `APPROVE` line with the approval link and a match code. Run by an agent (stdout is not
 a terminal), or with `--detach`, it then returns with `state: "waiting_owner"` and an approval `id`; in
 a terminal it waits for the purchase to end. Send the `RESULT`'s `message_for_owner` word for word (you may add one short line before it; it has the approval link, the
@@ -177,7 +182,7 @@ superstables quote --service superstables-demo-market-data --param asset=BTC
     ok       kill_switch  off
     ok       deny         empty
     ok       allow        empty: any host
-    ok       stablecoins  USDC is in [USDC, pathUSD]
+    ok       stablecoins  USDC is in [USDC, pathUSD, USDG]
     ok       caps.per_call 0.01 USDC, at most 0.05 USDC
     ok       caps.per_day 0 USDC paid today (UTC) + this 0.01 = 0.01, at most 1 USDC
 
@@ -307,4 +312,4 @@ it ends the attempt as `abandoned` before the owner can act.
 
 Every command and flag: [CLI reference](cli.md).
 
-A buy-once whose earlier inclusion was removed can stay `unknown`, `final: false` indefinitely, even after finality passes its old block. The read token remains available, as in 0.3.0's existing site-paid but chain-unverified unknown case. Stop automatic polling in that case and report it to the owner. `superstables budget wait --id <id> --abandon` ends local waiting without proving the purchase unpaid or permitting payment again.
+A buy-once whose earlier inclusion was removed can stay `unknown`, `final: false` indefinitely, even after finality passes its old block. The read token remains available, as in the earlier site-paid but chain-unverified unknown case. Stop automatic polling in that case and report it to the owner. `superstables budget wait --id <id> --abandon` ends local waiting without proving the purchase unpaid or permitting payment again.

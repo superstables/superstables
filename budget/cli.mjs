@@ -531,8 +531,8 @@ Adopt that request with --site-request; only if it was never sent, run the owner
       usage: "superstables budget buy-once --service ID --max M [--param K=V ...] [--params JSON] [--site URL] [--wait|--detach] [--replace]",
       about: `Single purchase on superstables.com: the owner approves on superstables.com. No setup, no budget, no agent key. ${TESTNET_LINE}
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
-Sepolia, Arc Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max is required: the most
-you accept, in the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is
+Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max
+is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
 created.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
@@ -687,9 +687,9 @@ on this machine is offered the chain's public RPC.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+Amounts are in the budget token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on tempo); an unknown amount is null, never "0". final is false
 while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
-buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for
+buy-once unknown that a later wait can still read, true otherwise, as before chain_final existed. Scripts test final for
 command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
 and null when no current matching payment inclusion is established. A paid provisional result has final true and

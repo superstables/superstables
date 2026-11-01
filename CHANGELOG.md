@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs and skill text:** Cursor is no longer offered in the README or the install guide; use the Get started prompt in other agents that run commands. The Claude plugin zip keeps its file name, `superstables-plugin-claude-apps-<version>.zip`, and the README calls the app Claude.
+- **Chat apps:** the README and install guide say how Grok Bot connects through the connector, what it can and can't do, and that it has not yet been verified end to end. The skill tells a chat app to request purchases through the connector only, and to show the account's wallet line with every approval link.
+- **Single purchase limits:** the docs and skills now say 0.05 per payment and 1 per day, counted in USDC, USDG and pathUSD token units, and that the site does not let owners change them today. `budget buy-once --help` lists Robinhood Chain Testnet and USDG.
+
 ## [1.1.0] - Plugin installation and budget guidance
 
 Testnet only.

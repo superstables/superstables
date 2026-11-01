@@ -20,7 +20,11 @@ describe("a refused budget purchase stops the agent", () => {
       const text = read(file);
       expect(text).toMatch(RULE);
       expect(text).toMatch(/per-purchase limit/);
-      expect(text).toMatch(/\(`request_purchase`, `buy-once` or `pay`\) only when the owner says yes/);
+      // The plugin skill serves chat apps too: they request through the connector only.
+      const request = file === "plugin/skills/superstables/SKILL.md"
+        ? /only when the owner says yes: with `request_purchase`, or, in a coding agent on the owner's machine, `buy-once` or `pay`/
+        : /\(`request_purchase`, `buy-once` or `pay`\) only when the owner says yes/;
+      expect(text).toMatch(request);
     });
   }
 });
