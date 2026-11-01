@@ -981,7 +981,7 @@ function wordsOf(view, site = "superstables.com") {
   if (waiting) return waiting;
   const next = accountRefusalNext(view.reason_code);
   if (next) return next;
-  if (view.reason_code === "owner_policy") return `the owner tried to approve and their own limits on ${site} refused it; they can change the limits and approve before the approval link expires`;
+  if (view.reason_code === "owner_policy") return `the account limits on ${site} refused the owner's approval; the payment must fit those limits before the approval link expires`;
   return `waiting for the owner to open the approval link on ${site}, signed in with their wallet, and pick the match code`;
 }
 

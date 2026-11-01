@@ -806,11 +806,11 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-The plugin (Claude Code, Codex and Claude) is one of two ways in. It installs from this repository's
+The plugin (Claude Code and Codex) is one of two ways in. It installs from this repository's
 marketplace, `superstables/superstables`, which gives whatever the default branch holds, or from a
 plugin zip attached to the release with a `.sha256` file beside it. The plugin carries no client
 code. In Claude Code and Codex, it runs the CLI from npm with `npx --yes @superstables/client@<version>`,
-at the exact version its files name. In all three apps, it reaches the Superstables tools at
+at the exact version its files name. In both apps, it reaches the Superstables tools at
 `https://mcp.superstables.com`. The checksum
 caveat below applies to the plugin zip as it does to the skill zip.
 

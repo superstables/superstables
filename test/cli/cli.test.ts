@@ -353,7 +353,7 @@ describe("the help", () => {
     expect(stdout).toContain("`superstables setup` is for pay only");
     // the second single-purchase way: the owner approves on superstables.com, from any device
     expect(stdout).toContain("budget buy-once");
-    expect(stdout).toContain("Start here, one purchase on superstables.com");
+    expect(stdout).toContain("Start here, Single purchase on superstables.com");
     expect(stdout).toContain("superstables budget find --once");
     expect(stdout).toMatch(/budget buy-once --service <id> --max M/);
     for (const sub of ["setup", "fund-agent", "doctor", "preflight", "status", "grant", "buy", "reconcile", "revoke", "recover", "wait"]) {

@@ -76,8 +76,8 @@ before it runs.
 In a chat app (Claude, ChatGPT, Grok Bot or any other hosted app), don't run
 commands to check what is available: decline budget set-up, grant, fund, budget
 buy and the CLI's `pay` straight away, because each needs a signature on the
-owner's machine. Don't offer to send a signed block either. Say so and point the owner to Claude Code, Codex or the
-Superstables CLI. The tools can find services, request a purchase the owner approves on
+owner's machine. Don't offer to send a signed block either. Say so and point the owner to Claude Code, Codex or
+another agent that can run commands. The tools can find services, request a purchase the owner approves on
 superstables.com, read budgets, follow a budget approval and give the revoke
 link: offer those.
 
