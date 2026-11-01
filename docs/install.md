@@ -48,8 +48,9 @@ budgets and give you the link to revoke one. It cannot run the client, so it dec
 grants, funding, buying under a budget and `pay`. The chat shows each approval link with a line
 naming the account's wallets by their last four characters; if that is not your account, don't
 approve. Grok Bot takes the same URL: ask the bot in chat to add a remote MCP server with it, then
-sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. Grok Bot has
-not yet been verified end to end. The steps for each app are at
+sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. In our testing
+on staging, the Grok Bot desktop app completed single purchases on Base Sepolia; other chains and
+phone use are not tested yet. The steps for each app are at
 [superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
 [the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
 
