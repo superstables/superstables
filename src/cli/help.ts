@@ -83,18 +83,19 @@ What this is:
   Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
-Two ways to pay, Single purchase or Budget:
-  pay      Single purchase on your machine: the owner approves each payment in their own wallet: a browser wallet such as MetaMask
-           (Phantom on Solana) on a page \`pay\` serves on 127.0.0.1 (the default), or the local
-           wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
-           Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
+Two ways to pay: Budgets or Single purchase
+  budget   Budgets. The owner grants an on-chain budget once, from their wallet; the agent then
+           buys on its own until the budget is spent, expires or is revoked. The chain enforces
+           the limit. Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
+           Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
+           (Solana devnet). Use it when the agent should buy without asking each time.
+  pay      Single purchase on your machine. The owner approves each payment in their own wallet:
+           a browser wallet such as MetaMask (Phantom on Solana) on a page \`pay\` serves on
+           127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
+           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato. Use it when the
+           owner is there to approve.
            Or \`budget buy-once\`: Single purchase on superstables.com, approved from any
            device (needs an account there), for the services \`superstables budget find --once\` lists.
-  budget   Budget: the owner grants an on-chain budget once, from their wallet; the agent then buys on its
-           own until the budget is spent, expires or is revoked. The chain enforces the limit.
-           Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-           Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
-           (Solana devnet). Use it when the agent should buy without asking each time.
 
 Start here, pay:
   superstables setup                                   owner, once: home directory and policy (pay only)

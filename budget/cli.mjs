@@ -533,7 +533,8 @@ Adopt that request with --site-request; only if it was never sent, run the owner
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
 Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max
 is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
-created. The site limits a single purchase to 0.05 per payment and 1 per UTC day.
+created. By default, the site limits each account's single purchases to 0.05 per payment and 1 per UTC day, in
+token units counted together across chains.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
