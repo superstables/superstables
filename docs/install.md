@@ -3,7 +3,7 @@
 The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, or pathUSD on Tempo Moderato. No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
 
 ## What you need
 
@@ -36,10 +36,22 @@ testnet RPCs, the Superstables index and, when switched on, the demo catalogue o
 
 Pick one. All of them run the same commands on the same state, in `~/.superstables`.
 
-**The plugin.** In Claude Code, Codex or Cursor, the [plugin](../README.md#the-plugin) adds the
+**The plugin.** In Claude Code or Codex, the [plugin](../README.md#the-plugin) adds the
 Superstables skill and connector. It uses the connector where a tool is available, and runs this
 client with `npx` for operations that need your machine or when connector tools are missing or you
 decline to connect. Its install steps are in the README and on superstables.com's Get started page.
+In Claude (claude.ai, Claude desktop and mobile), the plugin zip is uploaded in Customize › Plugins.
+
+**The connector.** A chat app (Claude, ChatGPT or Grok Bot) adds `https://mcp.superstables.com`
+without the plugin. It can find services, request a purchase you approve on superstables.com, read
+budgets and give you the link to revoke one. It cannot run the client, so it declines budget set-up,
+grants, funding, buying under a budget and `pay`. The chat shows each approval link with a line
+naming the account's wallets by their last four characters; if that is not your account, don't
+approve. Grok Bot takes the same URL: ask the bot in chat to add a remote MCP server with it, then
+sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. Grok Bot has
+not yet been verified end to end. The steps for each app are at
+[superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
+[the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
 
 **The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
 has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
@@ -153,7 +165,7 @@ release yourself some other way, do it under `umask 022`.
 ## Set up
 
 For `pay`, the owner runs `setup` once; Single purchase on superstables.com and Budget don't need it. It creates `~/.superstables`, writes a starting spend
-policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints how the owner
+policy (`policy.yaml`, at most 0.05 per payment and 1 per day, counted across USDC, USDG and pathUSD one for one) and prints how the owner
 approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
 
@@ -195,7 +207,7 @@ waiting on it, the page takes a free port instead, and the approval link names t
 
 ## Set up your agent app
 
-The plugin brings its own skill, so a plugin install needs nothing here. Without the plugin, an agent uses the client through the `superstables-payments` skill and a shell. The skill guides
+The plugin brings its own skill, so a plugin install needs nothing here. The skill is called `superstables` in the plugin (`/superstables:superstables` in Claude Code, `$superstables` in Codex). Without the plugin, an agent uses the client through the Superstables skill from the skill zip, `superstables-payments` (`/superstables-payments` in Claude Code, `$superstables-payments` in Codex), and a shell. The skill guides
 it through finding a service, pricing it and both ways to pay, with their safety rules. Use the
 skill zip installed above, or link the `skills/superstables-payments/` folder from a checkout into
 your agent's skills folder. Keep `SKILL.md`, `references/` and `agents/openai.yaml` together.

@@ -2,7 +2,7 @@
 //
 // PLUGIN_ZIPS: one row per app that installs from a downloaded plugin zip. `layout` says what the zip holds:
 //   marketplace  .claude-plugin/marketplace.json and plugin/ (the repository's marketplace layout)
-//   claude-root  the plugin root for the Claude apps: .claude-plugin/plugin.json and nothing else that names a manifest
+//   claude-root  the plugin root for Claude (claude.ai, Claude desktop and mobile): .claude-plugin/plugin.json and nothing else that names a manifest
 //   cursor-root  the plugin root for Cursor's local import: plugin.json (Agent Plugin layout) and mcp.json
 // OPERATIONS: where each operation runs. `connector` ones need no signature from this machine and go through the
 // Superstables connector (the tool names are the server's, from tools/list at https://mcp.superstables.com).
@@ -11,7 +11,9 @@
 export const PLUGIN_ZIPS = [
   { app: "claude-code", label: "Claude Code", layout: "marketplace" },
   { app: "codex", label: "Codex", layout: "marketplace" },
-  { app: "claude-apps", label: "Claude apps", layout: "claude-root" },
+  // The id `claude-apps` is part of the zip file name the website pins; only the label is the app's name.
+  { app: "claude-apps", label: "Claude", layout: "claude-root" },
+  // Cursor is not offered to users (README and docs omit it), but its zip is still built because the website's pin step requires all four zips.
   { app: "cursor", label: "Cursor", layout: "cursor-root" },
 ];
 

@@ -24,7 +24,7 @@ Only operations needing a local signature go through the CLI; everything else go
 - `wait_budget_request`: follow a budget approval until it is final; pass `wait_seconds` 25 and call it again while it is not final.
 - `request_budget_revoke`: get the owner's link to revoke an agent's budget. The owner signs the revoke in their wallet.
 - `remove_budget_agent`: remove an agent from the account, off chain, once it has no spending permission. Moves no funds.
-- `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
+- `submit_budget_request`: for coding agents only (Claude Code, Codex). Send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged. A chat app never uses it and never asks the owner to paste a signed block.
 
 With every approval link, `request_purchase` and `submit_budget_request` return
 a line naming the request account's wallets by their last four characters, or
@@ -50,7 +50,7 @@ with `request_budget_revoke` (it returns the owner's link on superstables.com
 and signs nothing). Check a revoke with `get_budget_status`, and count it done
 only when its `revoke` says it is final.
 
-**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on their machine or on superstables.com, may be offered only as a question. Request it (`request_purchase`, `buy-once` or `pay`) only when the owner says yes. They asked for the budget, so do not switch the way of paying on your own.
+**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on their machine or on superstables.com, may be offered only as a question. Request it only when the owner says yes: with `request_purchase`, or, in a coding agent on the owner's machine, `buy-once` or `pay`. They asked for the budget, so do not switch the way of paying on your own.
 
 ## What stays on the CLI
 
@@ -76,8 +76,8 @@ before it runs.
 In a chat app (Claude, ChatGPT, Grok Bot or any other hosted app), don't run
 commands to check what is available: decline budget set-up, grant, fund, budget
 buy and the CLI's `pay` straight away, because each needs a signature on the
-owner's machine. Say so and point the owner to Claude Code, Codex or the CLI there. The
-tools can find services, request a purchase the owner approves on
+owner's machine. Don't offer to send a signed block either. Say so and point the owner to Claude Code, Codex or the
+Superstables CLI. The tools can find services, request a purchase the owner approves on
 superstables.com, read budgets, follow a budget approval and give the revoke
 link: offer those.
 
