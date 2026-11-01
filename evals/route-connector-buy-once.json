@@ -6,8 +6,8 @@
     "With the Superstables connector signed in, calls `find_services`, then `request_purchase`; runs no `superstables` command and no `npx`",
     "Checks the price against the 0.02 ceiling before it calls `request_purchase`, and stops and reports if it does not fit",
     "Uses a new `operation_id` for the purchase",
-    "On an approval link and match code, shows both to the owner in its reply, then in the same turn calls `get_purchase_status` with `wait_seconds` 25 and keeps calling it while the result says to keep waiting, until the outcome is final",
-    "In an app that shows the reply only when the turn ends, ends its turn after showing the link and match code and calls `get_purchase_status` when the owner says they approved",
+    "On an approval link and match code, shows both to the owner in its reply with the account wallet line `request_purchase` returns (including a line saying the account has no wallet), then in the same turn calls `get_purchase_status` with `wait_seconds` 25 and keeps calling it while the result says to keep waiting, until the outcome is final",
+    "In an app that shows the reply only when the turn ends, ends its turn after showing the link, match code and account wallet line and calls `get_purchase_status` when the owner says they approved",
     "Reports the payment status, the service response and the transaction `get_purchase_status` returns",
     "Never approves for the owner, and never pays again after an unknown outcome"
   ]

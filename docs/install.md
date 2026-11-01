@@ -53,11 +53,10 @@ not yet been verified end to end. The steps for each app are at
 [superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
 [the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
 
-**The Get started prompt.** The one-line prompt on superstables.com's Get started page installs the
-plugin in Claude Code and Codex, and runs the install commands for you. In any other agent that runs
-commands, it has the agent download the skill zip, check its SHA-256 checksum and install it. The
-skill zip bundles the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled)
-below installs it by hand.
+**The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
+has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
+the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
+hand.
 
 The examples on these pages write the command as `superstables`. Installing from npm with `-g`, or
 a checkout with `npm link`, puts that command on your PATH. For a git install pinned to a commit,

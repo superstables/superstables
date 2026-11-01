@@ -36,8 +36,6 @@ codex plugin add superstables@superstables
 
 If you previously added a local folder in Claude Code and see "its source doesn't match", run `claude plugin marketplace remove superstables`. This also uninstalls plugins from that marketplace. Then repeat the two Claude Code commands above.
 
-The Get started prompt on superstables.com runs these commands for Claude Code and Codex, and installs the skill zip in other agents that run commands.
-
 Start a new session and ask for the service you need. If your agent asks you to connect Superstables, follow its sign-in instructions. The plugin uses the connector where a tool is available, and the CLI (run with `npx` at the plugin's pinned `@superstables/client` version) for operations that need your machine. In a coding agent, the CLI also handles operations when connector tools are missing or you decline to connect.
 
 ### Or the connector
