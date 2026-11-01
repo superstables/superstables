@@ -50,15 +50,34 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # The tests write their temporary homes and checkouts to TMPDIR (250 MB at the peak of one measured
+      # run) and leave some behind. On the runner /tmp is a tmpfs shared with everything else on the
+      # machine, which once filled up, and the job's own temp folder is on disk, where the suite ran about
+      # a fifth slower. So when the runner has a private tmpfs mounted at ~/test-tmpfs, the tests use it,
+      # emptied before and after the suite. When there is none, or it can't be emptied, they use the
+      # job's temp folder.
+      - name: Choose the tests' temp folder
+        run: |
+          if mountpoint -q "$HOME/test-tmpfs" && find "$HOME/test-tmpfs" -mindepth 1 -delete; then
+            echo "TEST_TMPDIR=$HOME/test-tmpfs" >> "$GITHUB_ENV"
+            echo "The tests use the runner's private tmpfs."
+          else
+            echo "TEST_TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+            echo "No private tmpfs to use: the tests use the job's temp folder."
+          fi
+
       # The runner's service may use 6 CPUs and 6 GB, but vitest sizes its pool by the machine's cores.
-      # Four workers leave CPU for the CLI processes the tests start; with longer timeouts, those tests
-      # do not time out.
-      # The tests write their temporary homes and checkouts to TMPDIR. On the runner /tmp is a small
-      # tmpfs shared with everything else on the machine; the job's own temp folder is on disk.
+      # Six workers, one per CPU, finish about a quarter sooner than four did, with the same results;
+      # the longer timeouts keep the CLI processes the tests start from timing out.
       - name: Test
-        run: npm test -- --maxWorkers=4 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
+        run: npm test -- --maxWorkers=6 --minWorkers=1 --testTimeout=60000 --hookTimeout=60000
         env:
-          TMPDIR: ${{ runner.temp }}
+          TMPDIR: ${{ env.TEST_TMPDIR }}
+
+      - name: Empty the tests' temp folder
+        if: always()
+        run: |
+          if mountpoint -q "$HOME/test-tmpfs"; then find "$HOME/test-tmpfs" -mindepth 1 -delete || echo "::warning::Could not empty ~/test-tmpfs."; fi
 
       - name: Build
         run: npm run build
