@@ -7,11 +7,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.1] - Chat-app guidance and single purchase limits
+
+Testnet only.
+
 ### Changed
 
-- **Docs and skill text:** Cursor is no longer offered in the README or the install guide; use the Get started prompt in other agents that run commands. The Claude plugin zip keeps its file name, `superstables-plugin-claude-apps-<version>.zip`, and the README calls the app Claude.
-- **Chat apps:** the README and install guide say how Grok Bot connects through the connector, what it can and can't do, and that it has not yet been verified end to end. The skill tells a chat app to request purchases through the connector only, and to show the account's wallet line with every approval link.
-- **Single purchase limits:** the docs and skills now say 0.05 per payment and 1 per day, counted in USDC, USDG and pathUSD token units, and that the site does not let owners change them today. `budget buy-once --help` lists Robinhood Chain Testnet and USDG.
+- **Docs and skill text:** Cursor is no longer offered in the README or install guide; use the Get started prompt in other agents that run commands. The README calls the app Claude; its plugin zip remains `superstables-plugin-claude-apps-<version>.zip`.
+- **Chat apps:** the README and install guide now explain how Grok Bot connects through the connector and what it can and can't do. The skill directs chat apps to request purchases through the connector only and show the account's wallet line with every approval link.
+- **Single purchase limits:** docs and skills clarify the limits on superstables.com: 0.05 per payment and 1 per day, counting USDC, USDG and pathUSD token units together across chains. Owners cannot change these limits on the site today. `budget buy-once --help` now lists Robinhood Chain Testnet and USDG.
 
 ## [1.1.0] - Plugin installation and budget guidance
 

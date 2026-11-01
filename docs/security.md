@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.1.0 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
+Superstables client 1.1.1 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -250,7 +250,7 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
 authorization — and the balance of the account. Testnet by default.
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.1,
 even with the switch enabled.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
@@ -290,7 +290,7 @@ matters is the one a wallet you keep apart from the agent makes.
 
 ## Testnet by default
 
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.1,
 even with the switch enabled.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
@@ -814,8 +814,8 @@ at the exact version its files name. In all three apps, it reaches the Superstab
 `https://mcp.superstables.com`. The checksum
 caveat below applies to the plugin zip as it does to the skill zip.
 
-For 1.1.0, use the agent skill zip attached to the 1.1.0 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.0.zip`;
+For 1.1.1, use the agent skill zip attached to the 1.1.1 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.1.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
