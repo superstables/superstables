@@ -49,13 +49,14 @@ grants, funding, buying under a budget and `pay`. The chat shows each approval l
 naming the account's wallets by their last four characters; if that is not your account, don't
 approve. Grok Bot takes the same URL: ask the bot in chat to add a remote MCP server with it, then
 sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. In our testing
-on staging, the Grok Bot desktop app completed single purchases on Base Sepolia; other chains and
+on testnet, the Grok Bot desktop app completed single purchases on Base Sepolia; other chains and
 phone use are not tested yet. The steps for each app are at
 [superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
 [the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
 
 **The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
-has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
+has the agent install the plugin in Claude Code and Codex, and in other agents that run commands
+download the skill zip, check its SHA-256 checksum and install it. The skill bundles
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
 hand.
 

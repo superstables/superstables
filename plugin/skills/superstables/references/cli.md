@@ -30,7 +30,7 @@ With every approval link, `request_purchase` and `submit_budget_request` return 
 
 When a connector call fails because it is not signed in, ask the owner to connect it once and end your turn. An agent on the owner's machine uses the CLI if they decline; in a chat app, stop without running commands.
 
-In a chat app, don't run commands to check what is available; decline operations that need a local signature (set-up, grant, fund, `budget buy` and the CLI's `pay`), don't offer to send a signed block, point the owner to Claude Code, Codex or the Superstables CLI, and offer the connector's reads and revoke link. Only an agent on the owner's machine, such as Claude Code or Codex, runs this skill's commands.
+In a chat app, don't run commands to check what is available; decline operations that need a local signature (set-up, grant, fund, `budget buy` and the CLI's `pay`), don't offer to send a signed block, point the owner to Claude Code, Codex or another agent that can run commands, and offer the connector's reads and revoke link. Only an agent on the owner's machine, such as Claude Code or Codex, runs this skill's commands.
 
 ## Running the CLI
 

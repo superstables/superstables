@@ -83,14 +83,14 @@ What this is:
   Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
-Two ways to pay:
-  pay      The owner approves each payment in their own wallet: a browser wallet such as MetaMask
+Two ways to pay, Single purchase or Budget:
+  pay      Single purchase on your machine: the owner approves each payment in their own wallet: a browser wallet such as MetaMask
            (Phantom on Solana) on a page \`pay\` serves on 127.0.0.1 (the default), or the local
            wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
            Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
-           Or \`budget buy-once\`: one purchase the owner approves on superstables.com from any
+           Or \`budget buy-once\`: Single purchase on superstables.com, approved from any
            device (needs an account there), for the services \`superstables budget find --once\` lists.
-  budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
+  budget   Budget: the owner grants an on-chain budget once, from their wallet; the agent then buys on its
            own until the budget is spent, expires or is revoked. The chain enforces the limit.
            Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
            Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
@@ -104,7 +104,7 @@ Start here, pay:
   superstables pay <quote-id>                          prints an approval link; the owner approves in their wallet
   superstables status <attempt-id>                     where a payment got to
 
-Start here, one purchase on superstables.com:
+Start here, Single purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
@@ -139,7 +139,7 @@ Who runs what:
 
 Owner settings:
   superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
-  superstables owner settings sign   your wallet signs these settings, your spend policy and your retired agent keys
+  superstables owner settings sign   your wallet signs these settings, your spend policy, your retired agent keys and your enabled chains
   Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
   owner actions only when they name what these settings allow. Signed settings apply only to approvals
   made with the wallet that signed them; pay and the local wallet refuse a policy file that differs from

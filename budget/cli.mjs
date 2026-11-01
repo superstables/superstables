@@ -401,7 +401,7 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     flags: { op: "v", yes: "b", ...OWNER_FLAGS }, required: [],
     help: helpText({
       usage: "superstables budget recover --rail evm [--chain C] [--op ID] [--timeout S] [--no-open] [--detach|--wait]",
-      about: `evm only. Stops the allowance first, then returns stranded USDC (a seller refund, or a purchase that pulled but did not
+      about: `evm only. Stops the allowance first, then returns stranded funds (a seller refund, or a purchase that pulled but did not
 settle) from the agent key to the owner. Prints the plan, then runs it: the agent key signs its own steps; the owner
 approves in their wallet approve(agent, 0), unless the agent's own revoke brought the allowance to 0 in this run, and gas
 for the agent when it has too little. A purchase's price goes back only once its authorization can no longer settle at a
@@ -410,7 +410,7 @@ exit 5).
 tempo and solana have nothing to recover: the agent never holds the budget.
 
 ${RECOVER_OWNER_HELP}`,
-      money: "yes: stranded USDC back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
+      money: "yes: stranded funds back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
       who: "the owner, with the agent key on this machine. An agent may start it and hand the owner the approval link.",
       example: "superstables budget recover --rail evm",
       prints: OWNER_PRINTS.replace("matchCode (on superstables.com), ", "").replace("tx, next", "amount (returned), tx, next"),
@@ -533,7 +533,7 @@ Adopt that request with --site-request; only if it was never sent, run the owner
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
 Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max
 is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
-created.
+created. The site limits a single purchase to 0.05 per payment and 1 per UTC day.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
@@ -632,7 +632,7 @@ Start here, the agent:
   superstables budget reconcile --rail evm --op ID  after exit 5: what happened to that purchase
 If status says no budget has been set up here (exit 1), or remaining is 0, do not buy, and do not switch to another way
 of paying on your own: stop and ask. The owner can take the steps above, or approve this one payment with superstables pay
-(x402 sellers on Base Sepolia), or with superstables budget buy-once for a service find --once lists. preflight still
+(chains: superstables pay --help), or with superstables budget buy-once for a service find --once lists. preflight still
 works without a budget, so the answer can say whether the price fits.
 
 Single purchase on superstables.com, no budget (no setup; the chain comes from the listing):
@@ -654,7 +654,7 @@ Commands (each takes --help):
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
-  recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  recover     owner   evm: stop the allowance, return stranded funds to the owner         moves money back
   rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only

@@ -4,14 +4,14 @@
     "name": "Superstables"
   },
   "metadata": {
-    "description": "Superstables tools and skills for finding services and paying with test tokens."
+    "description": "Find paid services, request single purchases you approve, and use budgets. Testnet only."
   },
   "plugins": [
     {
       "name": "superstables",
       "source": "./plugin",
       "displayName": "Superstables",
-      "description": "Find paid services and request single purchases that you approve. Testnet only.",
+      "description": "Find paid services, request single purchases you approve, and use budgets. Testnet only.",
       "category": "Payments",
       "tags": [
         "payments",

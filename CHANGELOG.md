@@ -229,19 +229,19 @@ money moves.
 
 Installing the Claude Desktop bundle and running `superstables setup`:
 
-![Install](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/0-install.png)
+![Install](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/0-install.png)
 
 Claude Desktop asking permission before the agent uses a tool:
 
-![Tool permissions](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/1-permissions.png)
+![Tool permissions](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/1-permissions.png)
 
 The approval page next to MetaMask's signature request, both showing the same payment:
 
-![Approve in MetaMask](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/2-approve.png)
+![Approve in MetaMask](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/2-approve.png)
 
 The agent returning the service's answer and the transaction link:
 
-![The result](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/3-result.png)
+![The result](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/3-result.png)
 
 ### What is supported
 
@@ -313,7 +313,9 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/superstables/superstables/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/superstables/superstables/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/superstables/superstables/compare/v0.4.1...v1.0.0
 [0.4.0]: https://github.com/superstables/superstables/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/superstables/superstables/compare/v0.3.0...v0.3.1
