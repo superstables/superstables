@@ -6,7 +6,7 @@ verify that token with `@superstables/client/seller`, which uses Node built-ins 
 report sales to superstables.com.
 
 **Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
-No mainnet chain is payable in 1.1.1, even with the switch enabled.
+No mainnet chain is payable in 1.1.2, even with the switch enabled.
 Purchases, fees and statements are kept by superstables.com. The client carries
 the token from the index to your service, and this helper checks it; neither computes a fee.
 

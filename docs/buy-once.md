@@ -24,7 +24,7 @@ There are two ways:
   wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
 **Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
-No mainnet chain is payable in 1.1.1, even with the switch enabled.
+No mainnet chain is payable in 1.1.2, even with the switch enabled.
 Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
 moves. Use the [client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
