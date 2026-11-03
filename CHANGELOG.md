@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.2] - Help text leads with Budgets
+
+Testnet only.
+
+### Changed
+
+- **CLI help:** `superstables --help` now describes Budgets first, then Single purchase on your machine (`pay`) and Single purchase on superstables.com (`budget buy-once`). `owner settings sign` also lists your enabled chains among what your wallet signs. `budget recover` says it returns stranded funds, not stranded USDC.
+- **Single purchase limits:** help and docs describe the default account limits: 0.05 per payment and 1 per UTC day, in USDC, USDG and pathUSD token units counted together across chains. Where the site turns on owner controls, a member can lower them and an admin can raise them with a wallet signature, never above 0.05 per payment. A refusal message now names the account limits without promising the owner can change them.
+- **Docs and skills:** the plugin descriptions mention Budgets. The skills have the agent show the account wallet line with a budget approval link, and tell chat apps to point owners to Claude Code, Codex or another agent that can run commands. The install and security pages name Claude Code and Codex as the plugin apps, and the budget guide lists Robinhood Chain Testnet among the chains for approval on superstables.com.
+
 ## [1.1.1] - Chat-app guidance and single purchase limits
 
 Testnet only.
@@ -313,7 +323,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/superstables/superstables/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/superstables/superstables/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/superstables/superstables/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/superstables/superstables/compare/v0.4.1...v1.0.0
