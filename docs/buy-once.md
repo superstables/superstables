@@ -56,7 +56,8 @@ and account checkpoints.
 By default, Superstables limits every account to 0.05 per payment and 1 per UTC day,
 in USDC, USDG and pathUSD token units counted together across chains. Where the site
 turns on owner controls, an account member can lower them and an admin can raise
-them again with a wallet signature, never above 0.05 per payment.
+them again with a wallet signature. Today the site itself takes no single
+purchase above 0.05, whatever the account's limit.
 
 A purchase is reported paid only once the command has read the payment on chain, and only for the payment
 the site first showed for it. To list the
