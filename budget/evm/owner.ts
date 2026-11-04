@@ -262,7 +262,7 @@ export const DEFAULT_FUND_AMOUNT: string = (EVM_CHAINS as Record<string, any>)[C
 export function fundValue(amt: string): bigint {
   if (!/^\d+(\.\d{1,18})?$/.test(amt)) throw new Error(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
   const value = parseUnits(amt, GAS.decimals);
-  if (value === 0n) throw new Error(`--amount must be above 0 ${GAS.symbol}`);
+  if (value === 0n) throw new Error("--amount must be above 0");
   return value;
 }
 
