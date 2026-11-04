@@ -92,9 +92,10 @@ export const POLICY_EXAMPLE = `# Superstables spend policy (software policy: enf
 # not by the chain). Evaluation order, first refusal wins:
 #   kill_switch → deny → allow → stablecoins → per_call → per_day
 # Amounts are plain decimals with at most 6 decimals, like 0.05 or 0.05 USDC (not 0x10, 1e3 or .5).
+# These caps are only the starting values. To change one, edit its value; to remove it, write null (per_call: null).
 caps:
-  per_call: 0.05 USDC   # the most one payment may be
-  per_day: 1 USDC       # the most all payments may add up to in one UTC day
+  per_call: 0.05 USDC   # one payment above this is refused
+  per_day: 1 USDC       # payments adding up to more than this in one UTC day are refused
 allow: []               # hostname patterns; empty = any host
 deny: []                # e.g. ["*.example.net"]
 stablecoins: [USDC, pathUSD, USDG]  # allowed assets; the caps count them together, one for one
@@ -124,7 +125,8 @@ const POLICY_KEYS = ["caps", "allow", "deny", "stablecoins", "approval", "kill_s
 const CAP_KEYS = ["per_call", "per_day"];
 
 /**
- * Reads a policy file's text. A rule the file does not set takes the default; a file that cannot be read as the
+ * Reads a policy file's text. A rule the file does not set takes the default, except a cap written as null, which is
+ * no cap at all (the owner removed it); a file that cannot be read as the
  * policy it was meant to be (an unknown key, a kill_switch that is not true or false, a scalar where a list belongs,
  * an amount that is not one) throws with the key named, because reading it as "no rule" would lift the limits the
  * owner meant to set.
@@ -147,7 +149,8 @@ export function parsePolicy(yamlText: string): Policy {
   const source = parseDocument(yamlText);
   const cap = (key: "per_call" | "per_day", fallback: Money | undefined): Money | undefined => {
     const value = (caps as Record<string, unknown>)[key];
-    if (value === undefined || value === null) return fallback;
+    if (value === undefined) return fallback;
+    if (value === null) return undefined;
     try {
       return parseMoney(capText(source, key, value) as string);
     } catch (err) {

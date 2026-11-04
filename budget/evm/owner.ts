@@ -258,11 +258,11 @@ export const GRANT_NOT_ENFORCED = [
 
 /** What fund-agent sends by default on this chain, in the gas token. */
 export const DEFAULT_FUND_AMOUNT: string = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent;
-/** The amount of gas token to send, in its smallest units: above 0 and at most 5. Throws the words for a bad amount. */
+/** The amount of gas token to send, in its smallest units: above 0. Throws the words for a bad amount. */
 export function fundValue(amt: string): bigint {
   if (!/^\d+(\.\d{1,18})?$/.test(amt)) throw new Error(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
   const value = parseUnits(amt, GAS.decimals);
-  if (value === 0n || value > parseUnits("5", GAS.decimals)) throw new Error(`--amount must be above 0 and at most 5 ${GAS.symbol}`);
+  if (value === 0n) throw new Error("--amount must be above 0");
   return value;
 }
 

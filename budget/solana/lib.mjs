@@ -89,6 +89,8 @@ export const USDC_MINT = new PublicKey(
   "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 );
 export const USDC_DECIMALS = 6;
+/** The largest amount one SystemProgram transfer carries (a u64 of lamports). */
+export const U64_MAX = (1n << 64n) - 1n;
 /** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
 const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS } }, chainGateSettings());
 // No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a

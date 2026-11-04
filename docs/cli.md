@@ -741,8 +741,9 @@ back.
 The credit is added once the payment's block is final on chain. A payment the site reports as
 pending, or cannot confirm, or answers with money_moved other than false, on any HTTP status, is
 never paid again from here: `superstables seller credit` rechecks it. "Nothing was charged" is said
-only when nothing was signed. The default spend policy allows 0.05 USDC per payment, so a top-up
-needs a raised cap in the policy file.
+only when nothing was signed. By default the spend policy refuses any payment above 0.05 USDC
+(caps.per_call in policy.yaml), so a top-up of more needs that cap raised, or removed by writing
+null as its value.
 
 Moves money: yes, once, and only after the owner approves it in their own wallet: test USDC on Base
   Sepolia.
@@ -856,7 +857,9 @@ Commands:
 
 policy.yaml sets caps per payment and per day, host allow and deny lists, the accepted stablecoins
 and a kill switch. It is software policy, checked by this client and again by the wallet; the chain
-does not enforce it. Budgets have their own on-chain limits instead.
+does not enforce it. Budgets have their own on-chain limits instead. The caps start at 0.05 USDC per
+payment and 1 USDC per UTC day; the owner changes a value, or removes a cap by writing null as its
+value.
 
 The per-day cap: a payment counts on the day it ended, and on every day while it is still open
 (signed and in flight until its authorization expires, or waiting for the owner within its approval

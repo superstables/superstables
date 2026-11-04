@@ -315,6 +315,7 @@ evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
 On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
 final false) until the grant itself is final. Check the result with superstables budget status.
+A budget approved on superstables.com is 100 test USDC by default and at most 1,000 test USDC.
 
 ${OWNER_HELP}
 
@@ -533,8 +534,9 @@ Adopt that request with --site-request; only if it was never sent, run the owner
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
 Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max
 is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
-created. By default, the site limits each account's single purchases to 0.05 per payment and 1 per UTC day, in
-token units counted together across chains.
+created. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or
+per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset.
+Limits count token units together across chains; the daily limit uses UTC.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
@@ -1053,8 +1055,8 @@ function parse(argv) {
     if (!f.hosted) badInput(ctx, `--grant and --fund go with --hosted: one approval link on superstables.com then adds the agent, sends it gas and grants the budget. Without --hosted, run setup, then fund-agent and grant: each asks the owner on its own`);
     if (f.grant !== undefined && (!/^\d+(\.\d{1,6})?$/.test(f.grant) || !(Number(f.grant) > 0))) badInput(ctx, `--grant must be a positive amount of ${unitOf(f)} with at most 6 places (got "${f.grant}")`);
     if (f.fund !== undefined && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: setup --hosted on tempo takes --grant, not --fund");
-    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 1)) badInput(ctx, `--fund takes an amount of SOL above 0 and at most 1 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
-    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of SOL above 0 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0, or nothing for fund-agent's default (got "${f.fund}")`);
   }
   if (f.hosted) {
     if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");

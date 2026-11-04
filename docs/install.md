@@ -167,7 +167,7 @@ release yourself some other way, do it under `umask 022`.
 ## Set up
 
 For `pay`, the owner runs `setup` once; Single purchase on superstables.com and Budget don't need it. It creates `~/.superstables`, writes a starting spend
-policy (`policy.yaml`, at most 0.05 per payment and 1 per day, counted across USDC, USDG and pathUSD one for one) and prints how the owner
+policy (`policy.yaml`) with the limits written out, by default 0.05 per payment and 1 per UTC day, counted across USDC, USDG and pathUSD one for one. The owner edits a value to change it, or writes `null` to remove it. `setup` also prints how the owner
 approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
 
