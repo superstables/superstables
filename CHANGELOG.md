@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Spend policy:** a cap written as `null` in `policy.yaml` is no cap at all. `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
+- **Single purchase on superstables.com:** help and docs no longer state a per-payment ceiling. The owner approves each purchase by hand, and the account's owner can set limits of their own, up to 1,000, none by default. A budget approved on superstables.com is 100 test USDC by default and at most 1,000.
+
 ## [1.1.2] - Help text leads with Budgets
 
 Testnet only.

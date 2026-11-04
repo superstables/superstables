@@ -142,8 +142,30 @@ describe("parsePolicy, strictly", () => {
     expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC", atomic: "20000" });
     expect(p.perDay).toEqual(DEFAULT_POLICY.perDay);
     expect(parsePolicy("caps:\n  per_day: 5 USDC\n").perCall).toEqual(DEFAULT_POLICY.perCall);
-    expect(parsePolicy("caps:\n  per_call:\n  per_day:\n").perDay).toEqual(DEFAULT_POLICY.perDay);
     expect(parsePolicy("caps:\n").perCall).toEqual(DEFAULT_POLICY.perCall);
+  });
+
+  it("reads a cap written as null as no cap, and one left out as the default", () => {
+    for (const text of ["caps:\n  per_call: null\n  per_day: null\n", "caps:\n  per_call: ~\n  per_day:\n", "caps: { per_call: null, per_day: null }\n"]) {
+      const p = parsePolicy(text);
+      expect(p.perCall, text).toBeUndefined();
+      expect(p.perDay, text).toBeUndefined();
+    }
+    const half = parsePolicy("caps:\n  per_call: null\n");
+    expect(half.perCall).toBeUndefined();
+    expect(half.perDay).toEqual(DEFAULT_POLICY.perDay);
+  });
+
+  it("allows a payment above 0.05 and above 1 a day when the file removes the caps, and still refuses a set cap by name", () => {
+    const big = { domain: "api.example.com", asset: "USDC", amountAtomic: 5_000_000n, decimals: 6, spentTodayAtomic: 3_000_000n };
+    expect(evaluatePolicy(parsePolicy("caps:\n  per_call: null\n  per_day: null\n"), big)).toEqual({ allowed: true });
+    const perCall = evaluatePolicy(parsePolicy("caps:\n  per_call: 1 USDC\n  per_day: null\n"), big);
+    expect(perCall.allowed).toBe(false);
+    expect(perCall.reason).toContain("exceeds caps.per_call (1 USDC)");
+    const perDay = evaluatePolicy(parsePolicy("caps:\n  per_call: null\n  per_day: 6 USDC\n"), big);
+    expect(perDay.allowed).toBe(false);
+    expect(perDay.reason).toContain("exceed caps.per_day (6 USDC)");
+    expect(evaluatePolicy(parsePolicy(""), big).reason).toContain("caps.per_call (0.05 USDC)");
   });
 
   it("refuses what it cannot read as written, and names the key", () => {

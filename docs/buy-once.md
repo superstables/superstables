@@ -53,11 +53,7 @@ That wallet must be available on the owner's device to sign. An account admin li
 [owner guide](https://www.superstables.com/docs/owner) covers the link/code handoff, sign-in
 and account checkpoints.
 
-By default, Superstables limits every account to 0.05 per payment and 1 per UTC day,
-in USDC, USDG and pathUSD token units counted together across chains. Where the site
-turns on owner controls, an account member can lower them and an admin can raise
-them again with a wallet signature. Today the site itself takes no single
-purchase above 0.05, whatever the account's limit.
+Superstables puts no limit of its own on a single purchase: the owner approves each one by hand. The account's owner can set limits per payment and per UTC day, up to 1,000 each, counted in USDC, USDG and pathUSD token units together across chains. There are none by default.
 
 A purchase is reported paid only once the command has read the payment on chain, and only for the payment
 the site first showed for it. To list the

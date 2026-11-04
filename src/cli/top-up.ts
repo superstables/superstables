@@ -238,7 +238,7 @@ async function prepare(input: {
       amount,
       quote,
       message: `The top-up's payment was quoted, but a spend policy refused it: ${quote.policy.reason ?? "no reason given"}. Nothing was paid.`,
-      next: `\`superstables policy show\` prints the rules; the owner raises the cap in the policy file if a top-up of ${amount.decimal} USDC should be allowed.`,
+      next: `\`superstables policy show\` prints the rules; the owner raises or removes the cap in the policy file (write null as its value) if a top-up of ${amount.decimal} USDC should be allowed.`,
       exitCode: EXIT.refused,
     };
   }
@@ -565,7 +565,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
   return {
     message: messageFor(attempt),
     next: refusal
-      ? `\`superstables policy show\` prints the rules; the owner edits the policy file if a top-up of ${quote.terms.amountDecimal} USDC should be allowed.`
+      ? `\`superstables policy show\` prints the rules; the owner edits the policy file (raise a cap, or write null to remove it) if a top-up of ${quote.terms.amountDecimal} USDC should be allowed.`
       : attempt.transaction
         ? `Do not pay again yet: \`superstables status ${attempt.id}\` looks for this payment.`
         : `Nothing was charged. Run \`${TOP_UP_COMMAND} <amount>\` again to ask for another top-up, or \`${CREDIT_COMMAND}\` to see this one.`,

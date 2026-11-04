@@ -67,7 +67,8 @@ import {
   inclusionRemoved,
   isFinalAttempt,
   nextFor,
-  policyFileFor,
+  policyRefusalHelp,
+  refusedLimit,
 } from "./outcome.js";
 import { PaymentStartedError, approveAndPay } from "./pay.js";
 import { clientPorts, creditJson, printCredit, printTopUp, runTopUp, topUpJson, type TopUpResult } from "./top-up.js";
@@ -150,6 +151,7 @@ explain(
       console.log("");
       console.log(field("home", homeDir()));
       console.log(field("policy", `${policyPath()}${wrotePolicy ? " (written)" : " (already there)"}`));
+      console.log(field("limits", `${policySummary(loadPolicy(policyPath()))} (edit the caps in that file to change them; write null to remove one)`));
 
       if (mode === "browser") {
         console.log(field("signing", "MetaMask, on an approval page this client serves on 127.0.0.1"));
@@ -646,8 +648,8 @@ explain(
         taken.policy.allowed
           ? `Nothing has been paid. Next: \`${next}\` asks the wallet's owner to approve it; ` +
               "the owner's wallet checks the policy again."
-          : `Nothing has been paid, and the spend policy refuses this payment. \`${next}\` prints the rules; ` +
-              `the owner edits ${policyFileFor(taken.policy.reason)} if they are wrong.`,
+          : `Nothing has been paid, and the spend policy refuses this payment${refusedLimit(taken.policy.reason) ? ` (${refusedLimit(taken.policy.reason)})` : ""}. ` +
+              policyRefusalHelp(taken.policy.reason),
       );
     }),
   {
@@ -1012,7 +1014,8 @@ explain(
       "The credit is added once the payment's block is final on chain. A payment the site reports as pending, or " +
         "cannot confirm, or answers with money_moved other than false, on any HTTP status, is never paid again from " +
         "here: `superstables seller credit` rechecks it. \"Nothing was charged\" is said only when nothing was " +
-        "signed. The default spend policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy file.",
+        "signed. By default the spend policy refuses any payment above 0.05 USDC (caps.per_call in policy.yaml), so a " +
+        "top-up of more needs that cap raised, or removed by writing null as its value.",
     ],
     money: "yes, once, and only after the owner approves it in their own wallet: test USDC on Base Sepolia.",
     who: "the seller (the owner of the seller account).",
@@ -1190,7 +1193,8 @@ const policy = explain(
     notes: [
       "policy.yaml sets caps per payment and per day, host allow and deny lists, the accepted " +
         "stablecoins and a kill switch. It is software policy, checked by this client and again by the " +
-        "wallet; the chain does not enforce it. Budgets have their own on-chain limits instead.",
+        "wallet; the chain does not enforce it. Budgets have their own on-chain limits instead. " +
+        "The caps start at 0.05 USDC per payment and 1 USDC per UTC day; the owner changes a value, or removes a cap by writing null as its value.",
       "The per-day cap: a payment counts on the day it ended, and on every day while it is still open (signed and " +
         "in flight until its authorization expires, or waiting for the owner within its approval window). pay reserves the amount before the owner " +
         "is asked, so two payments started at once cannot both pass; one that ends unsigned releases it.",

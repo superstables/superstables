@@ -109,7 +109,7 @@ superstables quote 'https://seller.example/path?k=v'
 ```
 
 - It reads the seller's HTTP 402 challenge and records the exact terms the owner will be asked to approve: price, chain, recipient, expiry. Nothing is signed or paid.
-- It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the built-in defaults apply: at most 0.05 USDC per payment and 1 USDC per day.
+- It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the starting defaults apply: it refuses a payment above 0.05 USDC and payments adding up to more than 1 USDC in a UTC day. The owner changes either in `policy.yaml`, or removes it by writing `null`.
 - The quote lasts 10 minutes and starts at most one payment. After that payment ends, however it ends, take a new quote.
 - `--json` prints the quote record: `id` (the quote id for `pay`; for example `superstables quote ... --json | jq -r .id`), `expiresAt`, `url`, `terms`, `requirement`, `policy` (`allowed`, `checks[]`), `next`.
 - Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a mainnet); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.

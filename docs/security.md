@@ -238,8 +238,8 @@ authoritative, at the gate, before an approval is created at all. A payment the 
 never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
-A cap of 0.05 USDC per payment means this software will not ask you to sign more than that while it
-runs with your policy. An agent that runs as you can edit or delete your policy file, or run its own
+A cap you set, such as 0.05 USDC per payment (the starting value `setup` writes), means this software will not ask you to sign more than that while it
+runs with your policy. You choose the caps: change a value, or write `null` to remove one. An agent that runs as you can edit or delete your policy file, or run its own
 code, so it is not a promise against a hostile agent, and it never means your account cannot sign
 more. Your own `~/.superstables/policy.yaml` applies whichever policy file or home the environment
 names, but its daily count and the file itself are only as safe as your account's files. An empty

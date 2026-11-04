@@ -74,6 +74,15 @@ describe("nextFor after a spend policy refusal", () => {
     expect(refused(`the local spend policy refuses this payment: kill_switch is on (in ${account})`)).toContain(`the owner edits ${account} if they are wrong`);
     expect(refused("the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)")).toContain(`the owner edits ${policyPath()} if they are wrong`);
   });
+
+  it("names the limit that refused and says how to change or remove it", () => {
+    const refused = (reason: string) => nextFor(attempt("failed", { refusal: "policy", reason }));
+    const perCall = refused("the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)");
+    expect(perCall).toContain("A spend policy refused it (caps.per_call).");
+    expect(perCall).toContain("To change this limit, set per_call there to a new value, or to null to remove it.");
+    expect(refused("the local spend policy refuses this payment: today's payments (1 USDC) plus 0.5 exceed caps.per_day (1 USDC)")).toContain("(caps.per_day)");
+    expect(refused("the local spend policy refuses this payment: kill_switch is on")).toContain("(kill_switch)");
+  });
 });
 
 describe("requoteCommand", () => {

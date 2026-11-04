@@ -225,6 +225,11 @@ describe("the superstables CLI", () => {
     expect(setUp.stdout).toContain("https://metamask.io/download");
     expect(setUp.stdout).toContain("--wallet local");
     expect(setUp.stdout).not.toContain("superstables wallet serve");
+    expect(setUp.stdout).toContain("up to 0.05 USDC per payment, 1 USDC per day (edit the caps in that file to change them; write null to remove one)");
+    const written = readFileSync(join(home, "policy.yaml"), "utf8");
+    expect(written).toMatch(/^ {2}per_call: 0\.05 USDC/m);
+    expect(written).toMatch(/^ {2}per_day: 1 USDC/m);
+    expect(written).toContain("To change one, edit its value; to remove it, write null");
 
     const result = await run(["doctor", "--json"]);
     expect(result.code, result.stdout + result.stderr).toBe(0);
