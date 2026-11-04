@@ -1055,8 +1055,8 @@ function parse(argv) {
     if (!f.hosted) badInput(ctx, `--grant and --fund go with --hosted: one approval link on superstables.com then adds the agent, sends it gas and grants the budget. Without --hosted, run setup, then fund-agent and grant: each asks the owner on its own`);
     if (f.grant !== undefined && (!/^\d+(\.\d{1,6})?$/.test(f.grant) || !(Number(f.grant) > 0))) badInput(ctx, `--grant must be a positive amount of ${unitOf(f)} with at most 6 places (got "${f.grant}")`);
     if (f.fund !== undefined && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: setup --hosted on tempo takes --grant, not --fund");
-    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 1)) badInput(ctx, `--fund takes an amount of SOL above 0 and at most 1 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
-    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of SOL above 0 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0, or nothing for fund-agent's default (got "${f.fund}")`);
   }
   if (f.hosted) {
     if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
