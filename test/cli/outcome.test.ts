@@ -86,9 +86,16 @@ describe("nextFor after a spend policy refusal", () => {
     vi.stubEnv("SUPERSTABLES_POLICY", missing);
     const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
     expect(said).toContain("(caps.per_call)");
-    expect(said).toContain(`There is no policy file at ${missing}, so the default limits apply.`);
-    expect(said).toContain("the owner runs `superstables policy init` and edits that file.");
+    expect(said).toContain(`No file at ${missing}, so the default limits apply.`);
+    expect(said).toContain("the owner runs `superstables policy init` (with --force if the file is there but empty) and edits that file.");
     expect(said).not.toContain("set per_call there");
+  });
+
+  it("with an empty policy file, says the default limits refused and names the file", () => {
+    writeFileSync(file, "# only a comment\n");
+    const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+    expect(said).toContain(`${file} is empty, so the default limits apply.`);
+    expect(said).toContain("with --force if the file is there but empty");
   });
 
   it("with no policy file in the default home, where the chosen file is the account's own, still says the defaults refused", () => {
@@ -97,7 +104,7 @@ describe("nextFor after a spend policy refusal", () => {
     vi.spyOn(home, "accountPolicyPath").mockReturnValue(missing);
     try {
       const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
-      expect(said).toContain(`There is no policy file at ${missing}, so the default limits apply.`);
+      expect(said).toContain(`No file at ${missing}, so the default limits apply.`);
     } finally {
       vi.restoreAllMocks();
     }

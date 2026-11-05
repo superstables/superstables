@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { accountPolicyPath } from "../../src/core/home.js";
 import {
+  defaultsReason,
   DEFAULT_POLICY,
   evaluatePolicy,
   loadOptionalPolicy,
@@ -337,5 +338,22 @@ describe("loadPolicy and loadPaymentPolicy", () => {
       if (before === undefined) delete process.env.HOME;
       else process.env.HOME = before;
     }
+  });
+});
+
+describe("defaultsReason", () => {
+  it("names a missing or empty file, where the default caps apply, and nothing for a file with rules", () => {
+    const dir = mkdtempSync(join(tmpdir(), "defaults-reason-"));
+    const file = join(dir, "policy.yaml");
+    expect(defaultsReason(file)).toBe(`no file at ${file}`);
+    for (const text of ["", "# only a comment\n", "~\n"]) {
+      writeFileSync(file, text);
+      expect(defaultsReason(file), JSON.stringify(text)).toBe(`${file} is empty`);
+    }
+    for (const text of ["caps:\n", "deny: []\n", "caps:\n  per_call: 0.05\n"]) {
+      writeFileSync(file, text);
+      expect(defaultsReason(file), text).toBeUndefined();
+    }
+    rmSync(dir, { recursive: true, force: true });
   });
 });

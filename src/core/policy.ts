@@ -228,6 +228,26 @@ export function loadOptionalPolicy(path: string): Policy | undefined {
   }
 }
 
+/**
+ * Why the default caps apply to the policy file at `path`, in words for the owner, or undefined when the file sets its
+ * own rules (or cannot be read: loading it then refuses, and says why). A missing file and an empty one (only comments,
+ * or ~) are read as the defaults.
+ */
+export function defaultsReason(path: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? `no file at ${path}` : undefined;
+  }
+  try {
+    const doc: unknown = parseYaml(text);
+    return doc === null || doc === undefined ? `${path} is empty` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Reads a policy file; a missing file means the default policy, and a file that cannot be used refuses every payment. */
 export function loadPolicy(path: string): Policy {
   return loadOptionalPolicy(path) ?? DEFAULT_POLICY;

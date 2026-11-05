@@ -36,7 +36,8 @@ import {
   walletUrl,
   walletUrlFromEnvironment,
 } from "../core/home.js";
-import { loadOptionalPolicy, loadPolicy } from "../core/policy.js";
+import { defaultsReason, loadOptionalPolicy, loadPolicy } from "../core/policy.js";
+import { DEFAULTS_HELP } from "./outcome.js";
 import { clientVersion } from "../core/version.js";
 import { privateDirProblem } from "../core/private-dir.mjs";
 import { Records } from "../core/records.js";
@@ -186,7 +187,8 @@ function policyCheck(): Check {
   const path = policyPath();
   try {
     const policy = loadPolicy(path);
-    const where = existsSync(path) ? path : `${path} (no file, so the default limits apply; to change or remove them, the owner runs \`superstables policy init\` and edits that file)`;
+    const defaults = defaultsReason(path);
+    const where = defaults ? `${defaults}, so the default limits apply. ${DEFAULTS_HELP} Limits now` : path;
     return { name: "spend policy", ok: true, detail: `${where}: ${policySummary(policy)}`, essential: true };
   } catch (err) {
     return { name: "spend policy", ok: false, detail: messageOf(err), essential: true };

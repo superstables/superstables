@@ -6,9 +6,9 @@
 //
 // They are mapped from the attempt's recorded state, never from what the caller hoped for.
 
-import { existsSync } from "node:fs";
 import { networkFor, shortLabel } from "../core/chain.js";
 import { accountPolicyPath, policyPath } from "../core/home.js";
+import { defaultsReason } from "../core/policy.js";
 import { railFor } from "../core/rails/index.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { FINAL_ATTEMPT_STATES } from "../core/types.js";
@@ -121,6 +121,11 @@ export function refusedLimit(reason: string | undefined): string | undefined {
   return /caps\.per_call|caps\.per_day|kill_switch/.exec(reason ?? "")?.[0];
 }
 
+/** How the owner replaces the default caps with their own: init writes a missing file, --force an empty one. */
+export const DEFAULTS_HELP = "To change or remove them, the owner runs `superstables policy init` (with --force if the file is there but empty) and edits that file.";
+
+const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /** What to tell the owner when the spend policy refused: the rule, the file, and that a cap can be changed or removed. */
 export function policyRefusalHelp(reason: string | undefined): string {
   const limit = refusedLimit(reason);
@@ -128,9 +133,8 @@ export function policyRefusalHelp(reason: string | undefined): string {
   // A refusal "(in <account file>)" came from that file, so it is there; any other came from the chosen file or, when
   // that file is missing, from the defaults.
   const fromAccountFile = reason?.endsWith(`(in ${accountPolicyPath()})`) ?? false;
-  if (!fromAccountFile && !existsSync(file)) {
-    return `There is no policy file at ${file}, so the default limits apply. To change or remove them, the owner runs \`superstables policy init\` and edits that file.`;
-  }
+  const defaults = fromAccountFile ? undefined : defaultsReason(file);
+  if (defaults) return `${capitalized(defaults)}, so the default limits apply. ${DEFAULTS_HELP}`;
   const cap = limit?.startsWith("caps.") ? ` To change this limit, set ${limit.slice(5)} there to a new value, or to null to remove it.` : "";
   return `\`superstables policy show\` prints the rules; the owner edits ${file} if they are wrong.${cap}`;
 }

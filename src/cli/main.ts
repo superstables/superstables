@@ -27,7 +27,7 @@ import {
   walletDir,
 } from "../core/home.js";
 import { SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
-import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy } from "../core/policy.js";
+import { POLICY_EXAMPLE, defaultsReason, loadPaymentPolicy, loadPolicy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records, settleStaleAwaiting } from "../core/records.js";
 import { SellerUnreachableError } from "../core/x402.js";
@@ -634,8 +634,9 @@ explain(
       }
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
+      const defaults = defaultsReason(policyPath());
       const where =
-        (existsSync(policyPath()) ? policyPath() : `the default limits (no file at ${policyPath()}; the owner runs \`superstables policy init\` to create it)`) +
+        (defaults ? `the default limits (${defaults}; the owner runs \`superstables policy init\` to write their own)` : policyPath()) +
         (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),
@@ -1218,7 +1219,8 @@ explain(
         console.log(json(parsed));
         return;
       }
-      console.log(field("file", existsSync(policyPath()) ? policyPath() : `${policyPath()} (missing: defaults apply)`));
+      const defaults = defaultsReason(policyPath());
+      console.log(field("file", defaults ? `${defaults}, so the default limits apply` : policyPath()));
       console.log(field("in force", policySummary(parsed)));
       if (existsSync(policyPath())) {
         console.log("");
