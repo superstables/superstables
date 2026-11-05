@@ -636,7 +636,7 @@ explain(
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
       const defaults = defaultsReason(policyPath());
       const where =
-        (defaults ? `the default limits (${defaults}; the owner runs \`superstables policy init\` to write their own)` : policyPath()) +
+        (defaults ? `the default limits (${defaults}; the owner runs \`superstables policy init\` (with --force if the file is there but empty) and edits that file)` : policyPath()) +
         (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),
