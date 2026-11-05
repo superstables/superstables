@@ -635,7 +635,7 @@ explain(
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
       const where =
-        (existsSync(policyPath()) ? policyPath() : "the default limits (no policy file; the owner runs `superstables policy init` to write them to a file they can change)") +
+        (existsSync(policyPath()) ? policyPath() : `the default limits (no file at ${policyPath()}; the owner runs \`superstables policy init\` to create it)`) +
         (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),

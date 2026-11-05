@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SOLANA_DEVNET, TEMPO_MODERATO } from "../../src/core/chain.js";
+import * as home from "../../src/core/home.js";
 import { accountPolicyPath, policyPath } from "../../src/core/home.js";
 import { exitCodeFor, nextFor, requoteCommand } from "../../src/cli/outcome.js";
 import type { Attempt, AttemptState } from "../../src/core/types.js";
@@ -85,9 +86,21 @@ describe("nextFor after a spend policy refusal", () => {
     vi.stubEnv("SUPERSTABLES_POLICY", missing);
     const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
     expect(said).toContain("(caps.per_call)");
-    expect(said).toContain("There is no policy file, so the default limits apply.");
-    expect(said).toContain(`the owner runs \`superstables policy init\`, which writes them to ${missing}, and edits that file.`);
+    expect(said).toContain(`There is no policy file at ${missing}, so the default limits apply.`);
+    expect(said).toContain("the owner runs `superstables policy init` and edits that file.");
     expect(said).not.toContain("set per_call there");
+  });
+
+  it("with no policy file in the default home, where the chosen file is the account's own, still says the defaults refused", () => {
+    const missing = join(file, "..", "none.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", missing);
+    vi.spyOn(home, "accountPolicyPath").mockReturnValue(missing);
+    try {
+      const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+      expect(said).toContain(`There is no policy file at ${missing}, so the default limits apply.`);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("names the account's policy file when that file refused, else the one the environment names", () => {

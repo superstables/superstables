@@ -125,9 +125,11 @@ export function refusedLimit(reason: string | undefined): string | undefined {
 export function policyRefusalHelp(reason: string | undefined): string {
   const limit = refusedLimit(reason);
   const file = policyFileFor(reason);
-  // The account's own file refused only when it is there; the chosen file may be missing, and then the defaults refused.
-  if (file !== accountPolicyPath() && !existsSync(file)) {
-    return `There is no policy file, so the default limits apply. To change or remove them, the owner runs \`superstables policy init\`, which writes them to ${file}, and edits that file.`;
+  // A refusal "(in <account file>)" came from that file, so it is there; any other came from the chosen file or, when
+  // that file is missing, from the defaults.
+  const fromAccountFile = reason?.endsWith(`(in ${accountPolicyPath()})`) ?? false;
+  if (!fromAccountFile && !existsSync(file)) {
+    return `There is no policy file at ${file}, so the default limits apply. To change or remove them, the owner runs \`superstables policy init\` and edits that file.`;
   }
   const cap = limit?.startsWith("caps.") ? ` To change this limit, set ${limit.slice(5)} there to a new value, or to null to remove it.` : "";
   return `\`superstables policy show\` prints the rules; the owner edits ${file} if they are wrong.${cap}`;

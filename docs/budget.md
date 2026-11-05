@@ -126,7 +126,7 @@ from the chain:
 RESULT {"ok":true,"command":"grant","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"chain_final":null,"amount":"0.06","remaining":"0.06","tx":{"grant":"0x3500864caba62204475387fe2f578e7da08ca6e233ae8c18a8c4b77b11eb5763"},"expiry":null,"next":"none"}
 ```
 
-A budget approved on superstables.com is at most 1,000 test USDC, or less if the owner set a lower limit there.
+A budget approved on superstables.com is at most 1,000 in the chain's test token, or less where an owner-set limit applies.
 A live budget is never replaced silently. If the owner explicitly asks to change it, revoke it
 first, then grant the amount they requested.
 
