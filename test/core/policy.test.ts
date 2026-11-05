@@ -137,28 +137,33 @@ describe("parsePolicy, strictly", () => {
     }
   });
 
-  it("fills a cap the file does not set from the defaults", () => {
+  it("reads a cap the file leaves out as no cap: the owner deleted it", () => {
     const p = parsePolicy("caps:\n  per_call: 0.02\n");
     expect(p.perCall).toEqual({ amount: 0.02, asset: "USDC", atomic: "20000" });
-    expect(p.perDay).toEqual(DEFAULT_POLICY.perDay);
-    expect(parsePolicy("caps:\n  per_day: 5 USDC\n").perCall).toEqual(DEFAULT_POLICY.perCall);
-    expect(parsePolicy("caps:\n").perCall).toEqual(DEFAULT_POLICY.perCall);
+    expect(p.perDay).toBeUndefined();
+    expect(parsePolicy("caps:\n  per_day: 5 USDC\n").perCall).toBeUndefined();
+    for (const text of ["caps:\n", "caps: {}\n", "deny: [\"*.example.net\"]\n", "kill_switch: false\n"]) {
+      const q = parsePolicy(text);
+      expect(q.perCall, text).toBeUndefined();
+      expect(q.perDay, text).toBeUndefined();
+    }
   });
 
-  it("reads a cap written as null as no cap, and one left out as the default", () => {
+  it("reads a cap written as null as no cap, like one left out", () => {
     for (const text of ["caps:\n  per_call: null\n  per_day: null\n", "caps:\n  per_call: ~\n  per_day:\n", "caps: { per_call: null, per_day: null }\n"]) {
       const p = parsePolicy(text);
       expect(p.perCall, text).toBeUndefined();
       expect(p.perDay, text).toBeUndefined();
     }
-    const half = parsePolicy("caps:\n  per_call: null\n");
+    const half = parsePolicy("caps:\n  per_call: null\n  per_day: 2 USDC\n");
     expect(half.perCall).toBeUndefined();
-    expect(half.perDay).toEqual(DEFAULT_POLICY.perDay);
+    expect(half.perDay).toEqual({ amount: 2, asset: "USDC", atomic: "2000000" });
   });
 
   it("allows a payment above 0.05 and above 1 a day when the file removes the caps, and still refuses a set cap by name", () => {
     const big = { domain: "api.example.com", asset: "USDC", amountAtomic: 5_000_000n, decimals: 6, spentTodayAtomic: 3_000_000n };
     expect(evaluatePolicy(parsePolicy("caps:\n  per_call: null\n  per_day: null\n"), big)).toEqual({ allowed: true });
+    expect(evaluatePolicy(parsePolicy("allow: []\n"), big)).toEqual({ allowed: true });
     const perCall = evaluatePolicy(parsePolicy("caps:\n  per_call: 1 USDC\n  per_day: null\n"), big);
     expect(perCall.allowed).toBe(false);
     expect(perCall.reason).toContain("exceeds caps.per_call (1 USDC)");

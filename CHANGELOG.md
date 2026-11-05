@@ -9,9 +9,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Policy migration:** `null`, `~` and blank values for `caps.per_call` or `caps.per_day` now remove that cap; previously they used the default. To keep those limits, replace empty values with explicit amounts before upgrading.
-- **Spend policy:** a cap written as `null` in `policy.yaml` is no cap at all. `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
-- **Single purchase on superstables.com:** help and docs now describe owner-approved purchases and optional account limits. New accounts have no limits; where owner controls are shown, the owner can set per-payment and per-day limits up to 1,000 each or leave them unset. Budgets default to 100 test USDC and allow up to 1,000.
+- **Policy migration:** in an existing `policy.yaml`, a `caps.per_call` or `caps.per_day` that is missing, `null`, `~` or blank now removes that cap; previously it used the default. A file with no `caps` section has no caps. To keep those limits, write them as amounts before upgrading. With no policy file at all, the default caps still apply, and `pay`, `quote` and `doctor` now say so.
+- **Spend policy:** a cap written as `null`, or left out, in `policy.yaml` is no cap at all. `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
+- **Single purchase on superstables.com:** help and docs now describe owner-approved purchases and optional account limits. New accounts have no limits; where owner controls are shown, the owner can set per-payment and per-day limits up to 1,000 each or leave them unset. Budgets go up to 1,000 test USDC unless the owner sets a lower limit.
 
 ## [1.1.2] - Help text leads with Budgets
 

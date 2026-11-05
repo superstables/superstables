@@ -1,7 +1,10 @@
 // The next step the CLI prints after a payment: what to run, and above all what not to run. An attempt that may have
 // paid is never quoted again until `superstables status` says it was not, and only the chain's word says that.
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SOLANA_DEVNET, TEMPO_MODERATO } from "../../src/core/chain.js";
 import { accountPolicyPath, policyPath } from "../../src/core/home.js";
 import { exitCodeFor, nextFor, requoteCommand } from "../../src/cli/outcome.js";
@@ -68,6 +71,25 @@ describe("nextFor", () => {
 });
 
 describe("nextFor after a spend policy refusal", () => {
+  let file: string;
+  beforeEach(() => {
+    file = join(mkdtempSync(join(tmpdir(), "outcome-policy-")), "policy.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", file);
+    writeFileSync(file, "caps:\n  per_call: 0.05 USDC\n");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("with no policy file, says the default limits refused and how the owner writes a file to change them", () => {
+    writeFileSync(file, "");
+    const missing = join(file, "..", "none.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", missing);
+    const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+    expect(said).toContain("(caps.per_call)");
+    expect(said).toContain("There is no policy file, so the default limits apply.");
+    expect(said).toContain(`the owner runs \`superstables policy init\`, which writes them to ${missing}, and edits that file.`);
+    expect(said).not.toContain("set per_call there");
+  });
+
   it("names the account's policy file when that file refused, else the one the environment names", () => {
     const account = accountPolicyPath();
     const refused = (reason: string) => nextFor(attempt("failed", { refusal: "policy", reason }));

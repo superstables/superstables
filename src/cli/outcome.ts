@@ -6,6 +6,7 @@
 //
 // They are mapped from the attempt's recorded state, never from what the caller hoped for.
 
+import { existsSync } from "node:fs";
 import { networkFor, shortLabel } from "../core/chain.js";
 import { accountPolicyPath, policyPath } from "../core/home.js";
 import { railFor } from "../core/rails/index.js";
@@ -123,8 +124,13 @@ export function refusedLimit(reason: string | undefined): string | undefined {
 /** What to tell the owner when the spend policy refused: the rule, the file, and that a cap can be changed or removed. */
 export function policyRefusalHelp(reason: string | undefined): string {
   const limit = refusedLimit(reason);
+  const file = policyFileFor(reason);
+  // The account's own file refused only when it is there; the chosen file may be missing, and then the defaults refused.
+  if (file !== accountPolicyPath() && !existsSync(file)) {
+    return `There is no policy file, so the default limits apply. To change or remove them, the owner runs \`superstables policy init\`, which writes them to ${file}, and edits that file.`;
+  }
   const cap = limit?.startsWith("caps.") ? ` To change this limit, set ${limit.slice(5)} there to a new value, or to null to remove it.` : "";
-  return `\`superstables policy show\` prints the rules; the owner edits ${policyFileFor(reason)} if they are wrong.${cap}`;
+  return `\`superstables policy show\` prints the rules; the owner edits ${file} if they are wrong.${cap}`;
 }
 
 /** The terminal's Next line. A removed inclusion's warning is already in the opening, so it is not repeated here. */

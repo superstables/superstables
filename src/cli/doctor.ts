@@ -186,7 +186,7 @@ function policyCheck(): Check {
   const path = policyPath();
   try {
     const policy = loadPolicy(path);
-    const where = existsSync(path) ? path : `${path} (missing, built-in defaults apply)`;
+    const where = existsSync(path) ? path : `${path} (no file, so the default limits apply; to change or remove them, the owner runs \`superstables policy init\` and edits that file)`;
     return { name: "spend policy", ok: true, detail: `${where}: ${policySummary(policy)}`, essential: true };
   } catch (err) {
     return { name: "spend policy", ok: false, detail: messageOf(err), essential: true };

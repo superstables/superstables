@@ -2,6 +2,9 @@
 // what it refuses. The property under test is that a top-up which is not exactly the one this command asked for is
 // never paid, and that a payment the site calls pending, retired or unconfirmable is never paid a second time.
 
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { BASE_SEPOLIA } from "../../src/core/chain.js";
 import type { PaymentTerms, Attempt, Quote } from "../../src/core/types.js";
@@ -199,12 +202,21 @@ describe("seller top-up", () => {
   });
 
   it("does not pay when the spend policy refuses the top-up, and says which command shows the rules", async () => {
-    const made = ports({ quote: async () => quote({}, false) });
-    const result = await run(made);
-    expect(made.pay).not.toHaveBeenCalled();
-    expect(result.exitCode).toBe(3);
-    expect(result.message).toContain("spend policy refused");
-    expect(result.next).toContain("superstables policy show");
+    const file = join(mkdtempSync(join(tmpdir(), "top-up-policy-")), "policy.yaml");
+    writeFileSync(file, "caps:\n  per_call: 0.05 USDC\n");
+    vi.stubEnv("SUPERSTABLES_POLICY", file);
+    try {
+      const made = ports({ quote: async () => quote({}, false) });
+      const result = await run(made);
+      expect(made.pay).not.toHaveBeenCalled();
+      expect(result.exitCode).toBe(3);
+      expect(result.message).toContain("spend policy refused");
+      expect(result.next).toContain("superstables policy show");
+      vi.stubEnv("SUPERSTABLES_POLICY", join(file, "..", "none.yaml"));
+      expect((await run(ports({ quote: async () => quote({}, false) }))).next).toContain("superstables policy init");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("never pays the same top-up again when its pay link says the payment is pending or unconfirmed", async () => {

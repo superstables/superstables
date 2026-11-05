@@ -2,7 +2,8 @@
 # not by the chain). Evaluation order, first refusal wins:
 #   kill_switch → deny → allow → stablecoins → per_call → per_day
 # Amounts are plain decimals with at most 6 decimals, like 0.05 or 0.05 USDC (not 0x10, 1e3 or .5).
-# These caps are only the starting values. To change one, edit its value; to remove it, write null (per_call: null).
+# These caps are only the starting values. To change one, edit its value; to remove it, write null (per_call: null)
+# or delete its line.
 caps:
   per_call: 0.05 USDC   # one payment above this is refused
   per_day: 1 USDC       # payments adding up to more than this in one UTC day are refused

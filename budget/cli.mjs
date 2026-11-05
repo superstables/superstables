@@ -315,7 +315,7 @@ evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
 On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
 final false) until the grant itself is final. Check the result with superstables budget status.
-A budget approved on superstables.com is 100 test USDC by default and at most 1,000 test USDC.
+A budget approved on superstables.com is at most 1,000 test USDC, or less if the owner set a lower limit there.
 
 ${OWNER_HELP}
 
