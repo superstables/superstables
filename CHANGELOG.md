@@ -7,20 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
-
-- **Policy migration:** in a `policy.yaml` that sets any rule, a `caps.per_call` or `caps.per_day` that is missing, `null`, `~` or blank now removes that cap; previously it used the default. Such a file with no `caps` section has no caps. To keep those limits, write them as amounts before upgrading. A missing file, or one that is empty or only comments, keeps the default caps, and `quote`, `doctor` and a policy refusal now say so.
-- **Spend policy:** a cap written as `null`, or left out, in `policy.yaml` is no cap at all. `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
-- **Single purchase on superstables.com:** help and docs now describe owner-approved purchases and optional account limits. New accounts have no limits; where owner controls are shown, the owner can set per-payment and per-day limits up to 1,000 each or leave them unset. Budgets go up to 1,000 in the chain's test token, or less where an owner-set limit applies.
-
-## [1.1.2] - Help text leads with Budgets
+## [1.1.2] - Removable spend caps and Budgets-first help
 
 Testnet only.
 
 ### Changed
 
+- **Policy migration:** in a `policy.yaml` that sets any rule, a `caps.per_call` or `caps.per_day` that is missing, `null`, `~` or blank now removes that cap; previously it used the default. Such a file with no `caps` section has no caps. To keep those limits, write them as amounts before upgrading. A missing file, or one that is empty or only comments, keeps the default caps, and `quote`, `doctor` and a policy refusal now say so.
+- **Spend policy:** a cap written as `null`, or left out, in `policy.yaml` is no cap at all. `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
 - **CLI help:** `superstables --help` now describes Budgets first, then Single purchase on your machine (`pay`) and Single purchase on superstables.com (`budget buy-once`). `owner settings sign` also lists your enabled chains among what your wallet signs. `budget recover` now says stranded funds instead of stranded USDC, since on Robinhood Chain Testnet it returns USDG.
-- **Single purchase limits:** help and docs describe the default limits for Single purchase on superstables.com: 0.05 per payment and 1 per UTC day, in USDC, USDG and pathUSD token units counted together across chains. A refusal message now names the account limits without promising the owner can change them.
+- **Single purchase on superstables.com:** help and docs now describe owner-approved purchases and optional account limits. New accounts have no limits; where owner controls are shown, the owner can set per-payment and per-day limits up to 1,000 each or leave them unset. Budgets go up to 1,000 in the chain's test token, or less where an owner-set limit applies.
 - **Docs and skills:** the plugin descriptions mention Budgets. The skills have the agent show the account wallet line with a budget approval link, and tell chat apps to point owners to Claude Code, Codex or another agent that can run commands. The install page says the Get started prompt installs the plugin in Claude Code and Codex, and the skill zip in other agents that run commands. The budget guide lists Robinhood Chain Testnet among the chains for approval on superstables.com.
 
 ## [1.1.1] - Chat-app guidance and single purchase limits
