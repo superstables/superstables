@@ -635,12 +635,14 @@ explain(
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
       const defaults = defaultsReason(policyPath());
-      const where =
-        (defaults ? `the default limits (${defaults}; the owner runs \`superstables policy init\` (with --force if the file is there but empty) and edits that file)` : policyPath()) +
-        (policy.also ? ` and ${policy.also.file}` : "");
+      const where = (defaults ? "the default limits" : policyPath()) + (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),
       );
+      // On its own line: with long paths, the policy line would otherwise be cut before the reason.
+      if (defaults) {
+        console.log(field("defaults", `${defaults}; the owner runs \`superstables policy init\` (with --force if the file is there but empty) and edits that file`));
+      }
       for (const check of taken.policy.checks ?? []) {
         console.log(`    ${check.ok ? "ok     " : "REFUSED"}  ${check.rule.padEnd(12)} ${check.detail}`);
       }

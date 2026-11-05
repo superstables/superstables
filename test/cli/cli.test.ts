@@ -681,6 +681,17 @@ describe("the account's own spend policy", () => {
     }
   }, 90_000);
 
+  it("keeps the refusal reason on the quote's policy line when the paths are long", async () => {
+    accountPolicy("kill_switch: true\n");
+    const deep = join(other, "a-long-folder-name-that-makes-the-path-long".repeat(3));
+    mkdirSync(deep, { recursive: true, mode: 0o700 });
+    const result = await run(["--home", deep, "quote", url], env());
+    expect(result.code).toBe(3);
+    const line = result.stdout.split("\n").find((l) => l.trimStart().startsWith("policy "));
+    expect(line).toContain(`kill_switch is on (in ${join(account, ".superstables", "policy.yaml")})`);
+    expect(result.stdout).toContain(`no file at ${join(deep, "policy.yaml")}; the owner runs \`superstables policy init\``);
+  }, 90_000);
+
   it("with no account file, an empty policy file still holds the default caps", async () => {
     const result = await run(["quote", url], { ...env(), SUPERSTABLES_POLICY: "/dev/null" });
     expect(result.code).toBe(3);
