@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Approval links on superstables.com:** When creating approval links directly, `superstables budget setup`, `grant`, `fund-agent` and `revoke` now ask the site for the `--timeout` you gave, up to one hour, instead of always using its 10-minute window. When the site adjusts the request to its own limits, the CLI relays its notice. Sites that do not advertise support keep the previous behaviour. Requests prepared with `--sign-only` keep the site's default window.
+
 ## [1.1.2] - Removable spend caps and Budgets-first help
 
 Testnet only.
