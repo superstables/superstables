@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.1.3] - Approval link timeouts and final transactions
+
 Testnet only.
 
 ### Fixed
