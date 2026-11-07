@@ -1313,6 +1313,14 @@ export function walletWasAsked(record, page = null) {
   return [record?.url, ...(record?.earlierUrls ?? [])].some((url) => lastPageStatus(url).sending);
 }
 
+/** Whether the owner's page reported a transaction for this approval: it is past the owner, and its command is waiting on the chain. */
+export function awaitingChain(record) {
+  const page = lastPageStatus(record?.url);
+  if (["sent", "confirmed", "hosted:sent", "hosted:confirmed"].includes(page.status)) return true;
+  // A failure with a reported hash is still a transaction the command is checking; a hashless failure never sent one.
+  return ["failed", "hosted:failed"].includes(page.status) && Boolean(page.hash);
+}
+
 /** The page id in a link: the loopback page's 32 hex digits, or a hosted request id (bl_..., ba_...). */
 const pageIdOf = (url) => /\/owner\/([0-9a-f]{32})/.exec(url ?? "")?.[1] ?? /\/approve\/budget\/(b[la]_[A-Za-z0-9_-]+)/.exec(url ?? "")?.[1];
 
@@ -1322,18 +1330,20 @@ function lastPageStatus(url) {
   if (!pageId || !existsSync(ownerApprovalsLog())) return { status: null, sending: false };
   let status = null;
   let sending = false;
+  let hash = null;
   for (const line of readFileSync(ownerApprovalsLog(), "utf8").split("\n")) {
     if (!line.includes(pageId)) continue;
     try {
       const entry = JSON.parse(line);
       if (entry.id !== pageId) continue;
       status = entry.status;
+      if (typeof entry.hash === "string" && entry.hash) hash = entry.hash;
       // a sign-in (the loopback page's connect, a link on superstables.com) asks the wallet for a message, never to send
       const signIn = entry.kind === "connect" || entry.kind === "link";
       if (entry.sending || (!signIn && ["sending", "sent", "confirmed", "failed", "unknown"].includes(entry.status))) sending = true;
     } catch {}
   }
-  return { status, sending };
+  return { status, sending, hash };
 }
 
 /**

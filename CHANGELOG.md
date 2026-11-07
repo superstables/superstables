@@ -7,9 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Testnet only.
+
 ### Fixed
 
 - **Approval links on superstables.com:** When creating approval links directly, `superstables budget setup`, `grant`, `fund-agent` and `revoke` now ask the site for the `--timeout` you gave, up to one hour, instead of always using its 10-minute window. When the site adjusts the request to its own limits, the CLI relays its notice. Sites that do not advertise support keep the previous behaviour. Requests prepared with `--sign-only` keep the site's default window.
+- **Budget commands while the chain makes a transaction final:** `budget wait` on an owner command that landed (`state: "landed"`, or a `setup` with a landed step) now returns `final: false` and `chain_final: false`, and its `next` no longer says there is nothing to do: the owner has nothing more to approve, and the next owner command should start only once the chain has made it final. A new owner command refused while an earlier command is checking a reported transaction now says so in `reason` and `next`, instead of saying the approval waits for the owner.
 
 ## [1.1.2] - Removable spend caps and Budgets-first help
 

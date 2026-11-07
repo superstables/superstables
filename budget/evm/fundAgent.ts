@@ -38,4 +38,4 @@ const aa = await readUntil(() => nativeBalance(p.agent), (v) => v >= ab + value)
 console.log(`agent ${gasFmt(aa)} ${GAS.symbol} ${tx(hash)}`);
 if (GAS.isUsdc) console.log(`agent ERC-20 ${SYM} balance: ${usdc(await usdcBalance(p.agent))} (native / 1e12)`);
 if (!final) console.log(`the transfer is in a block, but the chain has not made it final yet${thatTakes()}`);
-process.exit(emit("fundAgent", 0, { state: final ? "ok" : "landed", final, tx: hash, explorer: tx(hash), sent: gasFmt(value), agentNativeBefore: gasFmt(ab), agentNativeAfter: gasFmt(aa), next: final ? "none" : `landed, not final yet. Nothing to do: the transfer is final once its block is${usuallyWords()}. superstables budget doctor --rail evm${chainFlag} reads the balance` }));
+process.exit(emit("fundAgent", 0, { state: final ? "ok" : "landed", final, tx: hash, explorer: tx(hash), sent: gasFmt(value), agentNativeBefore: gasFmt(ab), agentNativeAfter: gasFmt(aa), next: final ? "none" : `landed, not final yet: the transfer is final once its block is${usuallyWords()}. Start the next owner command (grant) only then. superstables budget doctor --rail evm${chainFlag} reads the balance` }));
