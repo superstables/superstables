@@ -92,9 +92,11 @@ export const POLICY_EXAMPLE = `# Superstables spend policy (software policy: enf
 # not by the chain). Evaluation order, first refusal wins:
 #   kill_switch → deny → allow → stablecoins → per_call → per_day
 # Amounts are plain decimals with at most 6 decimals, like 0.05 or 0.05 USDC (not 0x10, 1e3 or .5).
+# These caps are only the starting values. To change one, edit its value; to remove it, write null (per_call: null)
+# or delete its line.
 caps:
-  per_call: 0.05 USDC   # the most one payment may be
-  per_day: 1 USDC       # the most all payments may add up to in one UTC day
+  per_call: 0.05 USDC   # one payment above this is refused
+  per_day: 1 USDC       # payments adding up to more than this in one UTC day are refused
 allow: []               # hostname patterns; empty = any host
 deny: []                # e.g. ["*.example.net"]
 stablecoins: [USDC, pathUSD, USDG]  # allowed assets; the caps count them together, one for one
@@ -124,13 +126,17 @@ const POLICY_KEYS = ["caps", "allow", "deny", "stablecoins", "approval", "kill_s
 const CAP_KEYS = ["per_call", "per_day"];
 
 /**
- * Reads a policy file's text. A rule the file does not set takes the default; a file that cannot be read as the
+ * Reads a policy file's text. A cap the file does not set, or sets to null, is no cap at all: the owner wrote this file,
+ * and a limit they deleted stays deleted. A document with nothing in it (empty, only comments, or ~) is read as the
+ * defaults, like a missing file (loadPolicy): an empty or truncated file is not taken as the owner removing every
+ * limit. Another rule the file does not set takes its default. A file that cannot be read as the
  * policy it was meant to be (an unknown key, a kill_switch that is not true or false, a scalar where a list belongs,
  * an amount that is not one) throws with the key named, because reading it as "no rule" would lift the limits the
  * owner meant to set.
  */
 export function parsePolicy(yamlText: string): Policy {
-  const raw: unknown = parseYaml(yamlText) ?? {};
+  const raw: unknown = parseYaml(yamlText);
+  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, allow: [], deny: [], stablecoins: [...DEFAULT_POLICY.stablecoins] };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("the policy must be a YAML mapping");
   const doc = raw as Record<string, unknown>;
   for (const key of Object.keys(doc)) {
@@ -145,9 +151,9 @@ export function parsePolicy(yamlText: string): Policy {
     if (!CAP_KEYS.includes(key)) throw new Error(`unknown cap "${untrustedText(key, 40)}" in caps (the caps are ${CAP_KEYS.join(", ")})`);
   }
   const source = parseDocument(yamlText);
-  const cap = (key: "per_call" | "per_day", fallback: Money | undefined): Money | undefined => {
+  const cap = (key: "per_call" | "per_day"): Money | undefined => {
     const value = (caps as Record<string, unknown>)[key];
-    if (value === undefined || value === null) return fallback;
+    if (value === undefined || value === null) return undefined;
     try {
       return parseMoney(capText(source, key, value) as string);
     } catch (err) {
@@ -170,8 +176,8 @@ export function parsePolicy(yamlText: string): Policy {
     throw new Error(`approval: "${untrustedText(approval, 40)}" is not supported in this release (only ask-every-payment)`);
   }
   return {
-    perCall: cap("per_call", DEFAULT_POLICY.perCall),
-    perDay: cap("per_day", DEFAULT_POLICY.perDay),
+    perCall: cap("per_call"),
+    perDay: cap("per_day"),
     allow: list("allow", []),
     deny: list("deny", []),
     stablecoins: list("stablecoins", [...USD_STABLECOINS]).map(assetName),
@@ -219,6 +225,26 @@ export function loadOptionalPolicy(path: string): Policy | undefined {
     return parsePolicy(text);
   } catch (err) {
     throw unusable(err);
+  }
+}
+
+/**
+ * Why the default caps apply to the policy file at `path`, in words for the owner, or undefined when the file sets its
+ * own rules (or cannot be read: loading it then refuses, and says why). A missing file and an empty one (only comments,
+ * or ~) are read as the defaults.
+ */
+export function defaultsReason(path: string): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? `no file at ${path}` : undefined;
+  }
+  try {
+    const doc: unknown = parseYaml(text);
+    return doc === null || doc === undefined ? `${path} is empty` : undefined;
+  } catch {
+    return undefined;
   }
 }
 

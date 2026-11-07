@@ -1,9 +1,9 @@
 # Install the client
 
 The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
-that guides an agent through it. Start with a [budget](budget.md), where the owner
+that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, or pathUSD on Tempo Moderato. No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
 
 ## What you need
 
@@ -18,16 +18,16 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   superstables.com account. They sign in with an Ethereum or Solana wallet or an email address. An account
   admin links wallets on the account page: an Ethereum wallet for EVM chains and Tempo, or a Solana wallet
   for Solana. The owner approves with the linked wallet. An ordinary remote browser without a compatible
-  wallet cannot sign. Choose [budget approvals on superstables.com](budget.md#approve-on-superstablescom-instead)
+  wallet cannot sign. Choose [Budget on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 1.0.0** and require that release build. Install it from npm
+These instructions describe **client 1.1.2** and require that release build. Install it from npm
 as `@superstables/client`, or use the released commit and skill from
 [GitHub Releases](https://github.com/superstables/superstables/releases).
 The CLI/skill runs on your own machine or server,
 even with approvals on superstables.com. EVM `recover` still needs a reachable local approval page and the
 agent key on that runtime. Test-token and gas requirements belong to the chosen
-[budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
+[Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
 testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
@@ -36,8 +36,27 @@ testnet RPCs, the Superstables index and, when switched on, the demo catalogue o
 
 Pick one. All of them run the same commands on the same state, in `~/.superstables`.
 
+**The plugin.** In Claude Code or Codex, the [plugin](../README.md#the-plugin) adds the
+Superstables skill and connector. It uses the connector where a tool is available, and runs this
+client with `npx` for operations that need your machine or when connector tools are missing or you
+decline to connect. Its install steps are in the README and on superstables.com's Get started page.
+In Claude (claude.ai, Claude desktop and mobile), the plugin zip is uploaded in Customize › Plugins.
+
+**The connector.** A chat app (Claude, ChatGPT or Grok Bot) adds `https://mcp.superstables.com`
+without the plugin. It can find services, request a purchase you approve on superstables.com, read
+budgets and give you the link to revoke one. It cannot run the client, so it declines budget set-up,
+grants, funding, buying under a budget and `pay`. The chat shows each approval link with a line
+naming the account's wallets by their last four characters; if that is not your account, don't
+approve. Grok Bot takes the same URL: ask the bot in chat to add a remote MCP server with it, then
+sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. In our testing
+on testnet, the Grok Bot desktop app completed single purchases on Base Sepolia; other chains and
+phone use are not tested yet. The steps for each app are at
+[superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
+[the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
+
 **The agent skill, from Get started.** The one-line prompt on superstables.com's Get started page
-has the agent download the skill zip, check its SHA-256 checksum and install it. The skill bundles
+has the agent install the plugin in Claude Code and Codex, and in other agents that run commands
+download the skill zip, check its SHA-256 checksum and install it. The skill bundles
 the whole CLI; [The agent skill](#the-agent-skill-with-the-whole-cli-bundled) below installs it by
 hand.
 
@@ -52,7 +71,7 @@ client. The client's package is `@superstables/client`.
 ### From npm
 
 ```bash
-npm install -g @superstables/client@1.0.0
+npm install -g @superstables/client@1.1.2
 superstables --version
 ```
 
@@ -63,7 +82,7 @@ the command, not the agent skill: to connect an agent, also install the skill, a
 ### From a checkout
 
 To run the client from its sources, for example to work on it, replace `<commit>` with the full
-commit hash of the 1.0.0 release:
+commit hash of the 1.1.2 release:
 
 ```bash
 git clone https://github.com/superstables/superstables.git
@@ -83,7 +102,7 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder, with `<commit>` replaced by the full commit hash of the 1.0.0 release (its
+In any folder, with `<commit>` replaced by the full commit hash of the 1.1.2 release (its
 page on GitHub names the commit):
 
 ```bash
@@ -100,7 +119,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 ### The agent skill, with the whole CLI bundled
 
 `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`, and
-the 1.0.0 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+the 1.1.2 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables-payments/`, and needs
 only Node:
 
@@ -147,8 +166,8 @@ release yourself some other way, do it under `umask 022`.
 
 ## Set up
 
-For `pay`, the owner runs `setup` once; Single purchase on superstables.com and budgets don't need it. It creates `~/.superstables`, writes a starting spend
-policy (`policy.yaml`, at most 0.05 USDC per payment and 1 USDC per day) and prints how the owner
+For `pay`, the owner runs `setup` once; Single purchase on superstables.com and Budget don't need it. It creates `~/.superstables`, writes a starting spend
+policy (`policy.yaml`) with the limits written out, by default 0.05 per payment and 1 per UTC day, counted across USDC, USDG and pathUSD one for one. The owner edits a value to change it, or writes `null` to remove it. `setup` also prints how the owner
 approves payments. In the default browser mode it creates no key: the owner's key stays in their wallet. Running it
 again keeps the existing policy.
 
@@ -162,7 +181,7 @@ which account last connected, that the approval port is free, and that the demo 
 index and the facilitators answer:
 
 ```
-  client version           1.0.0
+  client version           1.1.2
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
@@ -190,7 +209,7 @@ waiting on it, the page takes a free port instead, and the approval link names t
 
 ## Set up your agent app
 
-An agent uses the client through the `superstables-payments` skill and a shell. The skill guides
+The plugin brings its own skill, so a plugin install needs nothing here. The skill is called `superstables` in the plugin (`/superstables:superstables` in Claude Code, `$superstables` in Codex). Without the plugin, an agent uses the client through the Superstables skill from the skill zip, `superstables-payments` (`/superstables-payments` in Claude Code, `$superstables-payments` in Codex), and a shell. The skill guides
 it through finding a service, pricing it and both ways to pay, with their safety rules. Use the
 skill zip installed above, or link the `skills/superstables-payments/` folder from a checkout into
 your agent's skills folder. Keep `SKILL.md`, `references/` and `agents/openai.yaml` together.

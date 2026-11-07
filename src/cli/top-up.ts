@@ -36,7 +36,7 @@ import {
 } from "../seller/top-up.js";
 import type { PaymentContext } from "./context.js";
 import { field, table, termsMoney } from "./format.js";
-import { CliError, EXIT, exitCodeFor, isFinalAttempt, type ExitCode } from "./outcome.js";
+import { CliError, EXIT, exitCodeFor, isFinalAttempt, policyRefusalHelp, type ExitCode } from "./outcome.js";
 import { PaymentStartedError, approveAndPay } from "./pay.js";
 import { messageFor } from "./views.js";
 
@@ -238,7 +238,7 @@ async function prepare(input: {
       amount,
       quote,
       message: `The top-up's payment was quoted, but a spend policy refused it: ${quote.policy.reason ?? "no reason given"}. Nothing was paid.`,
-      next: `\`superstables policy show\` prints the rules; the owner raises the cap in the policy file if a top-up of ${amount.decimal} USDC should be allowed.`,
+      next: policyRefusalHelp(quote.policy.reason),
       exitCode: EXIT.refused,
     };
   }
@@ -565,7 +565,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
   return {
     message: messageFor(attempt),
     next: refusal
-      ? `\`superstables policy show\` prints the rules; the owner edits the policy file if a top-up of ${quote.terms.amountDecimal} USDC should be allowed.`
+      ? policyRefusalHelp(attempt.reason)
       : attempt.transaction
         ? `Do not pay again yet: \`superstables status ${attempt.id}\` looks for this payment.`
         : `Nothing was charged. Run \`${TOP_UP_COMMAND} <amount>\` again to ask for another top-up, or \`${CREDIT_COMMAND}\` to see this one.`,

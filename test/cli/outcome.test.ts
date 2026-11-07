@@ -1,8 +1,12 @@
 // The next step the CLI prints after a payment: what to run, and above all what not to run. An attempt that may have
 // paid is never quoted again until `superstables status` says it was not, and only the chain's word says that.
 
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SOLANA_DEVNET, TEMPO_MODERATO } from "../../src/core/chain.js";
+import * as home from "../../src/core/home.js";
 import { accountPolicyPath, policyPath } from "../../src/core/home.js";
 import { exitCodeFor, nextFor, requoteCommand } from "../../src/cli/outcome.js";
 import type { Attempt, AttemptState } from "../../src/core/types.js";
@@ -68,11 +72,58 @@ describe("nextFor", () => {
 });
 
 describe("nextFor after a spend policy refusal", () => {
+  let file: string;
+  beforeEach(() => {
+    file = join(mkdtempSync(join(tmpdir(), "outcome-policy-")), "policy.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", file);
+    writeFileSync(file, "caps:\n  per_call: 0.05 USDC\n");
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("with no policy file, says the default limits refused and how the owner writes a file to change them", () => {
+    writeFileSync(file, "");
+    const missing = join(file, "..", "none.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", missing);
+    const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+    expect(said).toContain("(caps.per_call)");
+    expect(said).toContain(`No file at ${missing}, so the default limits apply.`);
+    expect(said).toContain("the owner runs `superstables policy init` (with --force if the file is there but empty) and edits that file.");
+    expect(said).not.toContain("set per_call there");
+  });
+
+  it("with an empty policy file, says the default limits refused and names the file", () => {
+    writeFileSync(file, "# only a comment\n");
+    const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+    expect(said).toContain(`${file} is empty, so the default limits apply.`);
+    expect(said).toContain("with --force if the file is there but empty");
+  });
+
+  it("with no policy file in the default home, where the chosen file is the account's own, still says the defaults refused", () => {
+    const missing = join(file, "..", "none.yaml");
+    vi.stubEnv("SUPERSTABLES_POLICY", missing);
+    vi.spyOn(home, "accountPolicyPath").mockReturnValue(missing);
+    try {
+      const said = nextFor(attempt("failed", { refusal: "policy", reason: "the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)" }));
+      expect(said).toContain(`No file at ${missing}, so the default limits apply.`);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("names the account's policy file when that file refused, else the one the environment names", () => {
     const account = accountPolicyPath();
     const refused = (reason: string) => nextFor(attempt("failed", { refusal: "policy", reason }));
     expect(refused(`the local spend policy refuses this payment: kill_switch is on (in ${account})`)).toContain(`the owner edits ${account} if they are wrong`);
     expect(refused("the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)")).toContain(`the owner edits ${policyPath()} if they are wrong`);
+  });
+
+  it("names the limit that refused and says how to change or remove it", () => {
+    const refused = (reason: string) => nextFor(attempt("failed", { refusal: "policy", reason }));
+    const perCall = refused("the local spend policy refuses this payment: 0.5 USDC exceeds caps.per_call (0.05 USDC)");
+    expect(perCall).toContain("A spend policy refused it (caps.per_call).");
+    expect(perCall).toContain("To change this limit, set per_call there to a new value, or to null to remove it.");
+    expect(refused("the local spend policy refuses this payment: today's payments (1 USDC) plus 0.5 exceed caps.per_day (1 USDC)")).toContain("(caps.per_day)");
+    expect(refused("the local spend policy refuses this payment: kill_switch is on")).toContain("(kill_switch)");
   });
 });
 

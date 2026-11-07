@@ -1,4 +1,4 @@
-// Auto recovery for budget buys as a process: the real dispatcher and rail scripts, a fake superstables.com, two fake EVM chains
+// Auto recovery for budget buys as a process: the dispatcher and rail scripts as the npm package builds them, a fake superstables.com, two fake EVM chains
 // (Base Sepolia and Arc Testnet, each with its own USDC) and sellers on 127.0.0.1. Nothing reaches a network, no wallet, no
 // real key. The seller that cannot be read is a server that answers 503; the working one is a fake x402 seller on the other chain.
 import { spawn } from "node:child_process";
@@ -14,9 +14,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { recoverMessageAddress } from "viem";
 import { ARC_USDC, startFakeEvm, startSeller, usdc, type FakeEvm, type Seller } from "../helpers/fake-evm.js";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CLI = resolve(ROOT, "budget/cli.mjs");
+const BUNDLE = budgetBundle();
+const CLI = join(BUNDLE, "cli.mjs");
 const { agentProofText, ed25519Verifies } = await import(new URL("../../budget/hosted.ts", import.meta.url).href);
 
 const owner = privateKeyToAccount(generatePrivateKey());
@@ -144,7 +146,7 @@ function setUpSolana(site: string) {
 type Out = { code: number; stdout: string; stderr: string; result: any; pid: number };
 function budget(args: string[], opts: { onSpawn?: (pid: number) => void } = {}): Promise<Out> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0" };
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env, detached: true });
@@ -181,10 +183,9 @@ const adviceFor = (candidates: unknown[], policy: Record<string, unknown> = {}, 
 /** A rail script run by hand, the way anyone can run it without the dispatcher. */
 function direct(script: string, args: string[]): Promise<Out> {
   return new Promise((done, fail) => {
-    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url };
+    const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0" };
     const [dir, file] = script.split("/");
-    const tsx = file!.endsWith(".ts");
-    const child = spawn(process.execPath, tsx ? [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), file!, ...args] : [file!, ...args], { cwd: join(ROOT, "budget", dir!), env });
+    const child = spawn(process.execPath, [file!.replace(/\.ts$/, ".mjs"), ...args], { cwd: join(BUNDLE, dir!), env });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
     child.stderr.on("data", (c) => (stderr += String(c)));
@@ -887,7 +888,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const signal = join(home, "paused"), done = join(home, "go");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const rerun = new Promise<Out>((resolveRun, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-d")}.json.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-d")}.json.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
       const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-d"], { cwd: ROOT, env });
       let stdout = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
@@ -953,7 +954,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const signal = join(home, "paused-f"), done = join(home, "go-f");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const rerun = new Promise<Out>((resolveRun, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-f")}.buy.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-f")}.buy.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
       const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-f"], { cwd: ROOT, env });
       let stdout = "", stderr = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
@@ -1116,7 +1117,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const signal = join(home, "paused-s"), done = join(home, "go-s");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const rerun = new Promise<Out>((resolveRun, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-s")}.buy.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-s")}.buy.lock`), AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
       const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-s"], { cwd: ROOT, env });
       let stdout = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
@@ -1154,8 +1155,8 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const paused = join(home, "paused-m"), go = join(home, "go-m");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const candidate = new Promise<Out>((done, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-m")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
-      const child = spawn(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), "buy.ts", ...candidateBuy(gate, "fz-m")], { cwd: join(ROOT, "budget", "evm"), env });
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-m")}.json.lock`), AR_PAUSE_ONLY: "buy.mjs", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, ["buy.mjs", ...candidateBuy(gate, "fz-m")], { cwd: join(BUNDLE, "evm"), env });
       let stdout = "", stderr = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
       child.stderr.on("data", (c) => (stderr += String(c)));
@@ -1201,8 +1202,8 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const paused = join(home, "paused-x"), go = join(home, "go-x");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const candidate = new Promise<Out>((done, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-x")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
-      const child = spawn(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), "buy.ts", ...candidateBuy(gate, "fz-x")], { cwd: join(ROOT, "budget", "evm"), env });
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-x")}.json.lock`), AR_PAUSE_ONLY: "buy.mjs", AR_PAUSE_SIGNAL: paused, AR_PAUSE_DONE: go, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const child = spawn(process.execPath, ["buy.mjs", ...candidateBuy(gate, "fz-x")], { cwd: join(BUNDLE, "evm"), env });
       let stdout = "", stderr = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
       child.stderr.on("data", (c) => (stderr += String(c)));
@@ -1256,7 +1257,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const signal = join(home, "paused-t"), done = join(home, "go-t");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const rerun = new Promise<Out>((resolveRun, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-t")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-t")}.json.lock`), AR_PAUSE_ONLY: "buy.mjs", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
       const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-t"], { cwd: ROOT, env });
       let stdout = "";
       child.stdout.on("data", (c) => (stdout += String(c)));
@@ -1303,7 +1304,7 @@ describe("a freeze is permanent: the order is never paid on both the original an
     const signal = join(home, "paused-u"), done = join(home, "go-u");
     const hook = fileURLToPath(new URL("../helpers/pause-before-lock.mjs", import.meta.url));
     const rerun = new Promise<Out>((resolveRun, fail) => {
-      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, AR_PAUSE_LOCK: join(dir, `${aop("fz-u")}.json.lock`), AR_PAUSE_ONLY: "buy.ts", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
+      const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC_BASE_SEPOLIA: base.url, B4_RPC_ARC_TESTNET: arc.url, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", AR_PAUSE_LOCK: join(dir, `${aop("fz-u")}.json.lock`), AR_PAUSE_ONLY: "buy.mjs", AR_PAUSE_SIGNAL: signal, AR_PAUSE_DONE: done, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${hook}` };
       const child = spawn(process.execPath, [CLI, "buy", "--rail", "evm", "--chain", "base-sepolia", "--url", `${gate}/spot`, "--max", "0.05", "--op", "fz-u"], { cwd: ROOT, env });
       let stdout = "";
       child.stdout.on("data", (c) => (stdout += String(c)));

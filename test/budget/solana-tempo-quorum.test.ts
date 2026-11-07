@@ -53,7 +53,7 @@ const track = <T extends { close(): Promise<void> }>(s: T): T => { toClose.push(
 type Out = { code: number; stdout: string; stderr: string; result: any };
 function spawnIn(argv: string[], env: Record<string, string>): Promise<Out> {
   return new Promise((done, fail) => {
-    const all: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, ...env };
+    const all: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, ...env };
     delete all.SUPERSTABLES_SITE;
     delete all.SUPERSTABLES_BUDGET_APPROVAL_ID;
     const child = spawn(argv[0], argv.slice(1), { cwd: tree.root, env: all });
@@ -66,13 +66,14 @@ function spawnIn(argv: string[], env: Record<string, string>): Promise<Out> {
     child.once("close", (code) => {
       clearTimeout(timer);
       const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
-      done({ code: code ?? 0, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null });
+      done({ code: code ?? -1, stdout, stderr, result: line ? JSON.parse(line.slice(7)) : null });
     });
   });
 }
-const budget = (args: string[], env: Record<string, string>) => spawnIn([process.execPath, resolve(tree.root, "budget/cli.mjs"), ...args], env);
+// The built bundle of the tree, so a rail runs with node alone where the sources start each one through tsx.
+const budget = (args: string[], env: Record<string, string>) => spawnIn([process.execPath, resolve(tree.bundle(), "cli.mjs"), ...args], env);
 const script = (file: string, args: string[], env: Record<string, string>) =>
-  spawnIn(file.endsWith(".ts") ? [resolve(tree.root, "node_modules/.bin/tsx"), resolve(tree.root, file), ...args] : [process.execPath, resolve(tree.root, file), ...args], env);
+  spawnIn([process.execPath, resolve(tree.bundle(), file.replace(/^budget\//, "").replace(/\.ts$/, ".mjs")), ...args], env);
 
 const file = (...p: string[]) => join(home, ...p);
 const write = (path: string, text: string, mode = 0o600) => {
@@ -320,10 +321,11 @@ describe("solana: owner commands use the owner's endpoints", () => {
   }, 120_000);
 
   it("an RPC set in the environment that is the owner's own is used", async () => {
-    const owners = await solana();
+    const owners = track(await startFakeSolana({ websocket: true }));
     tree.set({ "solana-devnet": [owners.url] });
     solanaSetup(owners);
-    await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], solEnv(owners));
+    const r = await budget(["fund-agent", "--rail", "solana", "--amount", "0.01", "--owner-key-file", ownerKeyFile(), "--yes"], solEnv(owners));
+    expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(owners.calls).toContain("getLatestBlockhash");
   }, 120_000);
 });

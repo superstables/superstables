@@ -283,7 +283,7 @@ async function moderato(owner: string, agent: string): Promise<{ url: string; ra
   const tree = endpointTree();
   tree.set({ "tempo-moderato": [url] });
   servers.push({ close: (done: () => void) => { tree.close(); done(); } } as unknown as Server);
-  treeOf.set(url, tree.root);
+  treeOf.set(url, tree.bundle());
   return { url, raw, chain };
 }
 
@@ -319,7 +319,7 @@ function tempoHome(owner: string): { dir: string; agent: string } {
 
 function tempoBuy(dir: string, rpc: string, url: string, op: string): Promise<{ result: Record<string, any>; out: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "buy.ts", "--url", url, "--max", "0.01", "--op", op], { cwd: join(treeOf.get(rpc)!, "budget", "tempo"), env: { ...process.env, SUPERSTABLES_HOME: dir, SUPERSTABLES_TEMPO_RPC: rpc } });
+    const child = spawn(process.execPath, ["buy.mjs", "--url", url, "--max", "0.01", "--op", op], { cwd: join(treeOf.get(rpc)!, "tempo"), env: { ...process.env, SUPERSTABLES_HOME: dir, SUPERSTABLES_TEMPO_RPC: rpc } });
     let out = "";
     child.stdout.on("data", (c) => (out += c));
     child.stderr.on("data", (c) => (out += c));

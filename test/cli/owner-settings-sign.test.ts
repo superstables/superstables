@@ -18,6 +18,7 @@ import {
 } from "../../src/core/owner-settings.js";
 import { OwnerApprovalServer } from "../../src/core/signer/owner-approval-server.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const saved = process.env.SUPERSTABLES_TEST_ACCOUNT_HOME;
 const savedHome = process.env.SUPERSTABLES_HOME;
@@ -191,7 +192,7 @@ describe("the command", () => {
       child.stderr.on("data", (c) => (stderr += String(c)));
       child.once("error", fail);
       child.once("close", (code) => done({ code: code ?? 0, stdout, stderr }));
-      child.stdin.end("");
+      endStdin(child);
     });
   }
 

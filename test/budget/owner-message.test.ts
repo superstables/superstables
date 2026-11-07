@@ -1,6 +1,6 @@
 // message_for_owner: the reply an agent sends word for word when a link needs the owner.
 import { describe, expect, it } from "vitest";
-import { messageForOwner } from "../../budget/once.mjs";
+import { TESTNET_LINE, messageForOwner } from "../../budget/once.mjs";
 
 describe("message_for_owner", () => {
   it("has the exact link, the code, the amount on the network, the testnet line and what to do next", () => {
@@ -9,7 +9,7 @@ describe("message_for_owner", () => {
       "Review and approve in your wallet: Approve a budget",
       "https://www.superstables.com/approve/budget/ba_1#ssba_test_x",
       "Match code: QRS-TUV (pick it on the page)",
-      "0.2 test USDC on Arc Testnet. Testnet only. Test tokens, no real money.",
+      `0.2 test USDC on Arc Testnet. ${TESTNET_LINE}`,
       "This needs a superstables.com account: the link asks you to sign in with your wallet first (a message, no fee).",
       "Tell me when you've approved.",
     ].join("\n"));

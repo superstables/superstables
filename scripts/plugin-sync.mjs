@@ -4,17 +4,62 @@ import { chmodSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSyn
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { trackedFiles } from "./package-root.mjs";
+import { PLUGIN_LISTING as L } from "./plugin-data.mjs";
 
 const SKILL = "skills/superstables-payments";
 const PLUGIN_SKILL = "skills/superstables";
 const REFERENCES = `${PLUGIN_SKILL}/references`;
-const MANIFESTS = ["plugin/plugin.json", "plugin/.claude-plugin/plugin.json"];
+
+/** Every file the listing writes, from PLUGIN_LISTING and the version: path from the repository root -> text. */
+function listingFiles(version) {
+  const json = (value) => JSON.stringify(value, null, 2) + "\n";
+  const author = { name: L.developerName };
+  const common = { version, description: L.shortDescription, author, homepage: L.homepage, repository: L.repository, license: L.license, keywords: L.keywords };
+  const openai = {
+    displayName: L.displayName,
+    shortDescription: L.shortDescription,
+    longDescription: L.longDescription,
+    developerName: L.developerName,
+    category: L.category,
+    websiteURL: L.homepage,
+    brandColor: L.brandColor,
+    composerIcon: `./${L.icon}`,
+    logo: `./${L.icon}`,
+  };
+  return new Map([
+    // Agent Plugins schema: no top-level icon or displayName, so Codex's listing sits under extensions.com.openai.interface.
+    ["plugin/plugin.json", json({ $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", name: L.name, ...common, extensions: { "com.openai": { interface: openai } } })],
+    ["plugin/.claude-plugin/plugin.json", json({ name: L.name, displayName: L.displayName, ...common, icon: `./${L.icon}` })],
+    ["plugin/.cursor-plugin/plugin.json", json({ name: L.name, ...common, logo: L.icon })],
+    [
+      ".claude-plugin/marketplace.json",
+      json({
+        name: L.name,
+        owner: author,
+        metadata: { description: L.marketplaceDescription },
+        plugins: [{ name: L.name, source: "./plugin", displayName: L.displayName, description: L.shortDescription, category: L.category, tags: L.keywords, homepage: L.homepage }],
+      }),
+    ],
+    [
+      `plugin/${PLUGIN_SKILL}/agents/openai.yaml`,
+      `interface:\n  display_name: ${JSON.stringify(L.displayName)}\n  short_description: ${JSON.stringify(L.shortDescription)}\n  icon_small: "./${L.skillIcons.small}"\n  icon_large: "./${L.skillIcons.large}"\n  brand_color: ${JSON.stringify(L.brandColor)}\npolicy:\n  allow_implicit_invocation: true\n`,
+    ],
+  ]);
+}
+
+/** Icon files the skill carries for itself: openai.yaml paths are relative to the skill folder. */
+const SKILL_ICON_COPIES = [
+  ["plugin/assets/icon.svg", `plugin/${PLUGIN_SKILL}/${L.skillIcons.small}`],
+  ["plugin/assets/icon.png", `plugin/${PLUGIN_SKILL}/${L.skillIcons.large}`],
+];
 
 function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
-  return `**This reference needs an agent that can run commands.** In a chat app without a terminal, the connector tools in SKILL.md are the route.
+  return `**This reference needs an agent on the owner's machine, such as Claude Code or Codex.** In a chat app, don't run commands to check; decline operations that need a local signature and use the connector tools in SKILL.md.
 
-Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.`;
+Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.
+
+If \`npx\` reports that the pinned \`@superstables/client\` version is unavailable (E404 or ETARGET), stop and ask the owner to check the plugin installation against the public marketplace, \`superstables/superstables\`. Do not substitute another version, package or download source.`;
 }
 
 function statIfPresent(path) {
@@ -94,16 +139,31 @@ export function syncPlugin({ root, check = false }) {
     if (text.includes("<!--")) throw new Error(`${SKILL}/${file}: HTML comments are not allowed in the plugin copy`);
     expected.set(name, { path: destinationPath(`${REFERENCES}/${name}`), content: Buffer.from(text), mode: stat.mode & 0o777 });
   }
-  const manifests = MANIFESTS.map((file) => {
-    const path = destinationPath(file.slice("plugin/".length));
-    return { file, path, manifest: JSON.parse(readFileSync(path, "utf8")) };
-  });
   const problems = [];
-  for (const { file, path, manifest } of manifests) {
-    if (manifest.version === version) continue;
-    if (check) problems.push(`${file}: version must equal package.json (${version})`);
-    else writeFileSync(path, JSON.stringify({ ...manifest, version }, null, 2) + "\n");
+  const outputs = [...listingFiles(version)].map(([file, text]) => ({ file, content: Buffer.from(text) }));
+  for (const [from, to] of SKILL_ICON_COPIES) {
+    const sourcePath = join(root, from);
+    refuseSymlinkPath(sourcePath, root);
+    if (!statIfPresent(sourcePath)?.isFile()) throw new Error(`${from} must exist: it is the plugin's icon`);
+    outputs.push({ file: to, content: readFileSync(sourcePath) });
   }
+  for (const output of outputs) {
+    output.path = resolve(root, output.file);
+    refuseSymlinkPath(output.path, root);
+  }
+  for (const output of outputs) {
+    const current = statIfPresent(output.path) ? readFileSync(output.path) : undefined;
+    if (current?.equals(output.content)) continue;
+    if (!check) continue;
+    let staleVersion = false;
+    if (current && output.file.endsWith("plugin.json")) {
+      try {
+        staleVersion = JSON.parse(current.toString()).version !== version;
+      } catch {}
+    }
+    problems.push(staleVersion ? `${output.file}: version must equal package.json (${version})` : `${output.file}: differs from the plugin listing (scripts/plugin-data.mjs)`);
+  }
+  if (!statIfPresent(join(root, "plugin", L.icon))?.isFile()) throw new Error(`plugin/${L.icon} must exist`);
   if (check) {
     for (const file of new Set([...expected.keys(), ...bundled])) {
       const entry = expected.get(file);
@@ -116,6 +176,10 @@ export function syncPlugin({ root, check = false }) {
     }
     if (problems.length) throw new Error(`${problems.join("\n")}\nRun npm run plugin:sync and commit the result.`);
   } else {
+    for (const { path, content } of outputs) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, content);
+    }
     rmSync(destination, { recursive: true, force: true });
     for (const { path, content, mode } of expected.values()) {
       mkdirSync(dirname(path), { recursive: true });
@@ -138,7 +202,7 @@ if (process.argv[1] && isEntryPoint(process.argv[1])) {
     const args = process.argv.slice(2);
     if (args.some((arg) => arg !== "--check")) throw new Error("Usage: node scripts/plugin-sync.mjs [--check]");
     syncPlugin({ root: resolve(dirname(fileURLToPath(import.meta.url)), ".."), check: args.includes("--check") });
-    console.log(args.includes("--check") ? "Plugin references and versions match." : "Plugin references and versions synchronized.");
+    console.log(args.includes("--check") ? "Plugin references, listing and versions match." : "Plugin references, listing and versions synchronized.");
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

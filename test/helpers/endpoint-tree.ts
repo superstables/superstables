@@ -2,6 +2,7 @@
 // dispatcher and rail scripts. The confirming endpoints of a verdict come from that table (or the owner's settings), never from
 // an environment variable, so a test that needs one or two fake endpoints edits the table in a copy, as a later change to the
 // table would. No production switch is involved.
+import { execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ export interface EndpointTree {
   root: string;
   /** The table rows for these chain keys become these endpoints; a bare URL gets the operator fake-a, fake-b, ... by position. */
   set(table: Record<string, Entry[]>): void;
+  bundle(): string;
   close(): void;
 }
 
@@ -26,10 +28,13 @@ export function scratchDir(prefix: string): string {
 
 export function endpointTree(): EndpointTree {
   const root = scratchDir("ss-endpoint-tree-");
-  for (const dir of ["budget", "src"]) cpSync(join(ROOT, dir), join(root, dir), { recursive: true });
-  for (const file of ["package.json", "tsconfig.json"]) cpSync(join(ROOT, file), join(root, file));
+  for (const dir of ["budget", "src", "scripts"]) cpSync(join(ROOT, dir), join(root, dir), { recursive: true });
+  for (const file of ["package.json", "package-lock.json", "tsconfig.json"]) cpSync(join(ROOT, file), join(root, file));
   symlinkSync(join(ROOT, "node_modules"), join(root, "node_modules"), "dir");
   const original = readFileSync(join(ROOT, "src/core/rpc-endpoints.mjs"), "utf8");
+  let current = original;
+  let built: string | undefined;
+  const outdir = join(root, "dist", "budget");
   return {
     root,
     set(table) {
@@ -44,6 +49,14 @@ export function endpointTree(): EndpointTree {
         text = text.replace(row, `$1[${rows.join(", ")}],\n`);
       }
       writeFileSync(join(root, "src/core/rpc-endpoints.mjs"), text);
+      current = text;
+    },
+    bundle() {
+      if (built !== current) {
+        execFileSync(process.execPath, [join(root, "scripts/budget-build.mjs"), "--outdir", outdir], { cwd: root, stdio: ["ignore", "ignore", "inherit"] });
+        built = current;
+      }
+      return outdir;
     },
     close() {
       rmSync(root, { recursive: true, force: true });

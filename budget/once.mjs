@@ -57,7 +57,7 @@ export const ONCE_NETWORKS = {
 /** The rail and chain flags buy-once accepts: each names one of ONCE_NETWORKS. */
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
-export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.0.0, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
+export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.1.2, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";
 /** How long a wait reads on once a purchase's outcome is unknown (the owner's step is over) before it answers unknown. */
@@ -981,7 +981,7 @@ function wordsOf(view, site = "superstables.com") {
   if (waiting) return waiting;
   const next = accountRefusalNext(view.reason_code);
   if (next) return next;
-  if (view.reason_code === "owner_policy") return `the owner tried to approve and their own limits on ${site} refused it; they can change the limits and approve before the approval link expires`;
+  if (view.reason_code === "owner_policy") return `the account limits on ${site} refused the owner's approval; the payment must fit those limits before the approval link expires`;
   return `waiting for the owner to open the approval link on ${site}, signed in with their wallet, and pick the match code`;
 }
 

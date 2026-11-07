@@ -11,6 +11,47 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Budget commands while the chain makes a transaction final:** `budget wait` on an owner command that landed (`state: "landed"`, or a `setup` with a landed step) now returns `final: false` and `chain_final: false`, and its `next` no longer says there is nothing to do: the owner has nothing more to approve, and the next owner command should start only once the chain has made it final. A new owner command that is refused because an approved transaction is still waiting for the chain now says so in `reason` and `next`, instead of saying the approval waits for the owner.
 
+## [1.1.2] - Removable spend caps and Budgets-first help
+
+Testnet only.
+
+### Upgrade
+
+- **Policy migration:** in a `policy.yaml` that sets any rule, a `caps.per_call` or `caps.per_day` that is missing, `null`, `~` or blank now removes that cap; previously it used the default. Such a file with no `caps` section has no caps. To keep those limits, write them as amounts before upgrading. A missing file, or one that is empty or only comments, keeps the default caps, and `quote`, `doctor` and a policy refusal now say so.
+
+### Changed
+
+- **Spend policy:** `setup` writes the starting limits (0.05 USDC per payment, 1 USDC per UTC day) with a line saying how to change or remove them, and prints them. A policy refusal names the rule that refused (`caps.per_call`, `caps.per_day` or `kill_switch`) and says how to change it.
+- **CLI help:** `superstables --help` now describes Budgets first, then Single purchase on your machine (`pay`) and Single purchase on superstables.com (`budget buy-once`). `owner settings sign` also lists your enabled chains among what your wallet signs. `budget recover` now says stranded funds instead of stranded USDC, since on Robinhood Chain Testnet it returns USDG.
+- **Single purchase on superstables.com:** help and docs now describe owner-approved purchases and optional account limits. New accounts have no limits; where owner controls are shown, the owner can set per-payment and per-day limits up to 1,000 each or leave them unset. Budgets approved on superstables.com go up to 1,000 in the chain's test token, or less where an owner-set limit applies.
+- **Docs and skills:** the plugin descriptions mention Budgets. The skills have the agent show the account wallet line with a budget approval link, and tell chat apps to point owners to Claude Code, Codex or another agent that can run commands. The install page says the Get started prompt installs the plugin in Claude Code and Codex, and the skill zip in other agents that run commands. The budget guide lists Robinhood Chain Testnet among the chains for approval on superstables.com.
+
+## [1.1.1] - Chat-app guidance and single purchase limits
+
+Testnet only.
+
+### Changed
+
+- **Docs and skill text:** Cursor is no longer offered in the README or install guide; use the Get started prompt in other agents that run commands. The README calls the app Claude; its plugin zip remains `superstables-plugin-claude-apps-<version>.zip`.
+- **Chat apps:** the README and install guide now explain how Grok Bot connects through the connector and what it can and can't do. The skill directs chat apps to request purchases through the connector only and show the account's wallet line with every approval link.
+- **Single purchase limits:** docs and skills clarify the limits on superstables.com: 0.05 per payment and 1 per day, counting USDC, USDG and pathUSD token units together across chains. Owners cannot change these limits on the site today. `budget buy-once --help` now lists Robinhood Chain Testnet and USDG.
+
+## [1.1.0] - Plugin installation and budget guidance
+
+Testnet only.
+
+### Changed
+
+- **Plugin zips:** this release attaches one plugin zip per app, each with a `.sha256` file, and the plugin has the same name, description and icon in every app. Installation is checked in Claude Code and Codex. The README gives the installation steps and explains how to replace an older local marketplace.
+- **Budgets through the connector:** the plugin skill now uses available connector tools to find budget services, check listed prices, read status and follow approvals. Setup, grants and budget purchases still need the CLI on your machine; chat apps are instructed to decline those operations. The skills treat the amount you specify as the whole budget and require your agreement before requesting a single purchase after a budget purchase is refused.
+- **Single purchase and approval links:** the plugin skill uses the connector first and shows the account wallet line when the connector returns one with a purchase or budget-request approval link. It follows purchase status in the same turn when the app can show the link before the turn ends; otherwise it waits for you to say you approved. For a purchase on the wrong account, it explains how to reconnect; Codex also needs a new session.
+
+### Fixed
+
+- **Older EVM owner records:** `budget doctor` identifies a stale owner address in the agent key file and gives the setup command to repair it. Rotation stops before retiring the key when that mismatch is found. Setup removes the stale line once the recorded owner is backed by a signature.
+- On Base Sepolia, budget and owner-action messages now say a block usually takes about 20 minutes to become final, and `budget wait` explains that an earlier `unknown` does not establish failure. The finality check is unchanged.
+- `superstables budget doctor` now fails when it finds an owner key file for the selected rail, whatever its permissions, and no longer opens it.
+
 ## [1.0.0] - Agent plugin, seller tools and safer payments
 
 Testnet by default. The mainnet gate is controlled by SUPERSTABLES_ALLOW_MAINNET; leave it unset for now. No mainnet chain is payable in this release, even with the switch enabled.
@@ -207,19 +248,19 @@ money moves.
 
 Installing the Claude Desktop bundle and running `superstables setup`:
 
-![Install](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/0-install.png)
+![Install](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/0-install.png)
 
 Claude Desktop asking permission before the agent uses a tool:
 
-![Tool permissions](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/1-permissions.png)
+![Tool permissions](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/1-permissions.png)
 
 The approval page next to MetaMask's signature request, both showing the same payment:
 
-![Approve in MetaMask](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/2-approve.png)
+![Approve in MetaMask](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/2-approve.png)
 
 The agent returning the service's answer and the transaction link:
 
-![The result](https://raw.githubusercontent.com/superstables/superstables-client/main/docs/images/3-result.png)
+![The result](https://raw.githubusercontent.com/superstables/superstables/main/docs/images/3-result.png)
 
 ### What is supported
 
@@ -291,7 +332,10 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/superstables/superstables/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/superstables/superstables/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/superstables/superstables/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/superstables/superstables/compare/v0.4.1...v1.0.0
 [0.4.0]: https://github.com/superstables/superstables/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/superstables/superstables/compare/v0.3.0...v0.3.1

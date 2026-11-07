@@ -20,42 +20,25 @@
 //   - the access token anywhere but the approval record, mode 600 ("token")
 // First against HostedApprovals and a fake superstables.com, then through the real dispatcher and evm rail scripts with a fake
 // Base Sepolia RPC. No network, no real key.
+// "The property" runs in hosted-adopt-property.test.ts, its own file so its long tests run beside these.
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
+import { pad, toEventSelector } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { HostedAdopted, HostedApprovals, HostedRefusal, HostedSigned, givesUp, type Evidence, type HostedRecord, type SignedRecord, type SignedRequest } from "../../budget/hosted.js";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 import { evmOwner, startFakeRpc, startFakeSite, submitSigned, type FakeSite } from "../helpers/fake-site.js";
-import { SITE_WORDS, walletEvidence } from "../../budget/site.mjs";
+import { walletEvidence } from "../../budget/site.mjs";
 import type { TestServer } from "../helpers/servers.js";
 
-const KEY = `0x${"11".repeat(32)}` as const;
-const OTHER_KEY = `0x${"44".repeat(32)}` as const;
-const AGENT = privateKeyToAccount(KEY).address;
-const OWNER = evmOwner("22");
-const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
-const GRANT_HASH = `0x${"b2".repeat(32)}`;
-const FUND_HASH = `0x${"a1".repeat(32)}`;
-const FUND_VALUE = 100_000_000_000_000n;
-const TERMS = { title: "Grant a spending budget", summary: "test", rows: [], enforced: [], notEnforced: [], notes: [] };
-const erc20 = parseAbi(["function approve(address spender, uint256 value) returns (bool)"]);
-const approveData = (agent: string, value: bigint) => encodeFunctionData({ abi: erc20, functionName: "approve", args: [agent as `0x${string}`, value] });
-const grantTx = (agent: string, cap: bigint) => ({ to: USDC, data: approveData(agent, cap), value: "0x0" });
-const NONE: Evidence = { walletAsked: false, hashes: [] };
-const isEvmTx = (h: unknown) => typeof h === "string" && /^0x[0-9a-fA-F]{64}$/.test(h);
-/** The reason codes the site sets only before it asks the wallet (hosted.ts NEVER_SIGNED_CODES), and every other code it documents. */
-const NEVER_SIGNED_CODES = ["owner_rejected", "not_requested", "match_code_mismatch", "approval_expired", "agent_cancelled", "agent_removed", "cap_above_limit", "owner_frozen", "earlier_step", "link_not_done", "another_open"];
-const OTHER_CODES = [...SITE_WORDS.code].filter((c) => !NEVER_SIGNED_CODES.includes(c));
-/** The reasons the site gives a request or step it closed after the wallet was handed the transaction, or may have been (flow.ts REASONS), and partly_done. */
-const AFTER_HANDOFF_CODES = ["reverted", "mismatch", "no_start_block", "stale_tx", "not_found", "wallet_timeout", "owner_stopped", "page_stopped_before_send", "not_signed", "not_landed", "network_refused", "partly_done"];
-const PROOF_HEADERS = ["superstables-agent", "superstables-agent-nonce", "superstables-agent-signature", "superstables-agent-timestamp"];
+import { KEY, OTHER_KEY, AGENT, OWNER, USDC, GRANT_HASH, FUND_HASH, FUND_VALUE, TERMS, approveData, grantTx, NONE, isEvmTx, NEVER_SIGNED_CODES, OTHER_CODES, PROOF_HEADERS } from "../helpers/hosted-adopt-fixtures.js";
 
 let site: FakeSite;
+const OTHER_OWNER = evmOwner("55");
 
 describe("signed here, adopted by id (HostedApprovals)", () => {
   /** Every request a client sends that is not to the fake site's reads: none may leave a --sign-only client. */
@@ -522,311 +505,6 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
   // chain, and evidence an answer showed is never lost. Each answer shape below alone, in every order after another, and in every
   // order after a renewal that recorded the wallet asked, through the real record: approvals.mjs mergeEvidence (every answer),
   // adoptSigned, and dropUnsettled with the dispatcher's own condition for freeing the chain.
-  describe("the property", () => {
-    let approvals: typeof import("../../budget/approvals.mjs");
-    let propertyHome: string;
-    beforeAll(async () => {
-      propertyHome = mkdtempSync(join(tmpdir(), "ss-budget-adopt-property-"));
-      process.env.SUPERSTABLES_HOME = propertyHome;
-      approvals = await import("../../budget/approvals.mjs");
-      expect(approvals.logFile("oa-x")).toContain(propertyHome);
-    });
-    afterAll(() => {
-      delete process.env.SUPERSTABLES_HOME;
-      rmSync(propertyHome, { recursive: true, force: true });
-    });
-
-    type Answer = { status: number; body: unknown };
-    /**
-     * One adoption's answers: the token renewal's and the read's (the site's own when absent), or, with `wire`, what the network
-     * gives this machine for one of them instead (a body that is not JSON, cut off, or no answer). `unread`: that answer cannot be
-     * read whole, so it leaves the record's mayHaveSent mark.
-     */
-    type Shape = { name: string; renew?: (r: { id: string; token: string }) => Answer; read?: (v: any) => Answer; wire?: { at: "renew" | "read"; answer: () => Promise<Response> }; frees?: true; asked?: true; hash?: string; adopts?: true; unread?: true };
-    const exact = (status: 403 | 404) => ({ status, body: { error: { code: status === 403 ? "not_your_request" : "not_found", message: "words", money_moved: false, retryable: false, doc_url: "https://superstables.com/docs/budgets.md", request_id: "req_abcdefABCDEF0123" } } });
-    const otherAmount = (v: any) => ({ ...v, transaction: grantTx(AGENT, 20000n) });
-    const read = (change: (v: any) => unknown) => (v: any) => ({ status: 200, body: change(v) });
-    const noState = (v: any) => { const { state: _drop, ...rest } = v; return rest; };
-    /** A final read as the site sends it when the owner's wallet was never asked. */
-    const never = (state: string, reason_code: string | null) => ({ state, final: true, wallet_asked: false, tx_hash: null, reason_code });
-    const askedRenewal = (r: { id: string; token: string }) => ({ status: 200, body: { id: r.id, access_token: r.token, wallet_asked: true, money_moved: "unknown" } });
-    /** Sol's round 6 repros: a transaction only next_action names, on a read with other terms, a failed read, and a read about another request. */
-    const SOL: Shape[] = [
-      { name: "Sol's repro: read with another amount, its transaction only in next_action.tx_hash", read: read((v) => ({ ...otherAmount(v), next_action: { type: "verify_on_chain", tx_hash: GRANT_HASH } })), asked: true, hash: GRANT_HASH },
-      { name: "Sol's repro: read 503, its transaction only in error.next_action.tx_hashes", read: () => ({ status: 503, body: { error: { code: "chain_unavailable", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } } } }), asked: true, hash: GRANT_HASH },
-      { name: "Sol's repro: read about another request, its transaction only in next_action.tx_hashes", read: read((v) => ({ ...v, id: "ba_different0002", next_action: { type: "verify_on_chain", tx_hashes: [GRANT_HASH] } })), asked: true, hash: GRANT_HASH },
-    ];
-    /** Answers this machine cannot read whole, as the network delivers them: each is no answer to judge, and leaves the mark. */
-    const BIG = "x".repeat(1_100_000);
-    const broken = (start: string, error: unknown) => () => Promise.resolve(new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(start)); c.error(error); } }), { status: 200, headers: { "content-type": "application/json" } }));
-    const reset = () => Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
-    const timedOut = () => new DOMException("The operation was aborted due to timeout", "TimeoutError");
-    const evidenceStart = `{"wallet_asked":true,"tx_hash":"${GRANT_HASH}","state":"sent"`;
-    const UNREADABLE = (["renew", "read"] as const).flatMap((at): Shape[] => {
-      const what = at === "renew" ? "renewal" : "read";
-      return [
-        { name: `${what} that is not JSON`, wire: { at, answer: () => Promise.resolve(new Response("<html>502 Bad Gateway</html>", { status: 502, headers: { "content-type": "text/html" } })) } },
-        { name: `${what} 200 with an empty body`, wire: { at, answer: () => Promise.resolve(new Response("", { status: 200 })) } },
-        { name: `${what} 404 with an empty body`, wire: { at, answer: () => Promise.resolve(new Response(null, { status: 404 })) } },
-        { name: `${what} 403 whose body is not JSON`, wire: { at, answer: () => Promise.resolve(new Response("not_your_request", { status: 403 })) } },
-        { name: `${what} cut off by a reset, after it showed the wallet asked`, wire: { at, answer: broken(evidenceStart, reset()) } },
-        { name: `${what} cut off by a timeout, after it showed the wallet asked`, wire: { at, answer: broken(evidenceStart, timedOut()) } },
-        { name: `${what}: connection reset before any answer`, wire: { at, answer: () => Promise.reject(reset()) } },
-        { name: `${what}: timeout before any answer`, wire: { at, answer: () => Promise.reject(timedOut()) } },
-        at === "renew"
-          ? { name: "renewal 200 with a token, longer than the cap", renew: (r) => ({ status: 200, body: { id: r.id, access_token: r.token, reason: BIG } }) }
-          : { name: "read with the signed terms, longer than the cap", read: read((v) => ({ ...v, reason: BIG })) },
-      ];
-    }).map((x) => ({ ...x, unread: true as const }));
-    /** Sol's round 7 repros: a read or renewal, 200 or 503, that shows the wallet asked and a transaction, then runs past the cap. */
-    const SOL7: Shape[] = [
-      { name: "Sol's repro: read 200 with the wallet asked and a transaction, longer than the cap", read: read((v) => ({ ...v, wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG })) },
-      { name: "Sol's repro: read 503 with the wallet asked and a transaction, longer than the cap", read: () => ({ status: 503, body: { error: { wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } } }) },
-      { name: "Sol's repro: renewal 200 with the wallet asked and a transaction, longer than the cap", renew: (r: { id: string; token: string }) => ({ status: 200, body: { id: r.id, access_token: r.token, wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } }) },
-      { name: "Sol's repro: renewal 503 with the wallet asked and a transaction, longer than the cap", renew: () => ({ status: 503, body: { error: { wallet_asked: true, tx_hash: GRANT_HASH, reason: BIG } } }) },
-    ].map((x) => ({ ...x, unread: true as const }));
-    const SHAPES: Shape[] = [
-      { name: "renewal 200 and the signed terms", adopts: true },
-      { name: "renewal 200 with the wallet asked, and the signed terms", renew: askedRenewal, asked: true, adopts: true },
-      { name: "renewal 200 with a transaction, and the signed terms", renew: (r) => ({ status: 200, body: { id: r.id, access_token: r.token, tx_hash: GRANT_HASH } }), asked: true, hash: GRANT_HASH, adopts: true },
-      { name: "Sol's repro: renewal 200 with the wallet asked, then a read with another amount", renew: askedRenewal, read: read(otherAmount), asked: true },
-      { name: "renewal 200 without a token", renew: (r) => ({ status: 200, body: { id: r.id } }) },
-      { name: "renewal 403 not_your_request, exact", renew: () => exact(403), frees: true },
-      { name: "renewal 404 not_found, exact", renew: () => exact(404), frees: true },
-      { name: "renewal 403 naming another request", renew: () => ({ status: 403, body: { error: { ...exact(403).body.error, id: "ba_different0002" } } }) },
-      { name: "renewal 404 naming another request in its words", renew: () => ({ status: 404, body: { error: { ...exact(404).body.error, message: "ba_different0002 is not here" } } }) },
-      { name: "renewal 403 with money_moved", renew: () => ({ status: 403, body: { error: { ...exact(403).body.error, money_moved: "unknown" } } }), asked: true },
-      { name: "renewal 404 with the wallet asked", renew: () => ({ status: 404, body: { error: { code: "not_found", wallet_asked: true } } }), asked: true },
-      { name: "renewal 403, malformed", renew: () => ({ status: 403, body: { code: "not_your_request" } }) },
-      { name: "renewal 404, plain text", renew: () => ({ status: 404, body: "not found" }) },
-      { name: "renewal 404 with the other refusal's code", renew: () => ({ status: 404, body: { error: { code: "not_your_request" } } }) },
-      { name: "renewal 401", renew: () => ({ status: 401, body: { error: { code: "agent_proof" } } }) },
-      { name: "renewal 429 with money_moved", renew: () => ({ status: 429, body: { error: { code: "rate_limited", money_moved: "unknown" } } }), asked: true },
-      { name: "renewal 503", renew: () => ({ status: 503, body: { error: { code: "unavailable" } } }) },
-      { name: "renewal 403 not_your_request, cut off", renew: () => ({ status: 403, body: { error: { ...exact(403).body.error, message: BIG } } }), unread: true },
-      { name: "renewal times out", wire: { at: "renew", answer: () => Promise.reject(timedOut()) }, unread: true },
-      { name: "read with another amount", read: read(otherAmount) },
-      { name: "read with another amount, final as expired, wallet never asked", read: read((v) => ({ ...otherAmount(v), ...never("expired", "approval_expired") })), frees: true },
-      { name: "read with another amount, final as rejected, wallet never asked", read: read((v) => ({ ...otherAmount(v), ...never("rejected", "owner_rejected") })), frees: true },
-      { name: "read with another amount, final as cancelled, wallet never asked", read: read((v) => ({ ...otherAmount(v), ...never("cancelled", "agent_cancelled") })), frees: true },
-      { name: "read with the signed terms, final as expired, wallet never asked", read: read((v) => ({ ...v, ...never("expired", "approval_expired") })), adopts: true },
-      { name: "read with another amount, expired, not final", read: read((v) => ({ ...otherAmount(v), ...never("expired", "approval_expired"), final: false })) },
-      { name: "read with another amount, expired and final, wallet_asked absent", read: read((v) => ({ ...otherAmount(v), state: "expired", final: true })) },
-      { name: "read with another amount, cancelled and final, wallet_asked absent", read: read((v) => ({ ...otherAmount(v), state: "cancelled", final: true })) },
-      { name: "read with another amount, final as expired, the wallet asked", read: read((v) => ({ ...otherAmount(v), ...never("expired", "approval_expired"), wallet_asked: true })), asked: true },
-      { name: "read with another amount, final as rejected, with a transaction", read: read((v) => ({ ...otherAmount(v), ...never("rejected", "owner_rejected"), tx_hash: GRANT_HASH })), asked: true, hash: GRANT_HASH },
-      { name: "read with another amount, final as cancelled, money_moved", read: read((v) => ({ ...otherAmount(v), ...never("cancelled", "agent_cancelled"), money_moved: "unknown" })), asked: true },
-      { name: "read with another amount, final as expired, an undocumented reason", read: read((v) => ({ ...otherAmount(v), ...never("expired", "garbled") })) },
-      { name: "read with another amount, final and confirmed", read: read((v) => ({ ...otherAmount(v), ...never("confirmed", null) })), asked: true },
-      { name: "read with another amount, final and failed", read: read((v) => ({ ...otherAmount(v), ...never("failed", "reverted") })), asked: true },
-      { name: "read with another amount, final and linked", read: read((v) => ({ ...otherAmount(v), ...never("linked", null) })) },
-      { name: "read with another amount, final with a garbled state", read: read((v) => ({ ...otherAmount(v), ...never("garbled", null) })) },
-      { name: "Sol's repro: read with a garbled state and another amount", read: read((v) => ({ ...otherAmount(v), state: "garbled" })) },
-      { name: "read with a garbled state and the signed terms", read: read((v) => ({ ...v, state: "garbled" })), adopts: true },
-      { name: "read with no state", read: read(noState) },
-      { name: "read with no state and another amount", read: read((v) => noState(otherAmount(v))) },
-      { name: "read with the unknown state and the signed terms", read: read((v) => ({ ...v, state: "unknown" })), asked: true, adopts: true },
-      { name: "read with the unknown state and another amount", read: read((v) => ({ ...otherAmount(v), state: "unknown" })), asked: true },
-      { name: "read with another amount and a transaction", read: read((v) => ({ ...otherAmount(v), state: "confirmed", wallet_asked: true, tx_hash: GRANT_HASH })), asked: true, hash: GRANT_HASH },
-      { name: "read 404 not_found, exact", read: () => exact(404) },
-      { name: "read 403 not_your_request, exact", read: () => exact(403) },
-      { name: "read 503 with money_moved", read: () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } }), asked: true },
-      { name: "read cut off", read: read((v) => ({ ...v, reason: BIG })), unread: true },
-      { name: "read times out", wire: { at: "read", answer: () => Promise.reject(timedOut()) }, unread: true },
-      ...SOL,
-      ...UNREADABLE,
-      ...SOL7,
-    ];
-    /** Every answer that gives the request up while the record holds no evidence. */
-    const EXITS = SHAPES.filter((x) => x.frees);
-    /** A renewal that recorded the wallet asked, and a read that failed: the request is kept, with evidence. */
-    const EVIDENCE: Shape = { name: "renewal 200 with the wallet asked, read 503", renew: askedRenewal, read: () => ({ status: 503, body: { error: { code: "unavailable" } } }), asked: true };
-
-    let n = 0;
-    /** One signed approval through `shapes`, one adoption each, as `wait --site-request` and every later wait run them. */
-    async function through(shapes: Shape[], signed: SignedRecord, given: Given) {
-      const id = `oa-20261028000000-${(++n).toString(16).padStart(8, "0")}`;
-      const nonce = signed.signed.nonce;
-      approvals.startSigning({ id, command: "grant", rail: "evm", chain: "base-sepolia", workerArgs: [], timeoutS: 60 });
-      approvals.recordSigned(id, signed);
-      // the dispatcher keeps the request before the check starts
-      approvals.mergeEvidence(id, nonce, given);
-      let before = { walletAsked: false, hashes: [] as string[], mayHaveSent: false };
-      for (const [i, shape] of shapes.entries()) {
-        const what = shapes.slice(0, i + 1).map((x) => x.name).join(" → ");
-        site.renewAnswer = shape.renew;
-        site.readAnswer = shape.read && ((_r, v) => shape.read!(v));
-        const wire = (input: RequestInfo | URL, init?: RequestInit) => {
-          const url = String(input);
-          const hit = shape.wire?.at === "renew" ? url.endsWith("/token") : shape.wire?.at === "read" && /\/requests\/[^/]+\?wait=/.test(url);
-          return hit ? shape.wire!.answer() : fetch(input, init);
-        };
-        const c = new HostedApprovals({
-          site: site.url, rail: "evm", chain: "base-sepolia", agentKey: KEY, fetchImpl: wire as typeof fetch,
-          adopt: {
-            signed: approvals.readApproval(id).hosted, ...given,
-            onAdopt: (r, shown) => approvals.adoptSigned(id, nonce, r, { ...shown, action: "grant", terms: TERMS }),
-            onEvidence: (e) => approvals.mergeEvidence(id, nonce, e),
-          },
-        });
-        const err = await grant(AGENT, 10000n)(c).catch((e) => e);
-        // the dispatcher frees the chain only on this
-        const freed = err instanceof HostedRefusal && err.notAdopted && approvals.dropUnsettled(id, nonce, given.requestId);
-        const now = approvals.readApproval(id).hosted;
-        // a give-up only on a clean history: every answer so far read whole, none with evidence
-        expect(freed, what).toBe(shape.frees === true && !before.walletAsked && !before.mayHaveSent);
-        expect(now.signed.walletAsked === true, what).toBe(before.walletAsked || shape.asked === true);
-        expect(now.signed.hashes ?? [], what).toEqual([...new Set([...before.hashes, ...(shape.hash ? [shape.hash] : [])])]);
-        expect(now.signed.mayHaveSent === true, what).toBe(before.mayHaveSent || shape.unread === true);
-        before = { walletAsked: now.signed.walletAsked === true, hashes: now.signed.hashes ?? [], mayHaveSent: now.signed.mayHaveSent === true };
-        if (freed) {
-          expect(now.signed.submitted, what).toBeUndefined();
-          return now;
-        }
-        if (shape.adopts) {
-          expect(err, what).toBeInstanceOf(HostedAdopted);
-          expect(now, what).toMatchObject({ requestId: given.requestId, token: expect.any(String) });
-          return now;
-        }
-        expect(err, what).toBeInstanceOf(HostedRefusal);
-        expect((err as HostedRefusal).sending, what).toBe(true);
-        expect(now.signed.submitted, what).toEqual(given);
-        // with evidence or the mark, nothing drops it, whatever the check said
-        if (before.walletAsked || before.mayHaveSent) expect(approvals.dropUnsettled(id, nonce, given.requestId), what).toBe(false);
-      }
-      return approvals.readApproval(id).hosted;
-    }
-
-    it("frees the chain only on givesUp's answers with no recorded evidence, and never loses evidence: each answer alone, then in every order", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      const kept = SHAPES.filter((x) => !x.adopts && !x.frees);
-      for (const a of SHAPES) await through([a], record, given);
-      for (const a of kept) for (const b of SHAPES) await through([a, b], record, given);
-      expect(site.requests).toHaveLength(1);
-      expect(site.requests[0].cancels).toBe(0);
-    }, 600_000);
-
-    it("after a renewal that recorded the wallet asked, no answer in any order frees the chain or loses the evidence", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      const kept = SHAPES.filter((x) => !x.adopts && !x.frees);
-      for (const a of SHAPES) await through([EVIDENCE, a], record, given);
-      for (const a of kept) for (const b of SHAPES) await through([EVIDENCE, a, b], record, given);
-      expect(site.requests[0].cancels).toBe(0);
-    }, 600_000);
-
-    it("Sol's round 6 repros: a transaction next_action names, on any read, is kept, and no exit after it frees the chain", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      for (const sol of SOL) {
-        for (const exit of EXITS) {
-          const now = await through([sol, exit], record, given);
-          expect(now.signed, `${sol.name} → ${exit.name}`).toMatchObject({ walletAsked: true, hashes: [GRANT_HASH], submitted: given });
-        }
-      }
-    }, 600_000);
-
-    it("Sol's round 7 repros: a read or renewal, 200 or 503, with wallet evidence past the cap leaves the mark, and no exit after it frees the chain", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      for (const sol of SOL7) {
-        for (const exit of EXITS) {
-          const now = await through([sol, exit], record, given);
-          expect(now.signed, `${sol.name} → ${exit.name}`).toMatchObject({ mayHaveSent: true, submitted: given });
-        }
-      }
-      expect(site.requests[0].cancels).toBe(0);
-    }, 600_000);
-
-    it("every kind of answer this machine cannot read whole leaves the mark, at the renewal and at the read, and no exit after it frees the chain", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      for (const u of UNREADABLE) {
-        for (const shapes of [[u], ...EXITS.map((exit) => [u, exit]), ...EXITS.map((exit) => [EVIDENCE, u, exit])]) {
-          const now = await through(shapes, record, given);
-          expect(now.signed, shapes.map((x) => x.name).join(" → ")).toMatchObject({ mayHaveSent: true, submitted: given });
-        }
-      }
-      expect(site.requests[0].cancels).toBe(0);
-    }, 600_000);
-
-    it("controls: after answers each read whole with no evidence, every exit still frees the chain", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      const clean = SHAPES.filter((x) => !x.adopts && !x.frees && !x.asked && !x.unread);
-      expect(clean.length).toBeGreaterThan(10);
-      for (const exit of EXITS) {
-        expect((await through([exit], record, given)).signed.submitted, exit.name).toBeUndefined();
-        for (const a of clean) expect((await through([a, exit], record, given)).signed, `${a.name} → ${exit.name}`).not.toHaveProperty("submitted");
-      }
-    }, 600_000);
-
-    // Every place walletEvidence reads a transaction from: the answer, its error, a step of either; in tx_hash, tx_hashes, and
-    // next_action's tx_hash and tx_hashes (next_action of type none, so the hash alone is the evidence).
-    const SPOT = `0x${"c3".repeat(32)}`;
-    const FIELDS = ["tx_hash", "tx_hashes", "next_action.tx_hash", "next_action.tx_hashes"] as const;
-    const put = (o: any, field: (typeof FIELDS)[number]) =>
-      field === "tx_hash" ? { ...o, tx_hash: SPOT } : field === "tx_hashes" ? { ...o, tx_hashes: [SPOT] } : { ...o, next_action: field === "next_action.tx_hash" ? { type: "none", tx_hash: SPOT } : { type: "none", tx_hashes: [SPOT] } };
-    const quiet = { index: 0, kind: "grant", state: "skipped", tx_hash: null, wallet_asked: false, reason_code: "link_not_done" };
-    const PLACES: [string, (b: any) => any][] = FIELDS.flatMap((f): [string, (b: any) => any][] => [
-      [`the answer's ${f}`, (b) => put(b, f)],
-      [`the error's ${f}`, (b) => ({ ...b, error: put(b.error ?? { code: "unavailable" }, f) })],
-      [`a step's ${f}`, (b) => ({ ...b, steps: [put(quiet, f)] })],
-      [`a step of the error's ${f}`, (b) => ({ ...b, error: { ...(b.error ?? { code: "unavailable" }), steps: [put(quiet, f)] } })],
-    ]);
-    /** Answers that are not judged (no token, a failure, other terms, another request), and each exit, carrying the transaction. */
-    const carriers = (place: (b: any) => any): Shape[] => ([
-      { name: "renewal 200 without a token", renew: (r: { id: string }) => ({ status: 200, body: place({ id: r.id }) }) },
-      { name: "renewal 503", renew: () => ({ status: 503, body: place({ error: { code: "unavailable" } }) }) },
-      { name: "read with another amount", read: read((v) => place(otherAmount(v))) },
-      { name: "read 503", read: () => ({ status: 503, body: place({ error: { code: "chain_unavailable" } }) }) },
-      { name: "read about another request", read: read((v) => place({ ...v, id: "ba_different0002" })) },
-      ...EXITS.map((exit): Shape => ({
-        name: `${exit.name}, carrying it`,
-        ...(exit.renew ? { renew: (r: { id: string; token: string }) => { const x = exit.renew!(r); return { ...x, body: place(x.body) }; } } : {}),
-        ...(exit.read ? { read: (v: any) => { const x = exit.read!(v); return { ...x, body: place(x.body) }; } } : {}),
-      })),
-    ] as Shape[]).map((x) => ({ ...x, asked: true, hash: SPOT }));
-
-    it("a transaction anywhere walletEvidence reads is kept, and blocks every exit, in the answer that carries it and after it", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      for (const [where, place] of PLACES) {
-        for (const carrier of carriers(place)) {
-          const what = `${carrier.name}, in ${where}`;
-          const sequences = carrier.name.endsWith("carrying it") ? [[carrier]] : [[carrier], ...EXITS.map((exit) => [carrier, exit])];
-          for (const shapes of sequences) {
-            const now = await through(shapes.map((x) => ({ ...x, name: x === carrier ? what : x.name })), record, given);
-            expect(now.signed, what).toMatchObject({ walletAsked: true, hashes: [SPOT], submitted: given });
-          }
-        }
-      }
-    }, 600_000);
-
-    it("a final read whose reason code the site sets after the wallet may have been asked never gives the request up", async () => {
-      const { request, record } = await sign(KEY, grant(AGENT, 10000n));
-      const given = await submit(request);
-      for (const code of [...AFTER_HANDOFF_CODES, null]) {
-        for (const state of ["expired", "rejected", "cancelled"]) {
-          const now = await through([{ name: `read with another amount, final as ${state}, wallet never asked, reason ${code}`, read: read((v) => ({ ...otherAmount(v), ...never(state, code) })) }], record, given);
-          expect(now.signed.submitted).toEqual(given);
-        }
-      }
-    }, 600_000);
-
-    it("controls: with nothing given, no answer is asked for, nothing is kept and the chain is not held", async () => {
-      const { record } = await sign(KEY, grant(AGENT, 10000n));
-      const id = "oa-20261028000000-ffffffff";
-      approvals.startSigning({ id, command: "grant", rail: "evm", chain: "base-sepolia", workerArgs: [], timeoutS: 60 });
-      approvals.recordSigned(id, record);
-      const signed = approvals.readApproval(id);
-      expect(approvals.awaitingAdoption(signed)).toBe(true);
-      expect(approvals.unsettledRequest(signed)).toBeNull();
-      expect(approvals.walletWasAsked(signed)).toBe(false);
-      expect(site.posts).toEqual([]);
-    });
-  });
 });
 
 // ── through the dispatcher ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -834,6 +512,7 @@ describe("signed here, adopted by id (HostedApprovals)", () => {
 let home: string;
 let rpc: TestServer | undefined;
 let tree: EndpointTree;
+let sourceRail = false;
 const chain = { approved: false };
 /** Every call the fake chain answered, in order. */
 const rpcCalls: { method: string; params: any[] }[] = [];
@@ -846,7 +525,7 @@ function start(args: string[], extraEnv: Record<string, string> = {}, terminal?:
   for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
   tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }] });
   const preload = terminal === undefined ? [] : ["--import", fileURLToPath(new URL("../helpers/budget-owner-terminal.mjs", import.meta.url))];
-  const child = spawn(process.execPath, [...preload, resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+  const child = spawn(process.execPath, [...preload, resolve(sourceRail ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env });
   if (terminal !== undefined) child.stdin!.end(terminal);
   const done = new Promise<Run>((ok, fail) => {
     let stdout = "";
@@ -1048,7 +727,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
       const env: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: arc.url };
       for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME", "SUPERSTABLES_BUDGET_SIGN_ONLY", "SUPERSTABLES_BUDGET_ADOPT"]) delete env[k];
       const out = await new Promise<{ code: number; stderr: string }>((ok) => {
-        const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...grantArgs, "--chain", "arc-testnet", "--sign-only"], { cwd: tree.root, env });
+        const child = spawn(process.execPath, [resolve(sourceRail ? join(tree.root, "budget") : tree.bundle(), "cli.mjs"), ...grantArgs, "--chain", "arc-testnet", "--sign-only"], { cwd: tree.root, env });
         let stderr = "";
         child.stderr!.on("data", (c) => (stderr += String(c)));
         child.once("close", (code) => ok({ code: code ?? 0, stderr }));
@@ -1107,6 +786,32 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     // token: never in any output, log or file but the approval record
     const tokens = [r.token, ...Array.from({ length: r.renewals ?? 0 }, (_, i) => `ssbt_test_${r.id}renewed${i + 1}`)];
     for (const text of [...outputs, ...filesOutsideRecords()]) for (const t of tokens) expect(text).not.toContain(t);
+  }, 300_000);
+
+  it("setup --hosted --sign-only, adopted: a stale B4_OWNER_ADDRESS line in the agent key file is gone once the owner's proof is recorded", async () => {
+    onRecord(false);
+    const agentPath = join(home, "keys", "budget", "evm-agent.env");
+    const kept = `B4_AGENT_KEY=${KEY}\nB4_AGENT_ADDRESS=${AGENT}\n# kept\nB4_LABEL=mine\n`;
+    writeFileSync(agentPath, `B4_AGENT_KEY=${KEY}\nB4_AGENT_ADDRESS=${AGENT}\nB4_OWNER_ADDRESS=${OTHER_OWNER}\n# kept\nB4_LABEL=mine\n`, { mode: 0o600 });
+    const signed = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--sign-only"]);
+    expect(signed.code, signed.stderr).toBe(0);
+    const id = signed.result.id;
+    const v = await connector(signed.result.request);
+    const adopted = await budget(adoptArgs(id, v));
+    expect(adopted.code, adopted.stderr).toBe(0);
+    expect(readFileSync(agentPath, "utf8")).toContain(`B4_OWNER_ADDRESS=${OTHER_OWNER}`);
+    const r = site.requests[0];
+    Object.assign(r, { state: "linked", owner: OWNER });
+    Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
+    Object.assign(r.steps![1], { state: "confirmed", tx_hash: GRANT_HASH, wallet_asked: true });
+    chain.approved = true;
+    const done = await budget(["wait", "--shown", "--id", id, "--timeout", "120"]);
+    expect(done.code, done.stderr).toBe(0);
+    expect(done.result).toMatchObject({ command: "setup", state: "ok", owner: OWNER });
+    expect(readFileSync(agentPath, "utf8")).toBe(kept);
+    expect(statSync(agentPath).mode & 0o777).toBe(0o600);
+    expect(lines("B4_OWNER_ADDRESS")).toBe(1);
+    expect(publicFile()).toContain(`B4_OWNER_ADDRESS=${OWNER}`);
   }, 300_000);
 
   it("a link whose read garbles the owner, the owner proof version or a step does not match what was signed: unknown, the request kept and the chain held", async () => {
@@ -1498,8 +1203,8 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     {
       path: "the check crashes after the request was kept",
       fault: () => ({
-        on: () => { script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
-        off: () => writeFileSync(railScript(), script),
+        on: () => { sourceRail = true; script = readFileSync(railScript(), "utf8"); writeFileSync(railScript(), `throw new Error("injected crash after the write-ahead");\n${script}`); },
+        off: () => { writeFileSync(railScript(), script); sourceRail = false; },
         local: /injected crash after the write-ahead/,
       }),
     },

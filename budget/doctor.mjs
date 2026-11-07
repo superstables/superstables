@@ -1,15 +1,15 @@
 // superstables budget doctor: key files, the public file, the RPC and balances for one rail. Reads files and the chain,
 // sends nothing, signs nothing, and never prints a secret (variable names and public addresses only).
 // No rail has an owner key file: the owner approves in their own wallet, so doctor checks the agent file, the public file
-// (the owner's address), the RPC and balances. An owner key file on this machine is only noted: nothing reads it unless a
-// test passes --owner-key-file.
+// (the owner's address), the RPC and balances. An owner key file on this machine fails the check, from its metadata alone:
+// doctor never opens it, and nothing else reads it unless a test passes --owner-key-file.
 // Minimum balances are what one grant, a few purchases and a revoke need on each chain. On evm the gas minimums grow with
 // the chain's current fee: the agent needs DOCTOR_SPIKE times what one purchase and the cleanup a failure would need (pull,
 // cancel, return) cost now, the owner DOCTOR_SPIKE times a grant, a revoke and a fund-agent (the gas limits in evm/chains.mjs).
 // The agent also needs the chain's fixed minimum: it buys alone, and a fee spike between doctor and a purchase (Amoy) would
 // stop it with nobody there. The owner's fixed minimum applies only when the fee cannot be read: the owner approves in a
 // wallet that shows the fee and refuses what it cannot pay, and on a cheap testnet that minimum is many times the real cost.
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ownerKeyFile, privateDirProblem, publicFile } from "./paths.mjs";
 import { readAgentSecret } from "./os-keychain.mjs";
@@ -17,6 +17,7 @@ import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
+import { staleOwnerLine } from "./evm-owner-line.mjs";
 import { TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
@@ -72,6 +73,11 @@ const RAILS = {
       setup: `superstables budget setup --rail evm${flag}`, newOwner: `superstables budget setup --rail evm${flag} --new-owner`,
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
+      allowance: async (owner, agent) => {
+        const word = (a) => a.slice(2).toLowerCase().padStart(64, "0");
+        const raw = BigInt(await rpc(c.rpc, "eth_call", [{ to: tok.address, data: `0xdd62ed3e${word(owner)}${word(agent)}` }, "latest"]));
+        return { amount: Number(raw) / 10 ** tok.decimals, token: tok.symbol, label: c.label };
+      },
       balances: async (owner, agent) => {
         // what the gas costs at the current fee (null when the fee cannot be read: then only the fixed minimums apply)
         const fee = await evmFeeCap(c.rpc).catch(() => null);
@@ -167,6 +173,26 @@ export async function publicKeyNames(pub, { keyAddress, caseSensitive, addresses
 const mode = (path) => (statSync(path).mode & 0o777).toString(8);
 
 /**
+ * What doctor says about a file at the old owner key path, or null when there is none. It comes from lstat alone: the file is
+ * never opened, because the agent that runs doctor must not hold the owner's key, not even for a moment.
+ */
+function ownerKeyFileProblem(path) {
+  let st;
+  try {
+    st = lstatSync(path);
+  } catch (err) {
+    return err.code === "ENOENT" || err.code === "ENOTDIR" ? null : `could not be checked (${err.code}). Do not open it. Stop and tell the owner.`;
+  }
+  const facts = [
+    st.isFile() ? `mode ${(st.mode & 0o777).toString(8)}` : st.isSymbolicLink() ? "a symbolic link" : "not a regular file",
+    st.isFile() && `${st.size} bytes`,
+    `changed ${st.mtime.toISOString().slice(0, 10)}`,
+    st.isFile() && (st.mode & 0o044) !== 0 && "other users on this machine can read it",
+  ].filter(Boolean).join(", ");
+  return `${facts}. An owner key file does not belong on an agent's machine. Do not open it. Stop and tell the owner.`;
+}
+
+/**
  * The setup command that replaces the recorded owner. On a hosted chain (APPROVALS=hosted in the public file) it names
  * --hosted and the recorded site: without them, setup would move the chain's approvals to the page on this computer.
  */
@@ -184,15 +210,11 @@ export async function runDoctor(f) {
   const line = (ok, what, detail) => { if (!ok) failed++; process.stderr.write(`  ${ok ? "ok  " : "FAIL"}  ${what}${detail ? `: ${detail}` : ""}\n`); };
   process.stderr.write(`\nsuperstables budget doctor: ${f.rail} (${f.chain})\n`);
 
-  const owner = readEnv(ownerKeyFile(f.rail), "the owner key file"), agent = readEnv(agentKeyFile(f.rail), "the agent key file"), pub = readEnv(r.pub, "the public file");
+  const agent = readEnv(agentKeyFile(f.rail), "the agent key file"), pub = readEnv(r.pub, "the public file");
   if (unsafe.has(r.pub)) line(false, `public file ${r.pub}`, unsafe.get(r.pub));
   const files = [["agent key file", agentKeyFile(f.rail), agent, r.agentVars]];
-  if (r.ownerVars) files.unshift(["owner key file", ownerKeyFile(f.rail), owner, r.ownerVars]);
-  else if (existsSync(ownerKeyFile(f.rail))) {
-    const path = ownerKeyFile(f.rail);
-    if ((statSync(path).mode & 0o077) !== 0) line(false, `owner key file ${path}`, `mode is ${mode(path)}: other users on this machine can read it. Nothing reads it unless you pass --owner-key-file; delete it, or chmod 600 ${path}`);
-    process.stderr.write(`  note  an owner key file is on this machine (${ownerKeyFile(f.rail)}). The ${f.rail} rail never reads it unless you pass --owner-key-file: the owner approves in their own wallet. Keep owner keys off the agent's machine.\n`);
-  }
+  const ownerFileProblem = ownerKeyFileProblem(ownerKeyFile(f.rail));
+  if (ownerFileProblem) line(false, `owner key file ${ownerKeyFile(f.rail)}`, ownerFileProblem);
   for (const [label, path, env, vars] of files) {
     if (!existsSync(path)) { line(false, label, `${path} does not exist${r.ownerVars ? "" : ` (run ${r.setup})`}`); continue; }
     if (unsafe.has(path)) { line(false, `${label} ${path}`, unsafe.get(path)); continue; }
@@ -234,18 +256,16 @@ export async function runDoctor(f) {
     line(!bad.length, "budget folders", bad.join("; "));
   }
 
-  const ownerAddress = pub[r.ownerAddr] ?? owner[r.ownerAddr] ?? agent[r.ownerAddr];
-  const agentAddress = pub[r.agentAddr] ?? agent[r.agentAddr] ?? owner[r.agentAddr];
+  const ownerAddress = pub[r.ownerAddr] ?? agent[r.ownerAddr];
+  const agentAddress = pub[r.agentAddr] ?? agent[r.agentAddr];
   // Setup proves control of an address, not who the person is: show the owner on record so a person who is not it stops.
   process.stderr.write(ownerAddress
     ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. ${newOwnerCmd(r, f, pub)} replaces it (refused while a budget is live).\n\n`
     : `\n  OWNER (recorded): none yet. Setup records whoever connects: the owner runs it, or watches it run.\n\n`);
   if (existsSync(agentKeyFile(f.rail))) {
     const problems = r.ownerSecrets.filter((n) => agent[n]).map((n) => `defines ${n}`);
-    const ownerValues = new Set(r.ownerSecrets.map((n) => owner[n]).filter(Boolean));
     for (const [name, value] of Object.entries(agent)) {
-      if (ownerValues.has(value)) problems.push(`${name} holds the owner's secret`);
-      else if (ownerAddress && keyShaped(value)) {
+      if (ownerAddress && keyShaped(value)) {
         const a = await r.keyAddress(value).catch(() => null);
         if (a && (r.caseSensitive ? a === ownerAddress : a.toLowerCase() === ownerAddress.toLowerCase())) problems.push(`${name} is a key for the owner address`);
       }
@@ -256,6 +276,11 @@ export async function runDoctor(f) {
       const match = !!a && (r.caseSensitive ? a === agentAddress : a.toLowerCase() === agentAddress.toLowerCase());
       line(match, "agent key matches the agent address in the public file", a ? (match ? agentAddress : `the key is for ${a}, the public file says ${agentAddress}`) : "the key is not a valid key");
     }
+  }
+
+  if (f.rail === "evm" && existsSync(agentKeyFile(f.rail)) && !unsafe.has(agentKeyFile(f.rail))) {
+    const stale = staleOwnerLine(agent, pub, f.chain);
+    if (stale) line(false, "owner on record", `the agent key file ${agentKeyFile(f.rail)} records ${stale.fileOwner}, the public file records ${stale.publicOwner}. Buy refuses while these owners differ. Run ${stale.repair} where the agent key is. It asks the owner to sign only when the record needs a new signature`);
   }
 
   if (!existsSync(r.pub)) line(false, `public file ${r.pub}`, `does not exist (run ${r.setup})`);
@@ -276,6 +301,12 @@ export async function runDoctor(f) {
       }
     } catch (e) { line(false, "balances", siteText(e.message, 300)); }
   } else if (rpcOk) line(false, "balances", "no owner or agent address to read");
+  if (rpcOk && r.allowance && ownerAddress && agentAddress) {
+    try {
+      const a = await r.allowance(ownerAddress, agentAddress);
+      process.stderr.write(`  info  allowance: ${a.amount} ${a.token} from ${ownerAddress} to the agent on ${a.label}. 0 means none was granted, or it is spent or revoked\n`);
+    } catch (e) { process.stderr.write(`  info  allowance: could not be read (${siteText(e.message, 200)})\n`); }
+  }
   for (const t of topUps) process.stderr.write(`  ${t}\n`);
   return failed;
 }

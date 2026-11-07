@@ -1,6 +1,6 @@
 ---
 name: superstables
-description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or revokes a testnet budget through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked to find a paid API, quote what a call costs, pay for one, make a single purchase, or set up, grant, check, revoke or recover a testnet budget. Testnet-first.
+description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a testnet budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked to find a paid API, quote what a call costs, pay for one, make a single purchase, or set up, grant, check, revoke or recover a testnet budget. Testnet-first.
 ---
 
 # Superstables
@@ -16,45 +16,78 @@ Only operations needing a local signature go through the CLI; everything else go
 - `find_services`: find services, prices, chains and required inputs. No sign-in needed. This pays nothing.
 - `request_purchase`: request a service by its `service_id` and inputs. Use a new `operation_id` for each purchase; reuse it when retrying the same request on the same connection.
 - `get_purchase_status`: read the purchase's payment status, service response and receipt using its `purchase_id`.
+- `find_budget_services`: list the services a budget can pay, or with `once` what Single purchase on superstables.com can buy. `chain` narrows the list.
+- `preflight_budget_purchase`: the listed price, recipient and chain for one service from `find_budget_services`; with `agent`, whether what is left of that agent's budget covers it.
 - `list_my_budgets`: read each agent's budget, what is left and its state.
+- `get_budget_status`: one agent's budget read from the chain now, with the owner's last action and whether it is final.
 - `get_budget_request`: read a budget approval on superstables.com from its complete approval link.
+- `wait_budget_request`: follow a budget approval until it is final; pass `wait_seconds` 25 and call it again while it is not final.
 - `request_budget_revoke`: get the owner's link to revoke an agent's budget. The owner signs the revoke in their wallet.
-- `submit_budget_request`: send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged.
+- `remove_budget_agent`: remove an agent from the account, off chain, once it has no spending permission. Moves no funds.
+- `submit_budget_request`: for coding agents only (Claude Code, Codex). Send a budget request that the CLI signed with `--sign-only` to superstables.com for the owner's approval. Pass the CLI's block unchanged. A chat app never uses it and never asks the owner to paste a signed block.
+
+With every approval link, `request_purchase` and `submit_budget_request` return
+a line naming the request account's wallets by their last four characters, or
+saying it has no wallet. Show that line with the link. If that is not the account
+the owner meant, tell them not to approve and stop to resolve the mismatch. For
+a purchase, tell them to sign the connector in to the intended account and, in
+Codex, start a new session because the running session keeps the old token. Then
+request the purchase again.
 
 Nothing is paid until an account member approves and signs in their wallet on
 superstables.com. When `request_purchase` returns an approval link and match
-code, show both to the user and end your turn. Do not approve for them or poll
-while waiting. When they say they approved, call `get_purchase_status` and
-report what it establishes. If the payment outcome is unknown, say so.
+code, show both to the user in your reply now. Then, in the same turn, call
+`get_purchase_status` with `wait_seconds` 25, and keep calling it while the result
+says to keep waiting, until the outcome is final. Report what it establishes.
+Do not approve for the user. If your app shows your reply only when the turn
+ends, end your turn after showing the link and match code instead, and call
+`get_purchase_status` when the user says they approved. If the payment outcome
+is unknown, say so.
 
-Budgets: read their status with `list_my_budgets`, follow an approval link with
-`get_budget_request`, and revoke with `request_budget_revoke` (it returns the
-owner's link on superstables.com and signs nothing).
+Budgets: read their status with `list_my_budgets` or `get_budget_status`, follow
+an approval link with `get_budget_request` or `wait_budget_request`, and revoke
+with `request_budget_revoke` (it returns the owner's link on superstables.com
+and signs nothing). Check a revoke with `get_budget_status`, and count it done
+only when its `revoke` says it is final.
+
+**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on their machine or on superstables.com, may be offered only as a question. Request it only when the owner says yes: with `request_purchase`, or, in a coding agent on the owner's machine, `buy-once` or `pay`. They asked for the budget, so do not switch the way of paying on your own.
 
 ## What stays on the CLI
 
-Set-up, grant, buy and recover are signed on the CLI, because they need a
-signature from this machine. When the connector offers `submit_budget_request`,
-use it for `budget setup --hosted` and grants approved on superstables.com, on
-the `evm` rail only. Sign with `--sign-only` and send the block unchanged with
-`submit_budget_request`. Show the owner the approval details and end your turn.
-When they say they've approved, run `budget wait --site-request`. Follow
-"Sending a budget request through the connector" in
-[references/budget.md](references/budget.md) for the full steps and command
-arguments. `budget find` and `budget preflight` also stay on
-the CLI today, because the connector has no tool for them yet. `budget wait` and
-`budget status` stay on it for a request this machine signed. Read
-[references/cli.md](references/cli.md) before you run any CLI command. Write
+Use the CLI for what needs this machine: creating the agent key, `--sign-only`
+signing, `budget buy` (the agent key signs), `pay`, `recover`, `reconcile` and
+records kept here. Use the tools above wherever one exists.
+
+Set-up and grant are signed on the CLI. When the connector offers
+`submit_budget_request`, use it for `budget setup --hosted` and grants approved
+on superstables.com, on the `evm` rail only. Sign with `--sign-only` and send
+the block unchanged with `submit_budget_request`. Show the owner the approval
+details, then call `wait_budget_request` with `wait_seconds` 25 until `final` is
+`true`. End the turn first only if your app shows your reply only when the turn
+ends; then call it when they say they've approved. Follow "Sending a budget request
+through the connector" in [references/budget.md](references/budget.md) for the
+full steps and command arguments. `budget wait` and `budget status` stay on the
+CLI only for an approval page on this machine, which the connector cannot read.
+Read [references/cli.md](references/cli.md) before you run any CLI command. Write
 each client command out in full, as shown in `references/cli.md`. Do not use a
 shell variable or alias: these can prevent the host from checking the command
 before it runs.
+
+In a chat app (Claude, ChatGPT, Grok Bot or any other hosted app), don't run
+commands to check what is available: decline budget set-up, grant, fund, budget
+buy and the CLI's `pay` straight away, because each needs a signature on the
+owner's machine. Don't offer to send a signed block either. Say so and point the owner to Claude Code, Codex or
+another agent that can run commands. The tools can find services, request a purchase the owner approves on
+superstables.com, read budgets, follow a budget approval and give the revoke
+link: offer those.
 
 ## When the connector is missing or signed out
 
 If these tools are missing, the CLI does all of it, `budget revoke` included:
 follow [references/cli.md](references/cli.md). If a call fails because the
 connector is not signed in, ask the owner to connect it once and end your turn.
-If they decline, use the CLI.
+Only an agent on the owner's machine, such as Claude Code or Codex, falls back to
+the CLI when the owner declines. In a chat app, stop without running commands.
 
 ## References
 

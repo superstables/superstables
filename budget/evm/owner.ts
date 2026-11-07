@@ -2,6 +2,7 @@
 // (../owner-page.ts). This file binds that page to the evm chain and holds the evm reads: readSent, findApproval, the terms.
 // A chain set up with --hosted (APPROVALS=hosted and SITE in its public file) asks through that site instead (../hosted.ts):
 // the agent key signs each request, and the site must act for the owner recorded here.
+import { rpcPause } from "../rpc-pause.mjs";
 import { encodeFunctionData, parseEventLogs, parseUnits, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
@@ -155,7 +156,7 @@ export async function readSent(hash: Hex, want: { from: Address; to: Address; da
   if (t.chainId !== undefined && t.chainId !== null && Number(t.chainId) !== CFG.chainId) problems.push(`it was signed for chain ${t.chainId}, not ${CFG.label} (${CFG.chainId})`);
   if (block <= want.afterBlock) problems.push(`it was mined in block ${r.blockNumber}, before this request started (block ${want.afterBlock})`);
   if (want.siteFailed) problems.push(want.siteFailed);
-  await sleep(2500); // public RPC nodes lag a moment behind a block they just served
+  await rpcPause(2500); // public RPC nodes lag a moment behind a block they just served
   const final = r.status === "success" ? (await finalityOf(hash, r)).final : false;
   return { hash, status: r.status, blockNumber: block, blockHash: r.blockHash, final, logs: r.logs, problems, ...(problems.length === 0 && unresolved ? { unresolved } : {}), ...(want.siteFailed ? { siteFailed: want.siteFailed } : {}) };
 }
@@ -257,11 +258,11 @@ export const GRANT_NOT_ENFORCED = [
 
 /** What fund-agent sends by default on this chain, in the gas token. */
 export const DEFAULT_FUND_AMOUNT: string = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent;
-/** The amount of gas token to send, in its smallest units: above 0 and at most 5. Throws the words for a bad amount. */
+/** The amount of gas token to send, in its smallest units: above 0. Throws the words for a bad amount. */
 export function fundValue(amt: string): bigint {
   if (!/^\d+(\.\d{1,18})?$/.test(amt)) throw new Error(`--amount "${amt}" is not a decimal amount of ${GAS.symbol}`);
   const value = parseUnits(amt, GAS.decimals);
-  if (value === 0n || value > parseUnits("5", GAS.decimals)) throw new Error(`--amount must be above 0 and at most 5 ${GAS.symbol}`);
+  if (value === 0n) throw new Error("--amount must be above 0");
   return value;
 }
 

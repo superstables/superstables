@@ -20,8 +20,15 @@ import { referralKey, signReferral } from "../helpers/referrals.js";
 import { sendJson, startFacilitator, startPaidEndpoint, startServer, type TestServer } from "../helpers/servers.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const TSX = resolve(ROOT, "node_modules/tsx/dist/cli.mjs");
-const CLI = resolve(ROOT, "src/cli/main.ts");
+const bundle = mkdtempSync(join(tmpdir(), "ss-cli-bundle-"));
+try {
+  execFileSync(process.execPath, [resolve(ROOT, "scripts/cli-build.mjs"), "--outdir", bundle], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+} catch (error) {
+  rmSync(bundle, { recursive: true, force: true });
+  throw error;
+}
+afterAll(() => rmSync(bundle, { recursive: true, force: true }));
+const CLI = join(bundle, "superstables.mjs");
 
 interface Run {
   code: number;
@@ -41,7 +48,7 @@ afterEach(() => {
 
 function run(args: string[], env: Record<string, string> = {}): Promise<Run> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [TSX, CLI, ...args], {
+    const child = spawn(process.execPath, [CLI, ...args], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -70,6 +77,12 @@ describe("the superstables CLI", () => {
     expect(result.code).toBe(0);
     const { version } = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8")) as { version: string };
     expect(result.stdout.trim()).toBe(version);
+  });
+
+  it("prints the version from package.json when it runs from the sources", async () => {
+    const out = execFileSync(process.execPath, [resolve(ROOT, "node_modules/tsx/dist/cli.mjs"), resolve(ROOT, "src/cli/main.ts"), "--version"], { cwd: ROOT, encoding: "utf8" });
+    const { version } = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf8")) as { version: string };
+    expect(out.trim()).toBe(version);
   });
 
   it("prints its own help", async () => {
@@ -212,6 +225,11 @@ describe("the superstables CLI", () => {
     expect(setUp.stdout).toContain("https://metamask.io/download");
     expect(setUp.stdout).toContain("--wallet local");
     expect(setUp.stdout).not.toContain("superstables wallet serve");
+    expect(setUp.stdout).toContain("up to 0.05 USDC per payment, 1 USDC per day (edit the caps in that file to change them; write null to remove one)");
+    const written = readFileSync(join(home, "policy.yaml"), "utf8");
+    expect(written).toMatch(/^ {2}per_call: 0\.05 USDC/m);
+    expect(written).toMatch(/^ {2}per_day: 1 USDC/m);
+    expect(written).toContain("To change one, edit its value; to remove it, write null");
 
     const result = await run(["doctor", "--json"]);
     expect(result.code, result.stdout + result.stderr).toBe(0);
@@ -315,7 +333,7 @@ const COMMANDS = [
 
 describe("the help", () => {
   it("says, for every command, whether it moves money, who runs it, an example and its exit codes", async () => {
-    // A few at a time: each one is two node processes (tsx and the CLI), and a CI runner may cap
+    // A few at a time: a CI runner may cap
     // the number of threads its service can start.
     const results: Awaited<ReturnType<typeof run>>[] = [];
     for (let i = 0; i < COMMANDS.length; i += 4) {
@@ -340,7 +358,7 @@ describe("the help", () => {
     expect(stdout).toContain("`superstables setup` is for pay only");
     // the second single-purchase way: the owner approves on superstables.com, from any device
     expect(stdout).toContain("budget buy-once");
-    expect(stdout).toContain("Start here, one purchase on superstables.com");
+    expect(stdout).toContain("Start here, Single purchase on superstables.com");
     expect(stdout).toContain("superstables budget find --once");
     expect(stdout).toMatch(/budget buy-once --service <id> --max M/);
     for (const sub of ["setup", "fund-agent", "doctor", "preflight", "status", "grant", "buy", "reconcile", "revoke", "recover", "wait"]) {
@@ -512,7 +530,7 @@ describe("quote, pay and status against a local seller", () => {
     const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
     // One process, as the installed command is. tsx's own CLI would run pay in a child behind a wrapper that passes a
     // signal on, and kills the child (exit 143) when it has not said within 30 ms that it took it.
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
+    const child = spawn(process.execPath, [CLI, "pay", quote.id, "--json"], {
       cwd: ROOT,
       env: {
         ...process.env,
@@ -584,7 +602,7 @@ describe("quote, pay and status against a local seller", () => {
 
   it("ends an attempt whose pay was killed outright: status says abandoned by stopped, and it stops counting", async () => {
     const quote = JSON.parse((await run(["quote", url, "--json"], env)).stdout) as { id: string };
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, "pay", quote.id, "--json"], {
+    const child = spawn(process.execPath, [CLI, "pay", quote.id, "--json"], {
       cwd: ROOT,
       env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_DOCTOR_OFFLINE: "1", SUPERSTABLES_WALLET_URL: "http://127.0.0.1:1", ...env },
     });
@@ -661,6 +679,17 @@ describe("the account's own spend policy", () => {
       // The file to edit is the one that refused, not the /dev/null or the other home the environment named.
       expect(result.stdout, args.join(" ")).toContain(`the owner edits ${join(account, ".superstables", "policy.yaml")} if they are wrong`);
     }
+  }, 90_000);
+
+  it("keeps the refusal reason on the quote's policy line when the paths are long", async () => {
+    accountPolicy("kill_switch: true\n");
+    const deep = join(other, "a-long-folder-name-that-makes-the-path-long".repeat(3));
+    mkdirSync(deep, { recursive: true, mode: 0o700 });
+    const result = await run(["--home", deep, "quote", url], env());
+    expect(result.code).toBe(3);
+    const line = result.stdout.split("\n").find((l) => l.trimStart().startsWith("policy "));
+    expect(line).toContain(`kill_switch is on (in ${join(account, ".superstables", "policy.yaml")})`);
+    expect(result.stdout).toContain(`no file at ${join(deep, "policy.yaml")}; the owner runs \`superstables policy init\``);
   }, 90_000);
 
   it("with no account file, an empty policy file still holds the default caps", async () => {
@@ -984,8 +1013,8 @@ describe("superstables budget, stopped by a signal", () => {
     await new Promise<void>((ready) => seller.listen(0, "127.0.0.1", ready));
     const url = `http://127.0.0.1:${(seller.address() as { port: number }).port}/paid`;
     try {
-      // one process, as an installed `superstables` is: node with tsx's loader, not tsx's own wrapper process
-      const child = spawn(process.execPath, ["--import", "tsx", CLI, "budget", "buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped"], {
+      // One process, as the standalone installed command is.
+      const child = spawn(process.execPath, [CLI, "budget", "buy", "--rail", "solana", "--url", url, "--max", "0.01", "--op", "stopped"], {
         cwd: ROOT,
         env: { ...process.env, SUPERSTABLES_HOME: home },
       });

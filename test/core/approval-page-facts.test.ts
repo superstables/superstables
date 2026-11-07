@@ -277,7 +277,7 @@ describe("the policy rows", () => {
     process.env.SUPERSTABLES_POLICY = missing;
     process.env.SUPERSTABLES_HOME = newHome();
     const { html } = await seen({ target: "https://api.seller.example/paid" }, { signer: newSigner().signer });
-    expect(rowOf(html, "Spend policy")).toContain(`built-in defaults (no file at ${missing})`);
+    expect(rowOf(html, "Spend policy")).toContain(`built-in defaults (no file at ${missing}, or the file is empty)`);
   });
 
   it("says a policy object came from the program that asked, with no 'chosen' tag", async () => {

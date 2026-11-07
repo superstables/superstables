@@ -41,7 +41,8 @@ import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
 import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from "../os-keychain.mjs";
 import { overwriteInPlace } from "../../src/core/secret-overwrite.mjs";
-import { prepareSecretFile } from "../secret-file.mjs";
+import { prepareSecretFile, readSecretFile } from "../secret-file.mjs";
+import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { resumeKeychainMove } from "../keychain-move.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
@@ -449,6 +450,20 @@ if (HOSTED && !linked) throw new Error("an add-agent request without its id and 
 const drop = [...(replaced ? ["B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", ...(binding ? [] : SETUP_KEYS)] : []), ...(asked && !HOSTED ? ["APPROVALS", "SITE", "LINK_ID", "LINK_CODE"] : replaced && !HOSTED ? ["LINK_ID", "LINK_CODE"] : [])];
 writePublic({ B4_OWNER_ADDRESS: ownerAddr, B4_AGENT_ADDRESS: agentAddr, ...(HOSTED ? { APPROVALS: "hosted", SITE: SITE!, LINK_ID: linked!.id, LINK_CODE: linked!.code } : {}), ...(binding ? bindingLines(binding) : {}) }, drop);
 if (replaced) console.log(`the recorded owner changed: ${replaced} -> ${ownerAddr}`);
+// The agent file's own owner line is a leftover from an older client. Once the owner's signature backs the owner just recorded, it
+// is dropped (the file is per rail, owners per chain, so it is not rewritten to this chain's owner).
+if (binding || heldBinding?.state === "signed") {
+  const stale = staleOwnerLine(agentFileValues().env ?? {}, { B4_OWNER_ADDRESS: ownerAddr }, CFG.key);
+  if (stale) {
+    try {
+      const text = readSecretFile(AGENT_ENV, "the agent key file");
+      prepareSecretFile(AGENT_ENV, text.split("\n").filter((l) => !/^(?:export\s+)?B4_OWNER_ADDRESS=/.test(l)).join("\n")).commit();
+      console.log(`removed the stale owner line ${stale.fileOwner} from ${AGENT_ENV}; the owner on record is in ${PUBLIC_ENV}`);
+    } catch (err) {
+      console.log(`could not remove the stale owner line ${stale.fileOwner} from ${AGENT_ENV} (${(err as Error).message}); buy refuses until it is gone. Run setup again`);
+    }
+  }
+}
 console.log(`${CFG.label}: wrote ${PUBLIC_ENV} (no secret).${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ""}`);
 if (binding) console.log(`the owner's signature naming agent ${agentAddr} is recorded in ${PUBLIC_ENV}`);
 // balances are for the next steps only: a slow or failing RPC does not undo the setup

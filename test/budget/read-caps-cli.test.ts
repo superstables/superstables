@@ -123,7 +123,7 @@ describe("what the dispatcher prints and reads", () => {
       "keys/budget/evm-agent.env": `B4_AGENT_KEY=${EVM_KEY}\n`,
       "budget/public/evm-base-sepolia.env": `B4_OWNER_ADDRESS=${OWNER}\nB4_AGENT_ADDRESS=${privateKeyToAddress(EVM_KEY)}\n`,
     });
-    const r = await budget(dir, { B4_RPC: rpc }, ["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "g1"]);
+    const r = await budget(dir, { B4_RPC: rpc, SUPERSTABLES_TEST_RPC_WAIT_MS: "0" }, ["buy", "--rail", "evm", "--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "g1"]);
     expect(r.result.reason).toMatch(/stopped before it recorded a purchase: the RPC answer is not JSON/);
     expect(r.result.reason).not.toMatch(/Node\.js/);
   }, 150_000);
