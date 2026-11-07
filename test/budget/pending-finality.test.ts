@@ -83,6 +83,22 @@ describe("an owner command while an approved transaction waits for the chain", (
     expect(run.result.reason).toMatch(/has a reported transaction; its command still holds the approval lock on this chain/);
     expect(run.result.next).toMatch(/A transaction was reported .* outcome is still being checked/);
     expect(run.result.next).not.toMatch(/message_for_owner/);
-    approvals.release?.(id);
+    approvals.release("evm", "base-sepolia", id);
+    const cases = [
+      { id: "oa-20261030000004-00000004", line: { at: new Date().toISOString(), id: page, kind: "grant", status: "failed", hash: HASH }, reported: true },
+      { id: "oa-20261030000005-00000005", line: { at: new Date().toISOString(), id: page, kind: "grant", status: "failed" }, reported: false },
+    ];
+    for (const c of cases) {
+      expect(approvals.claim("evm", "base-sepolia", c.id).ok).toBe(true);
+      approvals.startForeground({ id: c.id, command: "grant", rail: "evm", chain: "base-sepolia" });
+      record(c.id, { ...JSON.parse(readFileSync(join(dir, `${c.id}.json`), "utf8")), url });
+      writeFileSync(join(home, "budget", "owner-approvals.jsonl"), `${JSON.stringify(c.line)}\n`);
+      const next = await budget(["grant", "--rail", "evm", "--chain", "base-sepolia", "--amount", "1", "--detach"]);
+      expect(next.result, next.stderr).toMatchObject({ ok: false, state: "refused_precheck" });
+      if (c.reported) expect(next.result.reason).toMatch(/has a reported transaction/);
+      else expect(next.result.reason).toMatch(/still waiting for the owner/);
+      approvals.release("evm", "base-sepolia", c.id);
+    }
   }, 60_000);
+
 });
