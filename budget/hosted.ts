@@ -847,7 +847,8 @@ export class HostedApprovals {
       this.s.onRecord?.(record);
     }
 
-    const expiresAt = Math.min(localDeadline, created.expiresAt);
+    // the link lives until the site's expiry; this command's own wait is localDeadline
+    const expiresAt = created.expiresAt;
     if (!taken) this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
     let resolve!: (o: OwnerActionOutcome) => void;
     const settled = new Promise<OwnerActionOutcome>((deliverOnce) => {

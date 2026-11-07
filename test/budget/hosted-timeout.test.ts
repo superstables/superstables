@@ -47,6 +47,14 @@ describe("--timeout on a hosted approval", () => {
     expect(h.notice).toBe("timeout_seconds 7200 is above the most this server allows (10 to 3600 seconds), so the link expires after 3600 seconds");
   });
 
+  it("reports the site's minimum window, not the shorter wait it was given", async () => {
+    site.features = ["timeout_seconds"];
+    const h = await connect(1_000);
+    expect(site.requests[0].body.timeout_seconds).toBe(1);
+    expect(secondsLeft(h.expiresAt)).toBeGreaterThan(9);
+    expect(h.notice).toContain("below the least");
+  });
+
   it("sends nothing extra to a site that does not list it (production refuses unknown fields)", async () => {
     site.features = ["expected_owner"];
     const h = await connect(1_800_000);
