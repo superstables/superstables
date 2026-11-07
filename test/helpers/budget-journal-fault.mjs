@@ -64,7 +64,10 @@ fs.renameSync = function (from, to) {
   return result;
 };
 syncBuiltinESMExports();
-const module = await import(pathToFileURL(join(root, rail === 'evm' ? 'budget/evm/ops.ts' : rail === 'tempo' ? 'budget/tempo/lib/ops.ts' : 'budget/solana/ops.mjs')).href);
+// BUDGET_DURABILITY_BUILT: a folder of the writers built with esbuild (test/helpers/journal-built-ops.ts), imported with node alone.
+// Without it the sources are imported, which needs `node --import tsx`. Either way the import comes after the fs patch above.
+const built = process.env.BUDGET_DURABILITY_BUILT;
+const module = await import(pathToFileURL(built ? join(built, `${rail}.mjs`) : join(root, rail === 'evm' ? 'budget/evm/ops.ts' : rail === 'tempo' ? 'budget/tempo/lib/ops.ts' : 'budget/solana/ops.mjs')).href);
 const record = { ...previous, checkpoint, state: checkpoint === 'quote' ? 'quoted' : checkpoint === 'intent' ? 'intent' : 'submitted',
   ...(checkpoint === 'pull-hash' ? { pullTx: `0x${'ab'.repeat(32)}`, pullNonce: 7 } : {}),
   ...(checkpoint === 'authorization' ? { signed: true, auth: { nonce: `0x${'cd'.repeat(32)}`, validBefore: 1500 } } : {}),

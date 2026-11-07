@@ -225,12 +225,37 @@ async function play(seed: number): Promise<string | null> {
   return null;
 }
 
+/**
+ * Runs `fn` with waitOnce's one-second "must not spin" pauses (budget/once.mjs) fired at once and the clock `Date.now` reads
+ * moved forward by the time skipped, so every deadline and grace sees the same time pass and the same reads happen. The
+ * scripted site answers by order, not by time; only the idle seconds between its answers go.
+ */
+async function withoutSpinPauses<T>(fn: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  const realSetTimeout = globalThis.setTimeout;
+  let skipped = 0;
+  Date.now = () => realNow() + skipped;
+  globalThis.setTimeout = ((cb: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    if (ms === 1000 && /\bwaitOnce\b/.test(new Error().stack ?? "")) {
+      skipped += ms;
+      return realSetTimeout(cb, 0, ...args);
+    }
+    return realSetTimeout(cb, ms, ...args);
+  }) as typeof setTimeout;
+  try {
+    return await fn();
+  } finally {
+    Date.now = realNow;
+    globalThis.setTimeout = realSetTimeout;
+  }
+}
+
 describe("buy-once: once payment evidence appears, no outcome says nothing was paid", () => {
   it("holds over 300 seeded sequences of creation, read, wait, replace and cancel answers", async () => {
     const broken: string[] = [];
     let withEvidence = 0;
     for (let seed = 1; seed <= 300; seed++) {
-      const why = await play(seed);
+      const why = await withoutSpinPauses(() => play(seed));
       if (served.some(Boolean)) withEvidence++;
       if (why) broken.push(`seed ${seed}: ${why}`);
     }

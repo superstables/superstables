@@ -16,7 +16,6 @@ import { startFakeSolana, type FakeSolana } from "../helpers/fake-chains.js";
 import { endpointTree, type EndpointTree } from "../helpers/endpoint-tree.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const CLI = join(ROOT, "budget/cli.mjs");
 
 type Out = { code: number; stdout: string; stderr: string; result: any };
 let home: string;
@@ -34,10 +33,10 @@ const write = (path: string, text: string, mode = 0o600) => {
 };
 function budget(args: string[], env: Record<string, string> = {}, killAfterMs = 0, root = ROOT): Promise<Out> {
   return new Promise((done, fail) => {
-    const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, ...env };
+    const e: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home, ...env };
     delete e.SUPERSTABLES_SITE;
     delete e.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [root === ROOT ? CLI : join(root, "budget/cli.mjs"), ...args], { cwd: root, env: e });
+    const child = spawn(process.execPath, [join(root === ROOT ? evmTree.bundle() : root === evmTree.root ? evmTree.bundle() : root, "cli.mjs"), ...args], { cwd: root, env: e });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -151,6 +150,41 @@ describe("rotate, evm", () => {
     expect(existsSync(file("keys", "budget", "retired.json"))).toBe(false);
     expect(e.chain.allowanceOf(OWNER.address, e.agent.address)).toBe(usdc("1"));
   }, 120_000);
+
+  it("a stale owner line in the key file refuses before anything is retired or sent, and names the repair", async () => {
+    const e = await evmCase();
+    const keyFile = file("keys", "budget", "evm-agent.env");
+    write(keyFile, `${readFileSync(keyFile, "utf8")}B4_OWNER_ADDRESS=0x000000000000000000000000000000000000dEaD\n`);
+    const r = await e.run(["rotate", "--rail", "evm", "--owner-key-file", e.ownerFile, "--yes"]);
+    expect(r.code, all(r)).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", retired: false });
+    expect(r.result.reason).toContain("0x000000000000000000000000000000000000dEaD");
+    expect(r.result.reason).toContain(OWNER.address);
+    expect(r.result.next).toMatch(/^superstables budget setup --rail evm /);
+    expect(sendsOf(e.chain)).toBe(0);
+    expect(existsSync(file("keys", "budget", "retired.json"))).toBe(false);
+    expect(readFileSync(keyFile, "utf8")).toContain(e.agent.address);
+    expect(e.chain.allowanceOf(OWNER.address, e.agent.address)).toBe(usdc("1"));
+  }, 120_000);
+
+  it("with two owner lines in the key file the last one counts, as the rails read it", async () => {
+    const dead = "0x000000000000000000000000000000000000dEaD";
+    for (const [lines, refused] of [[[OWNER.address, dead], true], [[dead, OWNER.address], false]] as const) {
+      const e = await evmCase();
+      const keyFile = file("keys", "budget", "evm-agent.env");
+      write(keyFile, `${readFileSync(keyFile, "utf8")}${lines.map((o) => `B4_OWNER_ADDRESS=${o}\n`).join("")}`);
+      const r = await e.run(["rotate", "--rail", "evm", "--plan"]);
+      if (refused) {
+        expect(r.code, all(r)).toBe(3);
+        expect(r.result).toMatchObject({ state: "refused_precheck", retired: false });
+      } else {
+        expect(r.code, all(r)).toBe(0);
+        expect(r.result.state).toBe("planned");
+      }
+      expect(sendsOf(e.chain)).toBe(0);
+      expect(existsSync(file("keys", "budget", "retired.json"))).toBe(false);
+    }
+  }, 240_000);
 
   it("a step that fails stops it with the old address already retired; the next run finishes", async () => {
     const e = await evmCase();
@@ -414,7 +448,7 @@ describe("rotate, solana", () => {
     tree.set({ "solana-devnet": [solana.url] });
     cleanups.push(() => solana.close());
   });
-  const run = (args: string[]) => budget(args, { SUPERSTABLES_SOLANA_RPC: solana.url }, 0, tree.root);
+  const run = (args: string[]) => budget(args, { SUPERSTABLES_SOLANA_RPC: solana.url }, 0, tree.bundle());
   const ownerFile = () => {
     const path = file("owner-sol.env");
     write(path, `SOLANA_OWNER_SECRET_BASE58=${bs58.encode(SOL_OWNER_KP.secretKey)}\n`);
@@ -533,12 +567,11 @@ describe("the files rotate leaves", () => {
 
 
 describe("--clear-agent forgets the owner's signature for the old agent", () => {
-  const TSX = resolve(ROOT, "node_modules/.bin/tsx");
   const setupLines = "SETUP_MESSAGE=abc\nSETUP_SIGNATURE=0xdead\nSETUP_SIGNED_AT=2026-10-16T10:00:00.000Z\n";
   it("evm: no SETUP_* line is left, the owner stays", () => {
     const agent = privateKeyToAccount(generatePrivateKey()).address;
     write(PUBLIC_EVM(), `B4_OWNER_ADDRESS=${OWNER.address}\nB4_AGENT_ADDRESS=${agent}\n${setupLines}`, 0o644);
-    execFileSync(TSX, [resolve(ROOT, "budget/evm/rotate.ts"), "--clear-agent", agent], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_HOME: home } });
+    execFileSync(process.execPath, [resolve(evmTree.bundle(), "evm/rotate.mjs"), "--clear-agent", agent], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home } });
     const pub = readFileSync(PUBLIC_EVM(), "utf8");
     expect(pub).not.toMatch(/^SETUP_/m);
     expect(pub).toContain(`B4_OWNER_ADDRESS=${OWNER.address}`);
@@ -546,7 +579,7 @@ describe("--clear-agent forgets the owner's signature for the old agent", () => 
   it("solana: no SETUP_* line is left, the owner stays", () => {
     const pubPath = file("budget", "public", "solana-devnet.env");
     write(pubPath, `SOLANA_OWNER_ADDRESS=${SOL_OWNER}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n${setupLines}`, 0o644);
-    execFileSync(process.execPath, [resolve(ROOT, "budget/solana/rotate.mjs"), "--clear-agent", SOL_AGENT], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_HOME: home } });
+    execFileSync(process.execPath, [resolve(evmTree.bundle(), "solana/rotate.mjs"), "--clear-agent", SOL_AGENT], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_TEST_RPC_WAIT_MS: "0", SUPERSTABLES_HOME: home } });
     const pub = readFileSync(pubPath, "utf8");
     expect(pub).not.toMatch(/^SETUP_/m);
     expect(pub).toContain(`SOLANA_OWNER_ADDRESS=${SOL_OWNER}`);

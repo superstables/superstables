@@ -22,10 +22,11 @@
 // simulated revoke with KeyNotFound; the owner rejected or the link expired), 5 unknown (the wallet may have sent it but
 // the chain does not show it, or the simulation could not tell).
 
+import { rpcPause } from "../rpc-pause.mjs";
 import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
 import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
-import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, sleep, type Simulated } from './lib/chain.ts'
+import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, type Simulated } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
@@ -222,7 +223,7 @@ async function main() {
 
   let after = await readKey(owner, agentAddress)
   for (let i = 0; i < 8 && hash && !after.revoked; i++) {
-    await sleep(2000)
+    await rpcPause(2000)
     after = await readKey(owner, agentAddress)
   }
   console.log(`readback: isRevoked ${after.revoked}`)

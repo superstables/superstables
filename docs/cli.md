@@ -87,18 +87,19 @@ What this is:
   Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
-Two ways to pay:
-  pay      The owner approves each payment in their own wallet: a browser wallet such as MetaMask
-           (Phantom on Solana) on a page `pay` serves on 127.0.0.1 (the default), or the local
-           wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
-           Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
-           Or `budget buy-once`: one purchase the owner approves on superstables.com from any
-           device (needs an account there), for the services `superstables budget find --once` lists.
-  budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
-           own until the budget is spent, expires or is revoked. The chain enforces the limit.
-           Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-           Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
+Two ways to pay: Budgets or Single purchase
+  budget   Budgets. The owner grants an on-chain budget once, from their wallet; the agent then
+           buys on its own until the budget is spent, expires or is revoked. The chain enforces
+           the limit. Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
+           Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
            (Solana devnet). Use it when the agent should buy without asking each time.
+  pay      Single purchase on your machine. The owner approves each payment in their own wallet:
+           a browser wallet such as MetaMask (Phantom on Solana) on a page `pay` serves on
+           127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
+           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato. Use it when the
+           owner is there to approve.
+           Or `budget buy-once`: Single purchase on superstables.com, approved from any
+           device (needs an account there), for the services `superstables budget find --once` lists.
 
 Start here, pay:
   superstables setup                                   owner, once: home directory and policy (pay only)
@@ -108,7 +109,7 @@ Start here, pay:
   superstables pay <quote-id>                          prints an approval link; the owner approves in their wallet
   superstables status <attempt-id>                     where a payment got to
 
-Start here, one purchase on superstables.com:
+Start here, Single purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
@@ -143,7 +144,7 @@ Who runs what:
 
 Owner settings:
   superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
-  superstables owner settings sign   your wallet signs these settings, your spend policy and your retired agent keys
+  superstables owner settings sign   your wallet signs these settings, your spend policy, your retired agent keys and your enabled chains
   Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
   owner actions only when they name what these settings allow. Signed settings apply only to approvals
   made with the wallet that signed them; pay and the local wallet refuse a policy file that differs from
@@ -159,7 +160,7 @@ Discovery:
   SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
-  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.2,
   even with the switch enabled. Agents never set the variable.
 
 Environment:
@@ -740,8 +741,9 @@ back.
 The credit is added once the payment's block is final on chain. A payment the site reports as
 pending, or cannot confirm, or answers with money_moved other than false, on any HTTP status, is
 never paid again from here: `superstables seller credit` rechecks it. "Nothing was charged" is said
-only when nothing was signed. The default spend policy allows 0.05 USDC per payment, so a top-up
-needs a raised cap in the policy file.
+only when nothing was signed. By default the spend policy refuses any payment above 0.05 USDC
+(caps.per_call in policy.yaml), so a top-up of more needs that cap raised, or removed by writing
+null as its value.
 
 Moves money: yes, once, and only after the owner approves it in their own wallet: test USDC on Base
   Sepolia.
@@ -855,7 +857,9 @@ Commands:
 
 policy.yaml sets caps per payment and per day, host allow and deny lists, the accepted stablecoins
 and a kill switch. It is software policy, checked by this client and again by the wallet; the chain
-does not enforce it. Budgets have their own on-chain limits instead.
+does not enforce it. Budgets have their own on-chain limits instead. The caps start at 0.05 USDC per
+payment and 1 USDC per UTC day; the owner changes a value, or removes a cap by writing null as its
+value.
 
 The per-day cap: a payment counts on the day it ended, and on every day while it is still open
 (signed and in flight until its authorization expires, or waiting for the owner within its approval

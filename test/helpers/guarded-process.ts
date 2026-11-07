@@ -3,11 +3,12 @@ import { fileURLToPath } from "node:url";
 
 const guard = fileURLToPath(new URL("../network-guard.cjs", import.meta.url));
 
-export function guardedNode(args: string[], env: NodeJS.ProcessEnv, cwd?: string): Promise<{ code: number | null; output: string }> {
+/** `imports` are extra preloads for the child (node --import), after the network guard. */
+export function guardedNode(args: string[], env: NodeJS.ProcessEnv, cwd?: string, imports: string[] = []): Promise<{ code: number | null; output: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, args, {
       cwd,
-      env: { ...process.env, ...env, NODE_OPTIONS: `--require=${guard}` },
+      env: { ...process.env, ...env, NODE_OPTIONS: [`--require=${guard}`, ...imports.map((f) => `--import=${f}`)].join(" ") },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";

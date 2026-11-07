@@ -84,7 +84,7 @@ import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as sig
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, signMessage } from "viem/accounts";
 import { WALLET_STATES, sentEvidence, viewEvidence, walletEvidence } from "./site.mjs";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
@@ -227,7 +227,13 @@ export type SolanaAgentKey = { ed25519: Uint8Array; address: string };
 export type AgentKey = Hex | SolanaAgentKey;
 const isSolanaKey = (k: AgentKey): k is SolanaAgentKey => typeof k === "object" && k !== null;
 /** The agent's address as the site knows it: 0x... (EVM) or base58 (Solana). */
-export const agentAddressOf = (k: AgentKey): string => (isSolanaKey(k) ? k.address : privateKeyToAccount(k).address);
+// Deriving an address from an EVM key is an elliptic-curve multiplication, and every signed request names the agent.
+let lastEvmAgent: { key: Hex; address: string } | undefined;
+export const agentAddressOf = (k: AgentKey): string => {
+  if (isSolanaKey(k)) return k.address;
+  if (lastEvmAgent?.key !== k) lastEvmAgent = { key: k, address: privateKeyToAccount(k).address };
+  return lastEvmAgent.address;
+};
 
 /** An ed25519 signature over `message` by a Solana secret key, 0x + 128 hex. */
 function ed25519Sign(k: SolanaAgentKey, message: string): string {
@@ -246,7 +252,7 @@ export async function agentProof(key: AgentKey, origin: string, method: string, 
   if (!/^[0-9a-f]{32}$/.test(nonce)) throw new Error("the nonce is 32 lowercase hex characters");
   const text = agentProofText(origin, method, path, rawBody, timestamp, nonce);
   const agent = agentAddressOf(key);
-  const signature = isSolanaKey(key) ? ed25519Sign(key, text) : await privateKeyToAccount(key).signMessage({ message: text });
+  const signature = isSolanaKey(key) ? ed25519Sign(key, text) : await signMessage({ message: text, privateKey: key });
   return {
     agent,
     headers: {

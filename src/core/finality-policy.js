@@ -10,7 +10,7 @@ export function finalityFor(rail, chain) {
  * Filled from measured runs in the same sitting as the website's table; a chain left out has no number. The two
  * instant-finality chains are final the moment a block is canonical.
  */
-export const TYPICAL_FINAL_SECONDS = { "evm:skale-base-sepolia": 0, "tempo:moderato": 0 };
+export const TYPICAL_FINAL_SECONDS = { "evm:skale-base-sepolia": 0, "tempo:moderato": 0, "evm:base-sepolia": 1200 };
 
 /** { kind, typicalSeconds }: typicalSeconds is undefined when it has not been measured yet. */
 export function finalityProfile(rail, chain) {

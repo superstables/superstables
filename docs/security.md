@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.0.0 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
+Superstables client 1.1.2 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -238,8 +238,8 @@ authoritative, at the gate, before an approval is created at all. A payment the 
 never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
-A cap of 0.05 USDC per payment means this software will not ask you to sign more than that while it
-runs with your policy. An agent that runs as you can edit or delete your policy file, or run its own
+A cap you set, such as 0.05 USDC per payment (the starting value `setup` writes), means this software will not ask you to sign more than that while it
+runs with your policy. You choose the caps: change a value, or write `null` to remove one. An agent that runs as you can edit or delete your policy file, or run its own
 code, so it is not a promise against a hostile agent, and it never means your account cannot sign
 more. Your own `~/.superstables/policy.yaml` applies whichever policy file or home the environment
 names, but its daily count and the file itself are only as safe as your account's files. An empty
@@ -250,7 +250,7 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
 authorization — and the balance of the account. Testnet by default.
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.2,
 even with the switch enabled.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
@@ -290,7 +290,7 @@ matters is the one a wallet you keep apart from the agent makes.
 
 ## Testnet by default
 
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.0.0,
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.2,
 even with the switch enabled.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
@@ -806,8 +806,16 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-For 1.0.0, use the agent skill zip attached to the 1.0.0 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.0.0.zip`;
+The plugin (Claude Code and Codex) is one of two ways in. It installs from this repository's
+marketplace, `superstables/superstables`, which gives whatever the default branch holds, or from a
+plugin zip attached to the release with a `.sha256` file beside it. The plugin carries no client
+code. In Claude Code and Codex, it runs the CLI from npm with `npx --yes @superstables/client@<version>`,
+at the exact version its files name. In both apps, it reaches the Superstables tools at
+`https://mcp.superstables.com`. The checksum
+caveat below applies to the plugin zip as it does to the skill zip.
+
+For 1.1.2, use the agent skill zip attached to the 1.1.2 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.2.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with

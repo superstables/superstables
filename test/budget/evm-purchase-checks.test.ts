@@ -11,9 +11,13 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   ARC_USDC, AGENT, OWNER, makeChain, makeHome, startSeller, usdc, type FakeEvm, type SellerOpts,
 } from "../helpers/fake-evm.js";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
-const CLI = join(ROOT, "budget/cli.mjs");
+const BUNDLE = budgetBundle();
+const CLI = join(BUNDLE, "cli.mjs");
+// The bundle inlines @x402/*, so a preload that patches those classes in node_modules reaches only the source tree.
+const SOURCE_CLI = join(ROOT, "budget/cli.mjs");
 const TSX = join(ROOT, "node_modules/.bin/tsx");
 const HELPERS = join(ROOT, "test/helpers");
 const preload = (file: string) => `--import=${join(HELPERS, file)}`;
@@ -28,7 +32,7 @@ afterAll(async () => { for (const c of cleanups.splice(0).reverse()) await c(); 
 type Run = { code: number | null; stdout: string; stderr: string; result: any };
 function run(argv: string[], env: Record<string, string>, extraNodeOptions = "", script = CLI): Promise<Run> & { child: ReturnType<typeof spawn>; out: () => string } {
   const nodeOptions = `${process.env.NODE_OPTIONS ?? ""} ${extraNodeOptions}`.trim();
-  const child = spawn(script === CLI ? process.execPath : TSX, script === CLI ? [CLI, ...argv] : [script, ...argv], { cwd: ROOT, env: { ...process.env, ...env, NODE_OPTIONS: nodeOptions } });
+  const child = spawn(script.endsWith(".mjs") ? process.execPath : TSX, [script, ...argv], { cwd: ROOT, env: { ...process.env, ...env, NODE_OPTIONS: nodeOptions } });
   let stdout = "", stderr = "";
   child.stdout.on("data", (c) => (stdout += c));
   child.stderr.on("data", (c) => (stderr += c));
@@ -62,7 +66,7 @@ async function seller(s: Setup, opts: SellerOpts = {}) {
 }
 const buy = (s: Setup, url: string, op: string, env: Record<string, string> = {}, nodeOptions = "") =>
   run(["buy", "--rail", "evm", ...(s.chainKey === "base-sepolia" ? [] : ["--chain", s.chainKey]), "--url", url, "--max", "0.05", "--op", op],
-    { SUPERSTABLES_HOME: s.home.home, B4_RPC: s.chain.url, ...env }, nodeOptions);
+    { SUPERSTABLES_HOME: s.home.home, B4_RPC: s.chain.url, ...env }, nodeOptions, nodeOptions ? SOURCE_CLI : CLI);
 const sentKinds = (chain: FakeEvm) => chain.sentRaw.map((t) => t.data.slice(0, 10));
 const TRANSFER_FROM = "0x23b872dd", CANCEL = "0x5a049a70";
 
@@ -132,7 +136,7 @@ describe("the authorization lifetime is 600 seconds at most", () => {
   it.concurrent("preflight skips the 900 s option and says what buy accepts", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, maxTimeoutSeconds: 900 }) });
     // async: the seller lives in this process, so the event loop must stay free while preflight runs
-    const out = await run(["--url", sel.url, "--max", "0.05"], { SUPERSTABLES_HOME: s.home.home, B4_RPC: s.chain.url }, "", join(ROOT, "budget/evm/preflight.ts"));
+    const out = await run(["--url", sel.url, "--max", "0.05"], { SUPERSTABLES_HOME: s.home.home, B4_RPC: s.chain.url }, "", join(BUNDLE, "evm/preflight.mjs"));
     expect(out.stdout + out.stderr).toContain("SKIP: authorization lifetime 900");
     expect(out.stdout).toContain("buy accepts an authorization lifetime (maxTimeoutSeconds) of 30 to 600 seconds");
     expect(out.stdout).not.toContain("USABLE");

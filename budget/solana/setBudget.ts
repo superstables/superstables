@@ -18,9 +18,10 @@
 // npx tsx budget/solana/setBudget.ts --amount <usdc> [--timeout <s>] [--no-open] [--owner-key-file <path>]
 // Exit codes: 0 set, 1 failed on chain or never landed, 2 bad flags, 3 refused (live delegate, no USDC account, no SOL for the
 // fee, the owner rejected or the link expired, the chain shows another delegate or amount), 5 unknown (read the chain).
+import { rpcPause } from "../rpc-pause.mjs";
 import { Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { CLUSTER_NEXT, agreementLine, agreedAccount, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, ownerPlanCtx, retryRead, sleep, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
+import { CLUSTER_NEXT, agreementLine, agreedAccount, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, ownerPlanCtx, retryRead, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort, finalizedOf, agreedFinalAccount, LANDED_SOLANA_GRANT } from "./owner.ts";
@@ -163,7 +164,7 @@ const problems = () => [
   after.delegatedAmount !== cap && `the delegated amount is ${formatUnits(after.delegatedAmount)} USDC, not ${formatUnits(cap)}`,
 ].filter(Boolean) as string[];
 for (let i = 0; i < 8 && problems().length; i++) {
-  await sleep(2000);
+  await rpcPause(2000);
   after = await retryRead(() => getAccount(conn, ata));
 }
 console.log(`After: owner=${after.owner.toBase58()} mint=${after.mint.toBase58()} delegate=${after.delegate?.toBase58() ?? "none"} delegatedAmount=${formatUnits(after.delegatedAmount)} USDC`);

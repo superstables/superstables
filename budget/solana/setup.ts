@@ -20,11 +20,12 @@
 // signature from the chain with fund-agent's and grant's checks before it reports it.
 // npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]] [--timeout <s>] [--no-open]
 //                                [--owner-key-file <path>] [--key-store file|os-keychain]
+import { rpcPause } from "../rpc-pause.mjs";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, U64_MAX, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
@@ -49,7 +50,7 @@ the public address file. No owner key is created. Prints addresses only, never a
   --hosted                 the owner approves on superstables.com (adds this agent to their account) instead of a page here
   --site <url>             with --hosted: the site (default superstables.com, or SUPERSTABLES_SITE)
   --grant <usdc>           with --hosted: on the same page, a budget of this much USDC in total
-  --fund, --fund-amount <sol>  with --hosted: on the same page, SOL for the agent's fees (default 0.01, at most 1)
+  --fund, --fund-amount <sol>  with --hosted: on the same page, SOL for the agent's fees (default 0.01)
   --timeout <s>            how long the approval link stays open (default 600)
   --no-open                do not open the approval link in the default browser
   --owner-key-file <path>  tests and automation only: record this key file's address instead of asking the wallet
@@ -88,7 +89,7 @@ try {
   usage((e as Error).message);
 }
 if (CAP === 0n) usage("--grant must be above 0");
-if (LAMPORTS !== undefined && (LAMPORTS === 0n || LAMPORTS > 1_000_000_000n)) usage("--fund must be above 0 and at most 1 SOL");
+if (LAMPORTS !== undefined && (LAMPORTS === 0n || LAMPORTS > U64_MAX)) usage("--fund must be above 0 and fit in one Solana transfer");
 
 // 1. the agent key
 // Read through here each time: reusing a key file other users can read would hand the owner's budget to a key they may
@@ -521,7 +522,7 @@ async function finishBundle(): Promise<never> {
           after.delegatedAmount !== CAP && `the delegated amount is ${formatUnits(after.delegatedAmount)} USDC, not ${formatUnits(CAP!)}`,
         ].filter(Boolean) as string[]);
         for (let i = 0; i < 8 && problems().length; i++) {
-          await sleep(2000);
+          await rpcPause(2000);
           after = await retryRead(() => getAccount(conn, ata)).catch(() => after);
         }
         if (problems().length) { report("mismatch", `the chain does not show the planned budget: ${problems().join("; ")}`); continue; }

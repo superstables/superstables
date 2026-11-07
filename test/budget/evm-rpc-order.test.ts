@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startFakeRpc } from "../helpers/fake-site.js";
 import { makeChain, makeHome } from "../helpers/fake-evm.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 import { rpcFromEnv, evmRpcFromEnv, ownerRpcNext, ownerRpcProblem } from "../../budget/rpc.mjs";
 
 const ROOT = resolve(fileURLToPath(new URL("../..", import.meta.url)));
@@ -70,10 +71,12 @@ describe("the owner-action guard judges the variable that wins", () => {
   });
 });
 
+const bundle = budgetBundle();
+
 type Out = { code: number; stdout: string; stderr: string; result: any };
 function run(argv: string[], env: Record<string, string>, script?: string): Promise<Out> {
   return new Promise((done) => {
-    const [cmd, args] = script ? [join(ROOT, "node_modules/.bin/tsx"), [join(ROOT, script), ...argv]] : [process.execPath, [join(ROOT, "budget/cli.mjs"), ...argv]];
+    const [cmd, args] = script ? [process.execPath, [join(bundle, script.replace(/^budget\//, "").replace(/\.ts$/, ".mjs")), ...argv]] : [process.execPath, [join(bundle, "cli.mjs"), ...argv]];
     const child = spawn(cmd, args, { cwd: ROOT, env: { ...process.env, B4_CHAIN: "", B4_RPC: "", B4_RPC_BASE_SEPOLIA: "", ...env } });
     let stdout = "", stderr = "";
     child.stdout.on("data", (c) => (stdout += c));
