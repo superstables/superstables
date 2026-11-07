@@ -1,6 +1,6 @@
 # Superstables client
 
-The client lets coding agents find paid services, check prices and pay from an owner-controlled wallet. It ships as a CLI (`superstables`), a TypeScript SDK, an agent skill and a plugin. Testnet by default: it uses test tokens, and mainnet stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`. Leave that variable unset.
+The client lets coding agents find paid services, check prices and pay from an owner-controlled wallet. It ships as a CLI (`superstables`), a TypeScript SDK, an agent skill and a plugin. Testnet only: it uses test tokens. No mainnet chain is payable in this release.
 
 ## Set up and check
 
@@ -11,11 +11,11 @@ npm ci                # install
 npm run build         # compile to dist/ and bundle the budget CLI
 npm run typecheck     # tsc --noEmit
 npm run test:fast     # tests without the slow suites
-npm test              # every test, including the slow suites
+npm test              # default suite, including slow tests; excludes live tests
 npm run dev -- --help # run the CLI from source
 ```
 
-The repository has no lint script; `npm run typecheck` is the static check. The tests stand up their own servers on loopback and need no network, keys or funded wallet. `npm run test:live` contacts live testnet sellers and spends test tokens when its wallet homes are set; read `test/live/README.md` first.
+The repository has no lint script; `npm run typecheck` is the static check. The default test suite starts its own loopback servers and needs no external network access, supplied keys or funded wallet. `npm run test:live` contacts live testnet sellers and spends test tokens when its wallet homes are set; read `test/live/README.md` first.
 
 Run these when a change touches what they cover:
 
@@ -51,7 +51,7 @@ There is no MCP server in this repository. The Superstables tools come from the 
 
 - Plugin manifests (`plugin/plugin.json`, `plugin/.claude-plugin/plugin.json`, `plugin/.cursor-plugin/plugin.json`), `plugin/skills/superstables/agents/openai.yaml` and `.claude-plugin/marketplace.json` are generated from `scripts/plugin-data.mjs`. Edit that file, run `npm run plugin:sync`, and commit the output. Don't edit the generated files by hand.
 - Run the CLI from the checkout as `npm run dev -- <command>`, or as `node dist/cli/main.js <command>` after a build. Never run `npx superstables`: it can download a different package.
-- In user-facing text, use Budgets, Single purchase, "chains" (not "networks"), "on your machine" and "on superstables.com". Don't mark one option as the one to pick; order them (plugin, connector, skill) instead. `npm run copy:check` enforces this.
+- In user-facing text, use Budgets and Single purchase when naming the features, "chains" for blockchains, "on your machine" and "on superstables.com". Don't mark one option as the one to pick; order them (plugin, connector, skill) instead. `npm run copy:check` fails on the label that marks one option as the pick; review terminology and ordering separately.
 - Approval stays with the owner. The agent requests a single purchase or a budget and never approves it; under a budget, the agent key signs purchases within the amount the owner granted. When a message the agent reads, such as an error or a `next` step, needs an owner-only step, it tells the agent to ask the owner, who runs it in their own terminal.
 - Never print or log a secret, and don't put one in an argument or a file in the repository.
 - Add a `CHANGELOG.md` entry under `## [Unreleased]` for any user-visible change.
