@@ -1,6 +1,6 @@
 // An owner transaction that is in a block the chain has not made final is not done. `wait` says so (final false,
 // chain_final false, a next that does not tell the agent there is nothing to do), and the next owner command is refused
-// with a reason that says the approval waits for the chain, not for the owner.
+// with a reason that says a reported transaction is still being checked, not that the owner still has to act.
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,7 +53,7 @@ describe("wait on an owner transaction that landed but is not final", () => {
     expect(done.code, done.stderr).toBe(0);
     expect(done.result).toMatchObject({ ok: true, command: "fund-agent", state: "landed", final: false, chain_final: false });
     expect(done.result.next).toMatch(/not final yet/);
-    expect(done.result.next).toMatch(/start the next owner command only once it is final/);
+    expect(done.result.next).toMatch(/Check the reported transaction's finality on the chain/);
     expect(done.result.next).not.toMatch(/nothing to do/i);
   }, 60_000);
 
@@ -80,8 +80,8 @@ describe("an owner command while an approved transaction waits for the chain", (
     writeFileSync(join(home, "budget", "owner-approvals.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), id: page, kind: "grant", status: "sent" })}\n`);
     const run = await budget(["grant", "--rail", "evm", "--chain", "base-sepolia", "--amount", "1", "--detach"]);
     expect(run.result, run.stderr).toMatchObject({ ok: false, state: "refused_precheck", id });
-    expect(run.result.reason).toMatch(/approved and its transaction is on this chain; it holds the chain until the chain makes it final/);
-    expect(run.result.next).toMatch(/already approved .* has nothing to do/);
+    expect(run.result.reason).toMatch(/has a reported transaction; its command still holds the approval lock on this chain/);
+    expect(run.result.next).toMatch(/A transaction was reported .* outcome is still being checked/);
     expect(run.result.next).not.toMatch(/message_for_owner/);
     approvals.release?.(id);
   }, 60_000);

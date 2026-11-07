@@ -30,7 +30,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { finalWords } from "../src/core/finality-policy.js";
 import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, awaitingChain, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
@@ -2680,14 +2679,14 @@ const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCo
 
 function refusePending(ctx, pending) {
   const onChain = awaitingChain(readApproval(pending.id));
-  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is ${onChain ? "approved and waiting for the chain to make it final" : "still waiting for the owner"} on ${pending.rail} ${pending.chain}`);
+  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) ${onChain ? "has a reported transaction; the command is checking its outcome on" : "is still waiting for the owner on"} ${pending.rail} ${pending.chain}`);
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
     next: onChain
-      ? `nothing was started. The owner has already approved ${pending.id} and has nothing to do: its transaction is on the chain and the chain has not made it final yet${finalWords(pending.rail, pending.chain) ? `, usually ${finalWords(pending.rail, pending.chain)}` : ""}. Run superstables budget wait --id ${pending.id} --shown later, and start this command again once it ends`
+      ? `nothing was started. A transaction was reported for ${pending.id}; its outcome is still being checked. Run superstables budget wait --id ${pending.id} --shown later and follow its next step before starting another owner command on this chain`
       : `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
     reason: onChain
-      ? `owner approval ${pending.id} (${pending.command}) is approved and its transaction is on this chain; it holds the chain until the chain makes it final`
+      ? `owner approval ${pending.id} (${pending.command}) has a reported transaction; its command still holds the approval lock on this chain`
       : `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
   });
 }
@@ -2929,8 +2928,12 @@ function waitUnknown(id, record, reason, next) {
  */
 function landedNext(r) {
   const usually = finalWords(r.rail, r.chain);
-  const budget = r.command === "grant" || r.command === "setup" ? " Do not rely on the budget until it is final." : "";
-  return `landed, not final yet: the chain has not made the block final${usually ? `, usually ${usually}` : ""}. The owner does not need to approve again, and this is not done: run ${statusCommand({ rail: r.rail, chain: r.chain })} later, and start the next owner command only once it is final: until then superstables.com can refuse a new request as still open.${budget}`;
+  const when = `the chain has not made the block final${usually ? `, usually ${usually}` : ""}`;
+  if (r.command === "grant" || r.command === "revoke") {
+    const budget = r.command === "grant" ? " Do not rely on the budget until it is final." : "";
+    return `landed, not final yet: ${when}. The owner does not need to approve again, and this is not done: run ${statusCommand({ rail: r.rail, chain: r.chain })} later, and start the next owner command only once it is final.${budget}`;
+  }
+  return `landed, not final yet: ${when}. The owner does not need to approve again. Check the reported transaction's finality on the chain before starting the next owner command. wait returns the stored result; it does not check finality again.`;
 }
 
 async function wait({ f }) {
