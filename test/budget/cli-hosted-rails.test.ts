@@ -456,9 +456,9 @@ describe("solana, hosted", () => {
   }, 180_000);
 
   it.each([
-    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. Nothing to do for the SOL transfer: it is final once its transaction is finalized$/],
+    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. The SOL transfer is final once its transaction is finalized$/],
     ["grant only", ["--grant", "0.05"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then$/],
-    ["SOL only", ["--fund"], /^landed, not finalized yet\. Nothing to do: the SOL transfer is final once its transaction is finalized$/],
+    ["SOL only", ["--fund"], /^landed, not finalized yet: the SOL transfer is final once its transaction is finalized\. Start the next owner command only then$/],
   ])("setup --hosted with the transactions only confirmed (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     solana.confirmationStatus = "confirmed";
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);

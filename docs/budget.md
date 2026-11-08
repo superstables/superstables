@@ -47,11 +47,11 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 
 ## Choose where to approve
 
-Start with **local approvals**, the default used below: the client serves the approval page on
-`127.0.0.1`, and the owner signs in their browser wallet with no website account. For a runtime on
-a server, **approvals on superstables.com** let the owner approve from another device without forwarding each
-approval port. Choose `setup --hosted` at the setup step and follow
-[Approve on superstables.com instead](#approve-on-superstablescom-instead).
+For a runtime on a server, **approvals on superstables.com** let the owner approve from another device
+without forwarding each approval port. Choose `setup --hosted` at the setup step and follow
+[Approve on superstables.com instead](#approve-on-superstablescom-instead). Otherwise start with **local
+approvals**, the default used below: the client serves the approval page on `127.0.0.1`, and the owner
+signs in their browser wallet with no website account.
 
 Both choices use the same installed CLI or command-capable agent skill. The budget key, purchases
 and journals stay on your machine or server.
