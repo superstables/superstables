@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-// @ts-expect-error plain ES module
 import { checkPins, PIN_FILES } from "../../scripts/version-set.mjs";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
