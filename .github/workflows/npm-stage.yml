@@ -1,23 +1,26 @@
-# Stages each client release on npm through trusted publishing (OIDC). It never publishes.
+# Stages a client release on npm through trusted publishing (OIDC). It never publishes.
 #
-# superstables-release client creates the GitHub Release on the public repo; that event runs this
-# job on a GitHub-hosted runner (npm accepts OIDC only from cloud runners, and public repos never use
-# the self-hosted runner). The job packs the release tag's commit and runs `npm stage publish`.
-# A staged version is not public: an owner approves it with npm two-factor authentication on
-# npmjs.com (Staged Packages tab) or with `npm stage approve <stage-id>`. Configure the npm trusted
-# publisher for this file with `npm stage publish` only, so this job can never put a version live.
+# The owner's `superstables-release npm` starts it, from their terminal, after the private name check
+# passed on a local pack of the release tag: it passes the tag and that tarball's npm integrity. This job
+# packs the tag the same way (a `git archive` export, the commit named), refuses unless its tarball has
+# exactly that integrity, and runs `npm stage publish`. So a staged version is always byte for byte the
+# tarball the name check passed. A staged version is not public: an owner approves it with npm
+# two-factor authentication on npmjs.com (Staged Packages). Configure the npm trusted publisher for
+# this file with `npm stage publish` only, so this job can never put a version live.
 #
-# It runs only in the public repo superstables/superstables, whose URL package.json names as
-# "repository" (npm requires an exact match). In the private repo every job is skipped.
+# It runs on a GitHub-hosted runner (npm accepts OIDC only from cloud runners, and public repos never
+# use the self-hosted runner), and only in the public repo superstables/superstables, whose URL
+# package.json names as "repository" (npm requires an exact match). In the private repo it is skipped.
 name: npm stage
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to stage again, for example v1.1.3
+        description: Release tag to stage, for example v1.1.3
+        required: true
+      integrity:
+        description: npm integrity (sha512-...) of the tarball the private name check passed
         required: true
 
 permissions:
@@ -36,12 +39,15 @@ jobs:
       contents: read
       id-token: write # the OIDC token npm exchanges for a short-lived, stage-only credential
     env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAG: ${{ inputs.tag }}
+      EXPECTED_INTEGRITY: ${{ inputs.integrity }}
     steps:
       - name: Check the tag
         run: |
           [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
-            || { echo "::error::$TAG is not a release tag (v<major>.<minor>.<patch>)"; exit 1; }
+            || { echo "::error::the tag input is not a release tag (v<major>.<minor>.<patch>)"; exit 1; }
+          [[ "$EXPECTED_INTEGRITY" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]] \
+            || { echo "::error::the integrity input is not an npm sha512 integrity"; exit 1; }
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -86,10 +92,14 @@ jobs:
           TARBALLS=("$EXPORT"/.npm-pack/*.tgz)
           [[ -f "${TARBALLS[0]}" && ${#TARBALLS[@]} -eq 1 ]] || { echo "::error::npm pack did not leave exactly one tarball"; exit 1; }
           echo "TARBALL=${TARBALLS[0]}" >> "$GITHUB_ENV"
+          INTEGRITY="sha512-$(openssl dgst -sha512 -binary "${TARBALLS[0]}" | base64 -w0)"
           {
             echo "### npm stage: @superstables/client@$VERSION from $COMMIT"
-            echo "sha512 of $(basename "${TARBALLS[0]}"): \`$(sha512sum "${TARBALLS[0]}" | cut -d' ' -f1)\`"
+            echo "integrity: \`$INTEGRITY\`"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Stage only the bytes the owner's name check passed.
+          [[ "$INTEGRITY" == "$EXPECTED_INTEGRITY" ]] \
+            || { echo "::error::this build's integrity $INTEGRITY differs from the scanned tarball's $EXPECTED_INTEGRITY; nothing is staged"; exit 1; }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
