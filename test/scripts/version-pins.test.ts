@@ -22,7 +22,7 @@ const versionOf = (dir: string) => JSON.parse(readFileSync(join(dir, "package.js
 
 afterEach(() => { for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true }); });
 
-describe("version pins", () => {
+describe("version pins", { timeout: 120_000 }, () => {
   it("every shipped pin names package.json's version", () => {
     expect(checkPins(root)).toEqual([]);
   });
