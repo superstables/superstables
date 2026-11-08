@@ -1,12 +1,18 @@
 # Stages a client release on npm through trusted publishing (OIDC). It never publishes.
 #
-# The owner's `superstables-release npm` starts it, from their terminal, after the private name check
-# passed on a local pack of the release tag: it passes the tag and that tarball's npm integrity. This job
-# packs the tag the same way (a `git archive` export, the commit named), refuses unless its tarball has
-# exactly that integrity, and runs `npm stage publish`. So a staged version is always byte for byte the
-# tarball the name check passed. A staged version is not public: an owner approves it with npm
-# two-factor authentication on npmjs.com (Staged Packages). Configure the npm trusted publisher for
-# this file with `npm stage publish` only, so this job can never put a version live.
+# Normal path: the owner's `superstables-release npm` runs the private name check on a local pack of
+# the release tag, then starts this job with the tag and that tarball's npm integrity. This job packs
+# the tag the same way (a `git archive` export, the commit named) and stages its tarball only when its
+# integrity equals the one it was given.
+#
+# What this does NOT prove: that a name check ran. The integrity input is a caller's claim, not a scan
+# attestation. Anyone who can dispatch workflows on this repo can pack the tag, compute its integrity
+# and stage it without the private name check. What the job does guarantee: it stages only a tarball
+# built from the named tag that matches the given integrity, and only as a staged version.
+#
+# A staged version is not public: an owner approves it with npm two-factor authentication on
+# npmjs.com (Staged Packages), and npm checks nothing else at approval. Configure the npm trusted
+# publisher for this file with `npm stage publish` only, so this job can never put a version live.
 #
 # It runs on a GitHub-hosted runner (npm accepts OIDC only from cloud runners, and public repos never
 # use the self-hosted runner), and only in the public repo superstables/superstables, whose URL
@@ -20,7 +26,7 @@ on:
         description: Release tag to stage, for example v1.1.3
         required: true
       integrity:
-        description: npm integrity (sha512-...) of the tarball the private name check passed
+        description: npm integrity (sha512-...) of the tarball to stage; on the normal path, the one the private name check passed
         required: true
 
 permissions:
@@ -97,9 +103,9 @@ jobs:
             echo "### npm stage: @superstables/client@$VERSION from $COMMIT"
             echo "integrity: \`$INTEGRITY\`"
           } >> "$GITHUB_STEP_SUMMARY"
-          # Stage only the bytes the owner's name check passed.
+          # Stage only a tarball that matches the integrity the caller gave (not proof a scan ran).
           [[ "$INTEGRITY" == "$EXPECTED_INTEGRITY" ]] \
-            || { echo "::error::this build's integrity $INTEGRITY differs from the scanned tarball's $EXPECTED_INTEGRITY; nothing is staged"; exit 1; }
+            || { echo "::error::this build's integrity $INTEGRITY differs from the given $EXPECTED_INTEGRITY; nothing is staged"; exit 1; }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
