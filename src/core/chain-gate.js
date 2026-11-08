@@ -1,18 +1,29 @@
 // The chain gate: one check in front of every signature, wallet request and broadcast, in both builds (`pay` and its
 // signers here, and every rail of `superstables budget`). A chain is signed on only when its own table marks it as a
-// testnet. Any other entry is refused unless all three of these hold: the operator allows mainnet in the environment
-// (SUPERSTABLES_ALLOW_MAINNET, off unless set; read only by `mainnetSwitch` below), the owner's signed settings enable that
-// chain, and the chain has everything mainnet needs. So adding a mainnet to a chain table never turns signing on by itself.
+// testnet. Any other entry is refused unless all of these hold: the operator allows mainnet in the environment
+// (SUPERSTABLES_ALLOW_MAINNET, off unless set; read only by `mainnetSwitch` below), the mainnet manifest
+// (./mainnet-manifest.js, checked by ./mainnet-policy.js) is valid, says signing is live and approves that chain with the
+// same facts the chain table states, mainnet signing is not paused, the owner's signed settings enable that chain, and the
+// chain has everything mainnet needs. Each gate only closes: none turns signing on for another. So adding a mainnet to a
+// chain table never turns signing on by itself, and a pause stops the next signature.
 //
 // Plain JavaScript with JSDoc types, so the budget's .mjs files, its TypeScript and src/ share it; tsc emits it to dist
-// with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. It imports only ./token-facts.js and
-// ./finality-policy.js, which import nothing, so it still loads no file system code. Two prerequisites need files, so the
+// with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. It imports only ./token-facts.js,
+// ./finality-policy.js and ./mainnet-policy.js (which imports only the manifest and token-facts.js), so it still loads no
+// file system code. Two prerequisites need files, so the
 // modules that own those facts register their checks here when they load (rpc-endpoints.mjs, budget/os-keychain.mjs). A
 // check no loaded module registered counts as missing: `pay` loads rpc-endpoints.mjs (through its RPC reads) but not
 // budget/os-keychain.mjs, so for `pay` the agent-key prerequisite always reads as missing.
 
 import { tokenFactsProblem } from "./token-facts.js";
 import { finalityProfile } from "./finality-policy.js";
+import { mainnetRefusal, manifestState, shippedManifest } from "./mainnet-policy.js";
+
+/**
+ * Whether this build's mainnet manifest says signing is live. False in this build: it says off. The gate does not rely
+ * on this: it checks the whole manifest, and the pause, on every call.
+ */
+export const MAINNET_SIGNING = shippedManifest().signing === "live";
 
 /** The environment variable that lets this client sign on a chain that is not a testnet. Only the operator sets it. */
 export const MAINNET_ENV = "SUPERSTABLES_ALLOW_MAINNET";
@@ -57,6 +68,7 @@ export function mainnetSwitchRefusal(env) {
  * @property {string} rail       "evm", "tempo" or "solana"
  * @property {string} key        the chain's key in its table, e.g. "base-sepolia"
  * @property {unknown} testnet   true only for a testnet; anything else is treated as a mainnet
+ * @property {unknown} [chainId] the chain's EIP-155 id, when the caller has it; checked against the mainnet manifest
  * @property {unknown} [token]   the token the caller signs with, as its chain table states it (./token-facts.js); a mainnet needs every fact stated
  */
 /**
@@ -154,12 +166,15 @@ export function chainGate(chain, settings) {
   if (chain?.testnet === true) return "";
   const off = mainnetSwitchRefusal();
   if (off) return `${off}; the ${chainName(chain)} is not marked as a testnet`;
+  if (manifestState().state === "off") return `this client does not sign on mainnet chains: the ${chainName(chain)} is not marked as a testnet, and this build signs on testnets only`;
+  const refusal = mainnetRefusal(chain);
+  if (refusal) return `this client does not sign on the ${chainName(chain)}: ${refusal}`;
   return mainnetGate(chain, settings);
 }
 
 /**
- * The gate for a chain that is not a testnet, once the operator allows mainnet: chainGate calls it only then, and
- * tests call it directly.
+ * The gate for a chain that is not a testnet, once the operator switch, the mainnet manifest and the pause allow it:
+ * chainGate calls it only then, and tests call it directly.
  * @param {GateChain} chain
  * @param {ChainGateSettings | undefined} settings
  * @returns {string}

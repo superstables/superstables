@@ -2,7 +2,7 @@
 // refusal of a mainnet asks it. A chain table that names a mainnet never turns signing on by itself, and neither does the switch:
 // the owner's signed settings and the chain's prerequisites still decide (test/core/mainnet-prerequisites.test.ts).
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MAINNET_ENV, chainGate, mainnetSwitch, mainnetSwitchRefusal, parseMainnetSwitch } from "../../src/core/chain-gate.js";
+import { MAINNET_ENV, chainGate, mainnetGate, mainnetSwitch, mainnetSwitchRefusal, parseMainnetSwitch } from "../../src/core/chain-gate.js";
 import { mainnetUnsupported } from "../../src/core/chain.js";
 import { networkRefusal } from "../../src/core/rails/index.js";
 
@@ -50,11 +50,12 @@ describe("the refusals", () => {
     expect(mainnetUnsupported("Base (mainnet)")).toContain("mainnet is off");
   });
 
-  it("enabled: chainGate moves on to the owner's signed settings, and an unknown mainnet says the tables hold no entry", () => {
+  it("enabled: chainGate moves on to the mainnet manifest (shipped off, so it still refuses), mainnetGate to the owner's signed settings, and an unknown mainnet says the tables hold no entry", () => {
     vi.stubEnv(MAINNET_ENV, "1");
     expect(mainnetSwitchRefusal()).toBe("");
-    expect(chainGate(BASE, undefined)).toMatch(/signed settings do not enable signing on it/);
-    expect(chainGate(BASE, { enabledChains: ["base"] })).toMatch(/is not ready for mainnet signing/);
+    expect(chainGate(BASE, { enabledChains: ["base"] })).toMatch(/^this client does not sign on mainnet chains: .* this build signs on testnets only/);
+    expect(mainnetGate(BASE, undefined)).toMatch(/signed settings do not enable signing on it/);
+    expect(mainnetGate(BASE, { enabledChains: ["base"] })).toMatch(/is not ready for mainnet signing/);
     expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true }, undefined)).toBe("");
     expect(networkRefusal("eip155:8453")).toContain("the chain tables hold no entry for it");
     expect(networkRefusal("eip155:8453")).not.toContain("mainnet is off");

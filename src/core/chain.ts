@@ -12,6 +12,7 @@ import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
 import { mainnetSwitchRefusal } from "./chain-gate.js";
 import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
+import { approvedMainnetChains, registerTestnetFacts } from "./mainnet-policy.js";
 
 export type Rail = "evm" | "tempo" | "solana";
 
@@ -230,8 +231,30 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
   logRange: 500_000,
 });
 
-/** The seven x402 EVM chains, in the budget's order. */
-export const EVM_NETWORKS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
+const EVM_TESTNETS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
+registerTestnetFacts(EVM_TESTNETS.map((n) => ({ chainId: n.chainId, tokenAddress: n.token.address })));
+
+/**
+ * The mainnets the mainnet manifest approves (./mainnet-manifest.js, checked by ./mainnet-policy.js), built like every
+ * other entry. None while the manifest says signing is off, so this table holds testnets only in this build. A chain
+ * listed here is still signed on only when the chain gate allows it.
+ */
+const EVM_MAINNETS: readonly EvmNetwork[] = approvedMainnetChains().map(([key, c]) => evm({
+  key,
+  chainId: c.chainId,
+  label: c.label,
+  testnet: false,
+  ...(c.v1Name ? { v1Name: c.v1Name } : {}),
+  rpc: c.rpc.url,
+  explorer: c.explorer,
+  token: { symbol: c.token.symbol, address: c.token.address as `0x${string}`, decimals: c.token.decimals, domain: { ...c.token.domain }, approveReset: c.token.approveReset },
+  chainName: c.label,
+  nativeCurrency: { ...c.nativeCurrency },
+  blockSeconds: c.blockSeconds,
+}));
+
+/** The seven x402 EVM testnets, in the budget's order, then any mainnet the manifest approves (none in this build). */
+export const EVM_NETWORKS: readonly EvmNetwork[] = [...EVM_TESTNETS, ...EVM_MAINNETS];
 
 /** How each EVM entry above is built (it refuses an entry with a fact missing); for tests. Not part of the SDK. */
 export { evm as evmNetwork };
@@ -287,6 +310,7 @@ for (const n of [TEMPO_MODERATO, SOLANA_DEVNET]) {
   const problem = tokenFactsProblem(n.token, n.rail);
   if (problem) throw new Error(`chain table: ${n.key}: ${problem}`);
 }
+registerTestnetFacts([TEMPO_MODERATO, SOLANA_DEVNET].map((n) => ({ chainId: n.chainId, tokenAddress: n.token.address })));
 
 export const DEFAULT_NETWORK = BASE_SEPOLIA;
 

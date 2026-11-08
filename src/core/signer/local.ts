@@ -11,6 +11,7 @@ import { verifyTypedData } from "viem";
 import type { PrivateKeyAccount } from "viem/accounts";
 import { chainGate, chainGateSettings } from "../chain-gate.js";
 import { evmNetworkFor, isSameAddress, networkFor } from "../chain.js";
+import { MainnetRefused, reserveMainnetSpend } from "../mainnet-spend.js";
 import { judgeSignRequest, x402RailFor } from "../rails/index.js";
 import { untrustedText } from "../text.js";
 import { buildTypedData } from "./steps/eip3009.js";
@@ -42,7 +43,7 @@ export class LocalKeySigner implements Signer {
     // refuses it again rather than sign over a domain the client does not know.
     const network = evmNetworkFor(String(req.requirements.network ?? ""));
     if (!network || !x402RailFor(network)) throw new SignRefused("invalid", `this wallet does not sign on ${untrustedText(req.requirements.network ?? "an unnamed chain", 60)}`);
-    const gate = chainGate({ rail: network.rail, key: network.key, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
+    const gate = chainGate({ rail: network.rail, key: network.key, chainId: network.chainId, testnet: network.testnet, token: network.token }, chainGateSettings()); if (gate) throw new SignRefused("invalid", gate);
     // Judged again here, as every signer must: the chain gate, the offer's `extra` allow-list, Permit2, the pinned domain,
     // the amount and the recipient. A request sent straight to the wallet gets no easier a check than one `pay` made.
     const judged = judgeSignRequest(req);
@@ -62,6 +63,15 @@ export class LocalKeySigner implements Signer {
       nonce: typed.message.nonce as `0x${string}`,
     };
     const types = { TransferWithAuthorization: typed.types.TransferWithAuthorization };
+    // On a mainnet this request's amount is reserved against the manifest's caps first, under the ledger's lock, and
+    // the pause is read again there: nothing is signed past a cap or a pause. The reservation is this request's own and
+    // is never released, even if the key fails or the same nonce is signed again. A testnet reserves nothing.
+    try {
+      await reserveMainnetSpend(network, message.value, `eip3009:${network.key}:${message.from.toLowerCase()}:${message.nonce.toLowerCase()}`);
+    } catch (err) {
+      if (err instanceof MainnetRefused) throw new SignRefused("policy", err.message);
+      throw new SignRefused("invalid", `the mainnet spending ledger could not be checked (${err instanceof Error ? err.message : String(err)}); nothing was signed`);
+    }
     const signature = await this.account.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
     const genuine = await verifyTypedData({ address: this.account.address, domain, types, primaryType: "TransferWithAuthorization", message, signature });
     if (!genuine) throw new SignRefused("invalid", "the wallet's signature did not verify; nothing was returned");

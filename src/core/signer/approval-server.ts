@@ -32,6 +32,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Hex } from "viem";
 import { networkFor } from "../chain.js";
 import { DEFAULT_APPROVE_PORT, approvalsPath, ensureDir, recordsDir } from "../home.js";
+import { mainnetSendRefusal } from "../mainnet-spend.js";
 import type { RailRequirement } from "../rails/types.js";
 import { approvalIdHash } from "../records.js";
 import { untrustedText } from "../text.js";
@@ -101,6 +102,8 @@ interface ApprovalRecord extends StepRecord {
   beforeWalletSends?: (intent: WalletSendIntent) => Promise<void>;
   /** A POST is being answered: a second one is refused (409) rather than racing it. */
   busy?: boolean;
+  /** Mainnet: the one answer this page prepared, for the one account it prepared it for (see mainnetAccountAnswer). */
+  mainnetAnswer?: { account: string; body: unknown };
   finish: (outcome: ApprovalOutcome) => void;
 }
 
@@ -623,6 +626,11 @@ export class ApprovalServer {
         this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
         return;
       }
+      const boundary = this.mainnetAccountAnswer(record, address);
+      if (boundary) {
+        this.sendJson(res, boundary.http, boundary.body);
+        return;
+      }
       const answer = await record.step.prepare(record, address);
       let note: SettingsNote | undefined;
       if (answer.http === 200) {
@@ -635,7 +643,14 @@ export class ApprovalServer {
           note = undefined;
         }
       }
-      this.sendJson(res, answer.http, note ? { ...(answer.body as object), signedSettings: note } : answer.body);
+      const finalBoundary = this.mainnetAccountAnswer(record, address);
+      if (finalBoundary) {
+        this.sendJson(res, finalBoundary.http, finalBoundary.body);
+        return;
+      }
+      const shown = note ? { ...(answer.body as object), signedSettings: note } : answer.body;
+      if (answer.http === 200 && record.network.testnet !== true) record.mainnetAnswer = { account: address, body: shown };
+      this.sendJson(res, answer.http, shown);
       return;
     }
 
@@ -674,6 +689,34 @@ export class ApprovalServer {
       record.finish({ status: "signed", result: answer.signed });
     }
     this.sendJson(res, answer.http, answer.body);
+  }
+
+  /**
+   * The mainnet boundary of /account, read right before anything is prepared for a wallet or handed to it again. On a
+   * mainnet the page asks only while signing is open: paused or closed, it prepares nothing and the approval ends as
+   * refused (the page's hold, browser.ts, still counts). And it asks one wallet for one authorization, the one its hold
+   * counts: the same account gets that same answer again, another account gets nothing. Undefined on a testnet, where a
+   * person may switch accounts and each switch is prepared anew. What a wallet was already handed before a pause can't
+   * be taken back; the payment core keeps any signature it returns and never sends it (pay.ts).
+   */
+  private mainnetAccountAnswer(record: ApprovalRecord, address: string): { http: number; body: unknown } | undefined {
+    if (record.network.testnet === true) return undefined;
+    const closed = record.status !== "pending" || Date.now() >= record.expiresAt
+      ? "this approval has expired or ended"
+      : mainnetSendRefusal(record.network);
+    if (closed) {
+      const reason = `${closed}; nothing was prepared for your wallet`;
+      record.status = "refused";
+      record.reason = reason;
+      this.audit(record);
+      record.finish({ status: "refused", code: "policy", reason });
+      return { http: 409, body: { error: reason, status: record.status, reason } };
+    }
+    if (!record.mainnetAnswer) return undefined;
+    if (record.mainnetAnswer.account !== address) {
+      return { http: 409, body: { error: `this payment was prepared for ${record.mainnetAnswer.account}; connect that account again, or reject` } };
+    }
+    return { http: 200, body: record.mainnetAnswer.body };
   }
 }
 

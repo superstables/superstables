@@ -28,6 +28,7 @@ import { Records, approvalIdHash, attemptRunner, settleStaleAwaiting, RECONCILE_
 import { SignRefused, type SignResult, type Signer } from "./signer/types.js";
 import { evaluatePolicy, policyAmount, type Policy } from "./policy.js";
 import { processRunning, thisProcess, withFileLock } from "./lock.js";
+import { mainnetSendRefusal } from "./mainnet-spend.js";
 import { firstPayable, railFor } from "./rails/index.js";
 import { memoReferral } from "./referral-memo.mjs";
 import { nonceReferral } from "./referral-nonce.js";
@@ -596,6 +597,12 @@ export class PaymentEngine {
             refusal: "invalid" as const,
             reason: `the owner's wallet signed a transaction identical to one an earlier payment signed (attempt ${twin.id}), and the chain could not tell the two apart`,
           };
+        }
+        // A mainnet paused or closed while the owner signed: the signature stays here and is never sent.
+        const sendNetwork = networkFor(offer.terms.network);
+        const closed = sendNetwork ? mainnetSendRefusal(sendNetwork) : "";
+        if (closed) {
+          return { allowed: false, refusal: "policy" as const, reason: `mainnet signing stopped after the owner signed (${closed}); the signature was kept on this computer and not sent` };
         }
         const judged = this.reservationOpen(attempt) ? { allowed: true } : this.reserve(attempt, quote);
         if (judged.allowed) {
