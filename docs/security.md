@@ -5,13 +5,13 @@ and what it does not.
 
 These payment flows have different boundaries:
 
-| | Single purchase on your machine (`pay`) | Single purchase on superstables.com (`superstables budget buy-once`) | Budget (`superstables budget`) |
+| | Budget (`superstables budget`) | Single purchase on superstables.com (`superstables budget buy-once`) | Single purchase on your machine (`pay`) |
 | --- | --- | --- | --- |
-| Who approves | The owner, in their own wallet, for every payment | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, once, for the whole budget |
-| Keys the client holds | None with a browser wallet; `--wallet local` stores a signing key | None | The agent key, which signs purchases. The owner's key stays in their wallet |
-| What limits spending | The owner's decision on each payment. The spend policy is a check in this client | The owner's decision on that purchase. The client checks `--max` and the listing price against the integer amount reported by the site; these checks do not constrain a compromised client or site | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) |
-| What a hostile agent can do | Ask for payments. With `--wallet local`, code running as the owner can also read that key | Ask for purchases, but cannot approve them without the owner's wallet. The one-open-purchase check applies only to this client's shared state | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address |
-| How it ends | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default | The initial approval window is ten minutes. Expiry does not cancel a wallet request or transaction already underway | `superstables budget revoke`, approved in the owner's wallet |
+| Who approves | The owner, in their own wallet, once, for the whole budget | The owner, in their own wallet on the site, for one purchase | The owner, in their own wallet, for every payment |
+| Keys the client holds | The agent key, which signs purchases. The owner's key stays in their wallet | None | None with a browser wallet; `--wallet local` stores a signing key |
+| What limits spending | The chain: the allowance (`evm`), the delegated amount (`solana`), the access key's limits (`tempo`) | The owner's decision on that purchase. The client checks `--max` and the listing price against the integer amount reported by the site; these checks do not constrain a compromised client or site | The owner's decision on each payment. The spend policy is a check in this client |
+| What a hostile agent can do | Use the agent key to spend what is left of the budget (on `evm` and `solana`, to any address), and move funds held at the agent's address | Ask for purchases, but cannot approve them without the owner's wallet. The one-open-purchase check applies only to this client's shared state | Ask for payments. With `--wallet local`, code running as the owner can also read that key |
+| How it ends | `superstables budget revoke`, approved in the owner's wallet | The initial approval window is ten minutes. Expiry does not cancel a wallet request or transaction already underway | A browser approval request expires after 5 minutes; a local-wallet request after 120 seconds, by default |
 
 The sections below cover `pay`: the approval page on `127.0.0.1` and the owner's
 wallet. Budgets have their own section: [Budgets](#budgets). `superstables budget buy-once` and a
