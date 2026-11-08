@@ -1,7 +1,7 @@
 # Superstables client
 
 Superstables lets coding agents find paid services, check prices and pay for what they need.
-With Budgets, you approve an amount in your wallet and the agent can spend within it. Single purchase lets you approve each purchase, both available on your machine or on superstables.com.
+With Budgets, you approve an amount in your wallet and the agent can spend within it. Single purchase lets you approve each purchase, both available on superstables.com or on your machine.
 
 **Testnet by default.** Uses test tokens, no real money. Mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
 
@@ -87,7 +87,7 @@ Don't run `npx superstables`; it can download a different package.
 
 - [Installation and agent setup](docs/install.md)
 - [Budgets: grant, buy, check and revoke](docs/budget.md)
-- [Single purchase: on your machine or on superstables.com](docs/buy-once.md)
+- [Single purchase: on superstables.com or on your machine](docs/buy-once.md)
 - [CLI reference](docs/cli.md) and [budget commands](docs/cli-budget.md)
 - [Receipts and interrupted payments](docs/records.md)
 - [Seller referrals: claim a listing and verify referrals](docs/seller-referrals.md)

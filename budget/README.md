@@ -11,7 +11,7 @@ There are two ways to pay, and an agent can offer both:
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on a page on their own machine or on superstables.com. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on superstables.com or on a page on their own machine. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays. On `solana`, a buy that straddled a revoke may need several `reconcile` runs: each run scans a window of finalized blocks, so run it again until it answers.
 
@@ -34,9 +34,9 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 <a id="local-or-hosted-approvals"></a>
 
-### Approvals on your machine or on superstables.com
+### Approvals on superstables.com or on your machine
 
-The owner approves in one of two places. Local approvals are the default and need nothing but a wallet. Approvals on superstables.com are for owners who want to approve from another device, and need a superstables.com account.
+The owner approves in one of two places. Approvals on superstables.com are for owners who want to approve from another device, and need a superstables.com account. Local approvals are the default and need nothing but a wallet.
 
 | | Local (default) | On superstables.com (`setup --rail R --hosted`) |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ PayAI's Echo sellers refund each payment to the payer, which is the agent key. T
 
 ## Quickstart
 
-You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom chain for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. With local approvals the page runs on `127.0.0.1`, so the wallet must be a browser extension on the machine that runs the command. Phone wallets (WalletConnect) are not supported on that page. With approvals on superstables.com, on every rail, you approve on superstables.com in the browser where you are signed in with your wallet. It runs on Linux and macOS; on Windows, run it in WSL (native Windows is refused).
+You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom chain for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. With approvals on superstables.com, on every rail, you approve on superstables.com in the browser where you are signed in with your wallet. With local approvals the page runs on `127.0.0.1`, so the wallet must be a browser extension on the machine that runs the command. Phone wallets (WalletConnect) are not supported on that page. It runs on Linux and macOS; on Windows, run it in WSL (native Windows is refused).
 
 Install. Pick one; all run the same commands on the same keys and state.
 
@@ -309,7 +309,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom chain.
 - A Solana wallet's chain: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that changes the transaction: the command sends only the transaction it built, with one exception. Phantom 26.31.0 added compute unit limit and price instructions to a transaction that had none; the command accepts those two, when the extra fee is at most 0.001 SOL and every original instruction, account and signer is unchanged. Any other change is refused and nothing is sent. With this, Phantom 26.31.0 approved `fund-agent`, `grant` and `revoke` on devnet. Phantom's Lighthouse checks were not observed in these tests.
-- Local approvals run on the machine that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that machine, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`). To approve from another device, use approvals on superstables.com (needs a superstables.com account).
+- To approve from another device, use approvals on superstables.com (needs a superstables.com account). Local approvals run on the machine that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that machine, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`).
 - Approvals on superstables.com for `recover`'s owner steps.
 - `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell.

@@ -11,17 +11,17 @@ without paying. It then asks for one purchase, and the owner approves or rejects
 wallet. Nothing is paid without that approval, and every purchase needs a new one. For purchases
 without an approval each time, see [Budget](budget.md).
 
-**Single purchase:** approve one purchase in your wallet, on your machine or on superstables.com.
+**Single purchase:** approve one purchase in your wallet, on superstables.com or on your machine.
 
 There are two ways:
 
+- **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
+  on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
+  wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 - **Single purchase on your machine** (`pay`): the owner approves on a page on this
   machine, with no account, on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
   Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
-- **Single purchase on superstables.com** (`superstables budget buy-once`): the owner approves on superstables.com,
-  on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. Choose this when the owner's
-  wallet is on another device. See [Single purchase on superstables.com](#hosted-buy-once-superstables-budget-buy-once).
 
 **Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
 No mainnet chain is payable in 1.1.3, even with the switch enabled.
