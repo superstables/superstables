@@ -66,6 +66,7 @@
     "plugin:sync": "node scripts/plugin-sync.mjs",
     "copy:check": "node scripts/check-banned-copy.mjs",
     "plugin:check": "node scripts/plugin-sync.mjs --check",
+    "version:set": "node scripts/version-set.mjs",
     "install-check": "node scripts/install-check.mjs",
     "docs:cli": "node scripts/cli-docs.mjs",
     "audit:shipped": "node scripts/bundle-audit.mjs",
