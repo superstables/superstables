@@ -45,11 +45,12 @@ describe("version pins", { timeout: 120_000 }, () => {
 
   it("leaves history prose alone, and a bump to the documented example version passes", () => {
     const dir = copy();
-    edit(dir, "docs/install.md", (t) => `${t}\nThe 1.0.0 release added this feature. The ${versionOf(dir)} release added that one.\n`);
+    const before = versionOf(dir);
+    edit(dir, "docs/install.md", (t) => `${t}\nThe 1.0.0 release added this feature. The ${before} release added that one.\n`);
     expect(checkPins(dir)).toEqual([]);
     setVersion(dir, "1.2.3");
     expect(checkPins(dir)).toEqual([]);
-    expect(readFileSync(join(dir, "docs/install.md"), "utf8")).toContain("The 1.0.0 release added this feature. The 1.1.3 release added that one.");
+    expect(readFileSync(join(dir, "docs/install.md"), "utf8")).toContain(`The 1.0.0 release added this feature. The ${before} release added that one.`);
   });
 
   it("a run with the current version repairs a pin that fell behind", () => {
