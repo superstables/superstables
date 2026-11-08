@@ -11,7 +11,7 @@ There are two ways to pay, and an agent can offer both:
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on a page on their own machine or on superstables.com. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on superstables.com or on a page on their own machine. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays. On `solana`, a buy that straddled a revoke may need several `reconcile` runs: each run scans a window of finalized blocks, so run it again until it answers.
 
@@ -34,7 +34,7 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 <a id="local-or-hosted-approvals"></a>
 
-### Approvals on your machine or on superstables.com
+### Approvals on superstables.com or on your machine
 
 The owner approves in one of two places. Local approvals are the default and need nothing but a wallet. Approvals on superstables.com are for owners who want to approve from another device, and need a superstables.com account.
 
