@@ -128,7 +128,8 @@ Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
 Amounts are in the budget token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), for an owner
+transaction that landed but is not final on chain yet (state landed, or a setup step landed; chain_final is false), and for a
 buy-once unknown that a later wait can still read, true otherwise, as before chain_final existed. Scripts test final for
 command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
