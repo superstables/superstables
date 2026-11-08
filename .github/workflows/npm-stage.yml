@@ -1,0 +1,104 @@
+# Stages each client release on npm through trusted publishing (OIDC). It never publishes.
+#
+# superstables-release client creates the GitHub Release on the public repo; that event runs this
+# job on a GitHub-hosted runner (npm accepts OIDC only from cloud runners, and public repos never use
+# the self-hosted runner). The job packs the release tag's commit and runs `npm stage publish`.
+# A staged version is not public: an owner approves it with npm two-factor authentication on
+# npmjs.com (Staged Packages tab) or with `npm stage approve <stage-id>`. Configure the npm trusted
+# publisher for this file with `npm stage publish` only, so this job can never put a version live.
+#
+# It runs only in the public repo superstables/superstables, whose URL package.json names as
+# "repository" (npm requires an exact match). In the private repo every job is skipped.
+name: npm stage
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to stage again, for example v1.1.3
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: github.repository == 'superstables/superstables' && !github.event.repository.private
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm exchanges for a short-lived, stage-only credential
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Check the tag
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
+            || { echo "::error::$TAG is not a release tag (v<major>.<minor>.<patch>)"; exit 1; }
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22 # the release desk's major; a v1.1.2 pack this way matched npm's published integrity
+          registry-url: https://registry.npmjs.org
+
+      # Staged publishing needs npm 11.15.0 or later; trusted publishing needs 11.5.1 and Node 22.14.
+      - name: Install npm 11.21.1
+        run: npm install -g npm@11.21.1 && npm --version
+
+      - name: Check the version matches the tag
+        run: |
+          VERSION=$(node -p 'require("./package.json").version')
+          [[ "v$VERSION" == "$TAG" ]] || { echo "::error::package.json says $VERSION, tag is $TAG"; exit 1; }
+          [[ "$(node -p 'require("./package.json").private === true')" == false ]] \
+            || { echo "::error::package.json is marked private; it is never staged"; exit 1; }
+          if [[ -n "$(npm view "@superstables/client@$VERSION" version 2>/dev/null)" ]]; then
+            echo "::error::@superstables/client@$VERSION is already on npm"; exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$VERSION" == *-* ]]; then echo "NPM_TAG=next" >> "$GITHUB_ENV"; else echo "NPM_TAG=latest" >> "$GITHUB_ENV"; fi
+
+      # Pack the way superstables-release npm does: npm ci and npm pack in a `git archive` export of the
+      # tag's commit, with that commit named, so the tarball matches a local pack of the same tag byte for
+      # byte (scripts/repro-check.mjs checks two such builds are identical).
+      - name: Pack in a git archive export
+        run: |
+          COMMIT=$(git rev-parse --short=10 HEAD)
+          EXPORT="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT"
+          git archive HEAD | tar -x -C "$EXPORT"
+          cd "$EXPORT"
+          export SUPERSTABLES_SKILL_FROM_ARCHIVE=1 SUPERSTABLES_BUILD_COMMIT="$COMMIT"
+          npm ci --no-audit --no-fund --loglevel=error
+          mkdir -p .npm-pack
+          npm pack --silent --pack-destination .npm-pack >/dev/null
+          TARBALLS=("$EXPORT"/.npm-pack/*.tgz)
+          [[ -f "${TARBALLS[0]}" && ${#TARBALLS[@]} -eq 1 ]] || { echo "::error::npm pack did not leave exactly one tarball"; exit 1; }
+          echo "TARBALL=${TARBALLS[0]}" >> "$GITHUB_ENV"
+          {
+            echo "### npm stage: @superstables/client@$VERSION from $COMMIT"
+            echo "sha512 of $(basename "${TARBALLS[0]}"): \`$(sha512sum "${TARBALLS[0]}" | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-tarball-${{ env.VERSION }}
+          path: ${{ env.TARBALL }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Stage on npm (an owner approves it with 2FA)
+        run: |
+          npm stage publish "$TARBALL" --tag "$NPM_TAG"
+          echo "Staged with dist-tag $NPM_TAG. An owner approves it on npmjs.com (Staged Packages) with 2FA." >> "$GITHUB_STEP_SUMMARY"
