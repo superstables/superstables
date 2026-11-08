@@ -1,6 +1,6 @@
 # Superstables client
 
-The client lets coding agents find paid services, check prices and pay from an owner-controlled wallet. It ships as a CLI (`superstables`), a TypeScript SDK, an agent skill and a plugin. Testnet only: it uses test tokens. No mainnet chain is payable in this release.
+The client lets coding agents find paid services, check prices and pay from an owner-controlled wallet. It ships as a CLI (`superstables`), a TypeScript SDK, an agent skill and a plugin. Testnet by default: it uses test tokens. Mainnet stays off unless `SUPERSTABLES_ALLOW_MAINNET` is set to `1` or `true` and the owner's signed settings enable that chain (`src/core/chain-gate.js`). Leave that variable unset.
 
 ## Set up and check
 
