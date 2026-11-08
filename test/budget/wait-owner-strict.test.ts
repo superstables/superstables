@@ -12,6 +12,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createIdentitySource } from "../../budget/lock-identity.mjs";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 let home: string;
@@ -41,7 +42,7 @@ function budget(args: string[], terminal: string, extra: Record<string, string>)
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
     child.stderr.on("data", (c) => (stderr += String(c)));
-    child.stdin.end(terminal);
+    endStdin(child, terminal);
     child.once("error", fail);
     child.once("close", (code) => {
       const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));

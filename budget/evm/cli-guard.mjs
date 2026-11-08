@@ -20,7 +20,7 @@
 // Only Node built-ins, the plain chain table (chains.mjs, no imports) and the chain gate (no imports) are used here.
 import { dirname, basename, resolve } from "node:path";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
-import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { chainGate, chainGateSettings, mainnetSwitchRefusal } from "../../src/core/chain-gate.js";
 
 // v = flags that take a value, b = boolean flags, r = required flags (value or boolean), pos = positional arguments
 // (name list; all required), keys = which secret files the script may open (documentation, printed in --help).
@@ -67,7 +67,9 @@ if (argv.includes("--help") || argv.includes("-h")) {
   process.exit(0);
 }
 
-// Testnet only. A mainnet named by --mainnet, --chain or B4_CHAIN (by name or chain id) is refused here, before anything else runs.
+// Mainnet is off unless the operator sets SUPERSTABLES_ALLOW_MAINNET (chain-gate.js). While it is off (or holds an invalid value),
+// a mainnet named by --mainnet, --chain or B4_CHAIN (by name or chain id) is refused here, before anything else runs. While it
+// is on, the name goes on to chains.ts (an unknown chain exits 2) and to the chain gate below.
 const MAINNET_IDS = new Set(["1", "10", "56", "130", "137", "143", "146", "480", "999", "1329", "4663", "5042", "8453", "42161", "42220", "43114", "1187947933"]);
 const MAINNET_NAMES = new Set(["base", "arc", "ethereum", "eth", "optimism", "op", "polygon", "arbitrum", "avalanche", "bsc", "monad", "sei", "celo", "robinhood", "skale-base"]);
 const looksMainnet = (v) => {
@@ -76,10 +78,11 @@ const looksMainnet = (v) => {
 };
 const ci = argv.indexOf("--chain");
 const chainValue = ci >= 0 ? argv[ci + 1] : process.env.B4_CHAIN;
-if (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith("--") && looksMainnet(chainValue))) {
+const mainnetOff = mainnetSwitchRefusal();
+if (mainnetOff && (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith("--") && looksMainnet(chainValue)))) {
   const shown = argv.includes("--mainnet") ? "--mainnet" : String(chainValue);
-  process.stderr.write(`REFUSED: "${shown}" is a mainnet. superstables budget is testnet only (--chain ${EVM_CHAIN_KEYS.join(", ")}). Nothing was signed or sent.\n`);
-  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: "mainnet is refused: testnet only", next: `use --chain ${EVM_CHAIN_KEYS.join(" or --chain ")}` })}\n`);
+  process.stderr.write(`REFUSED: "${shown}" is a mainnet, and ${mainnetOff}. Nothing was signed or sent (testnets: --chain ${EVM_CHAIN_KEYS.join(", ")}).\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: shown, state: "refused_precheck", reason: `"${shown}" is a mainnet, and ${mainnetOff}`, next: `use --chain ${EVM_CHAIN_KEYS.join(" or --chain ")}` })}\n`);
   process.exit(3);
 }
 

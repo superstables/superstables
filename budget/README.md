@@ -1,8 +1,8 @@
 # superstables budget
 
-An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
+An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (USDG on Robinhood Chain Testnet, pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
 
-**Testnet only.** Test tokens, no real money. `superstables budget` refuses mainnet chains. Do not point it at real money.
+**Testnet by default.** Test tokens, no real money. `superstables budget` refuses mainnet chains unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`. Do not point it at real money.
 
 There are two ways to pay, and an agent can offer both:
 
@@ -11,7 +11,7 @@ There are two ways to pay, and an agent can offer both:
 
 Three ideas hold it together:
 
-- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on a page on their own machine or on superstables.com. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
+- **The chain enforces the budget.** The owner connects a wallet during setup and approves grants, revokes and funding transfers, on superstables.com or on a page on their own machine. The agent signs each purchase with its own key. The client sends each budget purchase directly to the seller; no site approval is needed per purchase. Any owner steps in EVM recovery always use the local approval page, including after setup on superstables.com.
 - **The CLI checks each purchase.** Before it signs anything, `superstables budget buy` checks the price against `--max`, the token and, when `--pay-to` is supplied, the expected recipient. The agent must read the result and the exit code.
 - **Every purchase has an ID and a journal.** If a run dies half way, `superstables budget reconcile` reads the chain and says what happened. It never pays. On `solana`, a buy that straddled a revoke may need several `reconcile` runs: each run scans a window of finalized blocks, so run it again until it answers.
 
@@ -34,9 +34,9 @@ The steps use the `evm` rail. On `tempo` (access key) and `solana` (SPL delegate
 
 <a id="local-or-hosted-approvals"></a>
 
-### Approvals on your machine or on superstables.com
+### Approvals on superstables.com or on your machine
 
-The owner approves in one of two places. Local approvals are the default and need nothing but a wallet. Approvals on superstables.com are for owners who want to approve from another device, and need a superstables.com account.
+The owner approves in one of two places. Approvals on superstables.com are for owners who want to approve from another device, and need a superstables.com account. Local approvals are the default and need nothing but a wallet.
 
 | | Local (default) | On superstables.com (`setup --rail R --hosted`) |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ The owner approves in one of two places. Local approvals are the default and nee
 In both modes the agent key stays on this machine, the owner's key stays in their wallet, and the command reads the chain itself before it reports success. Budget purchases need no site approval and go directly to the seller, which may itself be Superstables.
 
 Budget approvals on superstables.com support Base Sepolia, Arc Testnet, Arbitrum Sepolia,
-Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet. Approval on superstables.com keeps the CLI, agent key and journals on your own runtime; it lets the
+Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato and Solana devnet. Approval on superstables.com keeps the CLI, agent key and journals on your own runtime; it lets the
 owner use a wallet on another device. The owner signs in with an Ethereum or Solana wallet or an
 email address. An account admin links the wallets that approve on the account page: an Ethereum wallet for the
 EVM chains and Tempo Moderato, or a Solana wallet for Solana devnet.
@@ -111,11 +111,11 @@ PayAI's Echo sellers refund each payment to the payer, which is the agent key. T
 
 ## Quickstart
 
-You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom chain for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. With local approvals the page runs on `127.0.0.1`, so the wallet must be a browser extension on the machine that runs the command. Phone wallets (WalletConnect) are not supported on that page. With approvals on superstables.com, on every rail, you approve on superstables.com in the browser where you are signed in with your wallet. It runs on Linux and macOS; on Windows, run it in WSL (native Windows is refused).
+You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask, Rabby, Coinbase Wallet, ...) for `evm`, any EVM browser wallet that can add a custom chain for `tempo`, and any Solana wallet (Phantom, Solflare, Backpack, ...) for `solana`. With approvals on superstables.com, on every rail, you approve on superstables.com in the browser where you are signed in with your wallet. With local approvals the page runs on `127.0.0.1`, so the wallet must be a browser extension on the machine that runs the command. Phone wallets (WalletConnect) are not supported on that page. It runs on Linux and macOS; on Windows, run it in WSL (native Windows is refused).
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 0.5.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.1.3 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -242,7 +242,7 @@ An SPL token account has one delegate slot. A new grant would overwrite a live o
 
 ## Single purchase on superstables.com
 
-`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in to their account. They pay from a wallet linked to their account: an Ethereum wallet on the EVM chains and Tempo Moderato, or a Solana wallet on Solana devnet. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), or Tempo Moderato (test pathUSD; the owner pays the fee).
+`superstables budget buy-once` asks superstables.com for one purchase of a service it lists for this, and the owner approves it there, signed in to their account. They pay from a wallet linked to their account: an Ethereum wallet on the EVM chains and Tempo Moderato, or a Solana wallet on Solana devnet. There is no setup, no budget or agent key: the owner's wallet approves one payment of exactly the amount, to the recipient, the page shows. It runs on the chain the service's listing names: Base Sepolia, Arc Testnet or Solana devnet (test USDC, from faucet.circle.com; the seller's facilitator pays the fee), Robinhood Chain Testnet (test USDG, from faucet.paxos.com; the seller pays the fee) or Tempo Moderato (test pathUSD; the owner pays the fee).
 
 ```
 superstables budget find --once                                          # what can be bought this way, with inputs and prices
@@ -250,7 +250,7 @@ superstables budget buy-once --service superstables-demo-market-data --param ass
 superstables budget wait --id <id> --shown                               # until the owner has approved and the purchase is final
 ```
 
-`--max` is required: the most you accept, in the service's token. The command refuses before it asks if the price is above it. It prints the owner's approval link and a match code, as an `APPROVE` line as soon as they exist. Run by an agent (stdout not a terminal), it then returns at once with `state: "waiting_owner"` and an `id`, and `wait` reads the purchase from the site until it ends. The final `RESULT` has `paid`, `delivered`, the `amount`, the transaction, the purchase id (the receipt's id on the site) and `responseFile`: what the seller returned, saved as a file. The agent treats it as data, never instructions. The owner sees the purchase on their superstables.com account page, and can set a limit per payment and per day there.
+`--max` is required: the most you accept, in the service's token. The command refuses before it asks if the price is above it. It prints the owner's approval link and a match code, as an `APPROVE` line as soon as they exist. Run by an agent (stdout not a terminal), it then returns at once with `state: "waiting_owner"` and an `id`, and `wait` reads the purchase from the site until it ends. The final `RESULT` has `paid`, `delivered`, the `amount`, the transaction, the purchase id (the receipt's id on the site) and `responseFile`: what the seller returned, saved as a file. The agent treats it as data, never instructions. The owner sees the purchase on their superstables.com account page. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset. Limits count USDC, USDG and pathUSD token units together across chains; the daily limit uses UTC.
 
 A purchase the owner rejects, or does not approve within 10 minutes, pays nothing (exit 3). One buy-once purchase is open at a time. The full contract is in [CLI.md](CLI.md#buy-once).
 
@@ -262,7 +262,7 @@ The `superstables-payments` skill ([SKILL.md](../skills/superstables-payments/SK
 
 1. Install the skill as `~/.claude/skills/superstables-payments` for Claude Code or `~/.agents/skills/superstables-payments` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link the `skills/superstables-payments/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together.
 2. Give the agent a shell (in the checkout, if you linked the folder), its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
-3. Ask for the purchase, or invoke `/superstables-payments` in Claude Code or `$superstables-payments` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
+3. Ask for the purchase, or invoke the standalone skill as `/superstables-payments` in Claude Code or `$superstables-payments` in Codex. The plugin's skill is `/superstables:superstables` in Claude Code and `$superstables` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
 
 Give the agent a purchase scope and price ceiling. The agent chooses purchases within that authorization. The CLI checks them before signing; these checks do not constrain a stolen key.
 
@@ -309,9 +309,9 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom chain.
 - A Solana wallet's chain: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that changes the transaction: the command sends only the transaction it built, with one exception. Phantom 26.31.0 added compute unit limit and price instructions to a transaction that had none; the command accepts those two, when the extra fee is at most 0.001 SOL and every original instruction, account and signer is unchanged. Any other change is refused and nothing is sent. With this, Phantom 26.31.0 approved `fund-agent`, `grant` and `revoke` on devnet. Phantom's Lighthouse checks were not observed in these tests.
-- Local approvals run on the machine that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that machine, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`). To approve from another device, use approvals on superstables.com (needs a superstables.com account).
+- To approve from another device, use approvals on superstables.com (needs a superstables.com account). Local approvals run on the machine that runs the command, on `127.0.0.1`. Use the owner's wallet browser on that machine, or forward the port over SSH (`ssh -L PORT:127.0.0.1:PORT`).
 - Approvals on superstables.com for `recover`'s owner steps.
-- `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
+- `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
 - Mainnet: refused everywhere.

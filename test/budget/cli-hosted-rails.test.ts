@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 // A client process that loads this file does not spend the real minute `finalizedOf` waits for a signature that is only confirmed.
-const SKIP_FINALITY_WAIT = `--import=${fileURLToPath(new URL("../helpers/skip-finality-wait.mjs", import.meta.url))}`;
+const SKIP_FINALITY_WAIT = `--import=${fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url))}`;
 
 function budget(args: string[], o: { skipFinalityWait?: boolean } = {}): Promise<{ code: number; stdout: string; stderr: string; result: any; approve: any }> {
   return new Promise((done, fail) => {
@@ -64,7 +64,7 @@ function budget(args: string[], o: { skipFinalityWait?: boolean } = {}): Promise
     if (o.skipFinalityWait) env.NODE_OPTIONS = [process.env.NODE_OPTIONS, SKIP_FINALITY_WAIT].filter(Boolean).join(" ");
     delete env.SUPERSTABLES_SITE;
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env });
+    const child = spawn(process.execPath, [o.skipFinalityWait ? CLI : resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: ROOT, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -456,9 +456,9 @@ describe("solana, hosted", () => {
   }, 180_000);
 
   it.each([
-    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. Nothing to do for the SOL transfer: it is final once its transaction is finalized$/],
+    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. The SOL transfer is final once its transaction is finalized$/],
     ["grant only", ["--grant", "0.05"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then$/],
-    ["SOL only", ["--fund"], /^landed, not finalized yet\. Nothing to do: the SOL transfer is final once its transaction is finalized$/],
+    ["SOL only", ["--fund"], /^landed, not finalized yet: the SOL transfer is final once its transaction is finalized\. Start the next owner command only then$/],
   ])("setup --hosted with the transactions only confirmed (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     solana.confirmationStatus = "confirmed";
     write(file("keys", "budget", "solana-agent.env"), `SOLANA_AGENT_SECRET_BASE58=${bs58.encode(SOL_AGENT_KP.secretKey)}\nSOLANA_AGENT_ADDRESS=${SOL_AGENT}\n`);

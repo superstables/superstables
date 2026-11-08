@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createIdentitySource } from "../../budget/lock-identity.mjs";
 import { PAYER, startFakePurchaseSite, type FakePurchaseSite } from "../helpers/fake-purchase-site.js";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const HOOK = resolve(ROOT, "test/helpers/remove-record-after-lock.mjs");
@@ -176,7 +177,7 @@ function cli(c: Context, args: string[]): Promise<{ code: number; stderr: string
     let stderr = "";
     child.stdout.on("data", (b) => (stdout += String(b)));
     child.stderr.on("data", (b) => (stderr += String(b)));
-    child.stdin.end();
+    endStdin(child);
     child.once("error", fail);
     child.once("close", (code) => {
       const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));
@@ -232,6 +233,8 @@ async function run(form: Form, mutate?: { kind: string; n: number; change: (r: a
         }
       }
       Object.assign(hooked, form.env?.(c));
+      // a restarted worker (it ends at once anyway) would register itself on the record at any moment after the restart, over the change
+      if (form.launches) hooked.INERT_RESUMED_WORKER = "1";
       const chainBefore = existsSync(chainPath) ? readFileSync(chainPath, "utf8") : null;
       const out = await new Promise<{ code: number; stdout: string; stderr: string }>((done, fail) => {
         const child = spawn(process.execPath, ["--import", resolve(ROOT, "test/helpers/budget-owner-terminal.mjs"), resolve(ROOT, "budget/cli.mjs"), ...form.args(c)], { cwd: ROOT, env: hooked });
@@ -239,7 +242,7 @@ async function run(form: Form, mutate?: { kind: string; n: number; change: (r: a
         let stderr = "";
         child.stdout.on("data", (b) => (stdout += String(b)));
         child.stderr.on("data", (b) => (stderr += String(b)));
-        child.stdin.end(form.terminal?.(c) ?? "");
+        endStdin(child, form.terminal?.(c) ?? "");
         child.once("error", fail);
         child.once("close", (code) => done({ code: code ?? 0, stdout, stderr }));
       });

@@ -72,6 +72,8 @@ beforeEach(() => {
   homes.push(h);
   vi.stubEnv("SUPERSTABLES_HOME", h);
   vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "");
+  // The operator's switch is one gate of several; this file tests the gates behind it, so it is on here.
+  vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "1");
   setChainGateSource(() => ({ enabledChains: ["testmain"] }));
   setPrerequisiteCheck("ownerRpc", () => true);
   setPrerequisiteCheck("agentKeyStore", () => true);

@@ -20,11 +20,12 @@
 // signature from the chain with fund-agent's and grant's checks before it reports it.
 // npx tsx budget/solana/setup.ts [--new-owner] [--hosted [--site <url>] [--grant <usdc>] [--fund | --fund-amount <sol>]] [--timeout <s>] [--no-open]
 //                                [--owner-key-file <path>] [--key-store file|os-keychain]
+import { rpcPause } from "../rpc-pause.mjs";
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, sleep, writePublic } from "./lib.mjs";
+import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, U64_MAX, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
@@ -49,7 +50,7 @@ the public address file. No owner key is created. Prints addresses only, never a
   --hosted                 the owner approves on superstables.com (adds this agent to their account) instead of a page here
   --site <url>             with --hosted: the site (default superstables.com, or SUPERSTABLES_SITE)
   --grant <usdc>           with --hosted: on the same page, a budget of this much USDC in total
-  --fund, --fund-amount <sol>  with --hosted: on the same page, SOL for the agent's fees (default 0.01, at most 1)
+  --fund, --fund-amount <sol>  with --hosted: on the same page, SOL for the agent's fees (default 0.01)
   --timeout <s>            how long the approval link stays open (default 600)
   --no-open                do not open the approval link in the default browser
   --owner-key-file <path>  tests and automation only: record this key file's address instead of asking the wallet
@@ -88,7 +89,7 @@ try {
   usage((e as Error).message);
 }
 if (CAP === 0n) usage("--grant must be above 0");
-if (LAMPORTS !== undefined && (LAMPORTS === 0n || LAMPORTS > 1_000_000_000n)) usage("--fund must be above 0 and at most 1 SOL");
+if (LAMPORTS !== undefined && (LAMPORTS === 0n || LAMPORTS > U64_MAX)) usage("--fund must be above 0 and fit in one Solana transfer");
 
 // 1. the agent key
 // Read through here each time: reusing a key file other users can read would hand the owner's budget to a key they may
@@ -521,7 +522,7 @@ async function finishBundle(): Promise<never> {
           after.delegatedAmount !== CAP && `the delegated amount is ${formatUnits(after.delegatedAmount)} USDC, not ${formatUnits(CAP!)}`,
         ].filter(Boolean) as string[]);
         for (let i = 0; i < 8 && problems().length; i++) {
-          await sleep(2000);
+          await rpcPause(2000);
           after = await retryRead(() => getAccount(conn, ata)).catch(() => after);
         }
         if (problems().length) { report("mismatch", `the chain does not show the planned budget: ${problems().join("; ")}`); continue; }
@@ -560,7 +561,7 @@ async function finishBundle(): Promise<never> {
   if (!first && reports.length === (then?.length ?? 0)) {
     if (notFinal.length) console.log(`\n${notFinal.map((r) => name(r.kind)).join(" and ")}: in a block as planned, but the transaction is not finalized yet`);
     console.log(`\nDone with one approval link: the agent was added to the account${funded ? ", has SOL for fees" : ""}${granted ? ` and has a budget of ${formatUnits(CAP!)} USDC` : ""}.`);
-    process.exit(result(0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". Nothing to do for the SOL transfer: it is final once its transaction is finalized" : ""}` : "landed, not finalized yet. Nothing to do: the SOL transfer is final once its transaction is finalized") : granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
+    process.exit(result(0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". The SOL transfer is final once its transaction is finalized" : ""}` : "landed, not finalized yet: the SOL transfer is final once its transaction is finalized. Start the next owner command only then") : granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
   }
   const f: Report = first ?? { kind: "grant", state: "unknown", reason: "superstables.com reported fewer steps than asked for" };
   const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? "superstables budget grant --rail solana --amount A" : "superstables budget fund-agent --rail solana")).join(" and ");

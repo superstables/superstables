@@ -1,3 +1,4 @@
+const OFF = "mainnet is off: only the operator turns it on, with SUPERSTABLES_ALLOW_MAINNET=1 in their environment";
 // The seven EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
 // budget (budget/evm/chains.mjs), so the first test holds the two tables together field by field. The rest pin what the
 // owner's wallet signs on each chain: the token's own EIP-712 domain (Arbitrum's is "USD Coin", SKALE's "Bridged USDC
@@ -123,7 +124,7 @@ describe("judging an x402 offer on each EVM chain", () => {
       const judged = termsFor({ ...usdcRequirement(0.01, PAY_TO), network, extra: {} }, 2);
       expect(judged.supported, network).toBe(false);
       if (judged.supported) continue;
-      expect(judged.reason, network).toContain(`chain ${name} is not supported: it is a mainnet, and this client pays on testnets only`);
+      expect(judged.reason, network).toContain(`chain ${name} is not supported: ${OFF}`);
     }
   });
 });

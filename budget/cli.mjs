@@ -2,7 +2,7 @@
 // superstables budget: one command for the budget rails. A thin dispatcher over the rail scripts in evm/, tempo/
 // and solana/. It validates input, spawns the rail script, and prints one normalized `RESULT {...}` line last on
 // stdout. Logs go to stderr. With --json, stdout carries only that object, as bare JSON, and the APPROVE line goes to
-// stderr, like the rest of the CLI's --json. Contract: CLI.md. Testnet only.
+// stderr, like the rest of the CLI's --json. Contract: CLI.md. Testnet by default (SUPERSTABLES_ALLOW_MAINNET).
 // Owner commands on every rail (setup, fund-agent, grant, revoke, and on evm the owner's part of recover) never sign here: the
 // rail opens a page on 127.0.0.1 where the owner approves in their own wallet (any EVM browser wallet on evm, one that can add a
 // custom network on tempo, any Wallet Standard wallet on solana), and this dispatcher passes the link on as one stdout line,
@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, awaitingChain, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -43,6 +43,8 @@ import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs"
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteRequestId, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteRequestProblem, siteText } from "./site.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
+import { mainnetSwitchRefusal } from "../src/core/chain-gate.js";
+import { finalWords } from "../src/core/finality-policy.js";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
@@ -91,8 +93,10 @@ const RAILS = {
   tempo: { chains: ["moderato"], chain: "moderato", addr: /^0x[0-9a-fA-F]{40}$/, unit: "pathUSD" },
   solana: { chains: ["devnet"], chain: "devnet", addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
+// A chain name that is a mainnet's, or a chain id, in a --chain value. While the mainnet switch is off it is refused as a mainnet.
+const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find covers every network: the testnet line names the tokens without naming one. */
-const TESTNET_TOKENS_LINE = "Testnet only. Test tokens, no real money.";
+const TESTNET_TOKENS_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.1.3, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
 /** Every chain key the budget commands take, and its rail. */
 const RAIL_OF_CHAIN = Object.fromEntries(Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((c) => [c, rail])));
 /** The chain keys in words, each with its rail: the list find names when it refuses a chain. */
@@ -311,6 +315,7 @@ evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce
 silently: revoke it first. tempo: --agent LABEL picks the access key (a revoked key can never be granted again).
 On evm and solana a grant is refused while the previous revoke is not final, and the result is state landed (exit 0,
 final false) until the grant itself is final. Check the result with superstables budget status.
+A budget approved on superstables.com is at most 1,000 in the chain's test token, or less where an owner-set limit applies.
 
 ${OWNER_HELP}
 
@@ -397,7 +402,7 @@ with the holder, lock path and owner recovery guidance in next. Never buy again 
     flags: { op: "v", yes: "b", ...OWNER_FLAGS }, required: [],
     help: helpText({
       usage: "superstables budget recover --rail evm [--chain C] [--op ID] [--timeout S] [--no-open] [--detach|--wait]",
-      about: `evm only. Stops the allowance first, then returns stranded USDC (a seller refund, or a purchase that pulled but did not
+      about: `evm only. Stops the allowance first, then returns stranded funds (a seller refund, or a purchase that pulled but did not
 settle) from the agent key to the owner. Prints the plan, then runs it: the agent key signs its own steps; the owner
 approves in their wallet approve(agent, 0), unless the agent's own revoke brought the allowance to 0 in this run, and gas
 for the agent when it has too little. A purchase's price goes back only once its authorization can no longer settle at a
@@ -406,7 +411,7 @@ exit 5).
 tempo and solana have nothing to recover: the agent never holds the budget.
 
 ${RECOVER_OWNER_HELP}`,
-      money: "yes: stranded USDC back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
+      money: "yes: stranded funds back to the owner, and possibly gas from the owner to the agent, which the owner approves.",
       who: "the owner, with the agent key on this machine. An agent may start it and hand the owner the approval link.",
       example: "superstables budget recover --rail evm",
       prints: OWNER_PRINTS.replace("matchCode (on superstables.com), ", "").replace("tx, next", "amount (returned), tx, next"),
@@ -527,9 +532,11 @@ Adopt that request with --site-request; only if it was never sent, run the owner
       usage: "superstables budget buy-once --service ID --max M [--param K=V ...] [--params JSON] [--site URL] [--wait|--detach] [--replace]",
       about: `Single purchase on superstables.com: the owner approves on superstables.com. No setup, no budget, no agent key. ${TESTNET_LINE}
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
-Sepolia, Arc Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max is required: the most
-you accept, in the service's token (USDC, or pathUSD on Tempo); a service that costs more is refused before anything is
-created.
+Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet: the chain comes from the listing. --max
+is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
+created. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or
+per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset.
+Limits count token units together across chains; the daily limit uses UTC.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
@@ -604,7 +611,8 @@ ${SIGN_ONLY_HELP}`,
 };
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnet only. No real money moves.
+Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
+No mainnet chain is payable in 1.1.3, even with the switch enabled. Agents never set the variable.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
@@ -627,7 +635,7 @@ Start here, the agent:
   superstables budget reconcile --rail evm --op ID  after exit 5: what happened to that purchase
 If status says no budget has been set up here (exit 1), or remaining is 0, do not buy, and do not switch to another way
 of paying on your own: stop and ask. The owner can take the steps above, or approve this one payment with superstables pay
-(x402 sellers on Base Sepolia), or with superstables budget buy-once for a service find --once lists. preflight still
+(chains: superstables pay --help), or with superstables budget buy-once for a service find --once lists. preflight still
 works without a budget, so the answer can say whether the price fits.
 
 Single purchase on superstables.com, no budget (no setup; the chain comes from the listing):
@@ -649,7 +657,7 @@ Commands (each takes --help):
   reconcile   anyone  read the chain for one purchase whose outcome is unknown           read only
   unlock      owner   clear abandoned operation locks after stopping their processes     moves no money
   revoke      owner   end the budget on chain                                            moves no money
-  recover     owner   evm: stop the allowance, return stranded USDC to the owner          moves money back
+  recover     owner   evm: stop the allowance, return stranded funds to the owner         moves money back
   rotate      owner   evm, solana: replace the agent key, retire the old one              moves money back
   wait        anyone  the state of an owner approval an agent started (--id, --shown)    read only
   find        anyone  services a budget can pay (--once: buy-once services)              read only
@@ -682,9 +690,10 @@ on this machine is offered the chain's public RPC.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, or pathUSD on tempo); an unknown amount is null, never "0". final is false
-while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), and for a
-buy-once unknown that a later wait can still read, true otherwise, unchanged from 0.3.0. Scripts test final for
+Amounts are in the budget token (USDC, USDG on Robinhood Chain Testnet, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), for an owner
+transaction that landed but is not final on chain yet (state landed, or a setup step landed; chain_final is false), and for a
+buy-once unknown that a later wait can still read, true otherwise, as before chain_final existed. Scripts test final for
 command completion.
 chain_final is true only after the payment meets the chain finality rule, false for included-but-not-final payments,
 and null when no current matching payment inclusion is established. A paid provisional result has final true and
@@ -721,7 +730,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
---mainnet, or a mainnet chain, is refused.`;
+--mainnet, or a mainnet chain, is refused unless the operator sets SUPERSTABLES_ALLOW_MAINNET=1; agents never set it.`;
 
 // ---- output -----------------------------------------------------------------------------------------
 // control characters (C0, DEL, C1) and the Unicode line and paragraph separators become spaces: one line, always
@@ -776,7 +785,7 @@ let pastBackstop = false;
 function resultFacts(fields) {
   const { complete: _removed, ...rest } = fields;
   const final = fields.state === "settled" && fields.paid === true || fields.final !== false && fields.state !== "waiting_owner";
-  const chain_final = fields.state === "settled" && fields.paid === true ? fields.chain_final ?? null : null;
+  const chain_final = fields.state === "settled" && fields.paid === true ? fields.chain_final ?? null : fields.state === "landed" || (fields.final === false && Array.isArray(fields.steps) && fields.steps.some((st) => st?.state === "landed")) ? false : null;
   return { ...rest, final, chain_final };
 }
 
@@ -868,8 +877,11 @@ function parse(argv) {
     emit(2, { command: cmd, state: "failed", next: `run npm ci at ${REPO} (it installs the dev packages and builds), then rerun`, reason: "a checkout without dev packages needs its dist/budget build" });
   }
   // (wait takes no --mainnet: for an approval that exists it is an unknown flag, which badInput answers unknown; with no such approval the
-  // mainnet refusal stands)
-  if (rest.includes("--mainnet") && !(cmd === "wait" && waitRecord())) return refuse({ command: cmd }, "mainnet is refused: superstables budget is testnet only");
+  // mainnet refusal stands) With SUPERSTABLES_ALLOW_MAINNET on, --mainnet is no refusal here: it is an unknown flag like any other.
+  if (rest.includes("--mainnet") && !(cmd === "wait" && waitRecord())) {
+    const off = mainnetSwitchRefusal();
+    if (off) return refuse({ command: cmd }, `--mainnet is refused: ${off}`);
+  }
   // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
   if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
   // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
@@ -952,7 +964,8 @@ function parse(argv) {
   const rail = RAILS[f.rail];
   if (!rail) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);
   if (f.chain !== undefined && !rail.chains.includes(f.chain)) {
-    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
+    const mainnetOff = mainnetSwitchRefusal();
+    if (mainnetOff && LOOKS_MAINNET.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet, and ${mainnetOff}`);
     return badInput(ctx, `--chain for ${f.rail} must be one of: ${rail.chains.join(", ")}`);
   }
   f.chain ??= rail.chain;
@@ -1043,8 +1056,8 @@ function parse(argv) {
     if (!f.hosted) badInput(ctx, `--grant and --fund go with --hosted: one approval link on superstables.com then adds the agent, sends it gas and grants the budget. Without --hosted, run setup, then fund-agent and grant: each asks the owner on its own`);
     if (f.grant !== undefined && (!/^\d+(\.\d{1,6})?$/.test(f.grant) || !(Number(f.grant) > 0))) badInput(ctx, `--grant must be a positive amount of ${unitOf(f)} with at most 6 places (got "${f.grant}")`);
     if (f.fund !== undefined && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: setup --hosted on tempo takes --grant, not --fund");
-    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 1)) badInput(ctx, `--fund takes an amount of SOL above 0 and at most 1 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
-    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0 && Number(f.fund) <= 5)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0 and at most 5, or nothing for fund-agent's default (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "solana" && !(/^\d+(\.\d{1,9})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of SOL above 0 (at most 9 places), or nothing for fund-agent's default of 0.01 (got "${f.fund}")`);
+    if (typeof f.fund === "string" && f.rail === "evm" && !(/^\d+(\.\d{1,18})?$/.test(f.fund) && Number(f.fund) > 0)) badInput(ctx, `--fund takes an amount of the chain's gas token above 0, or nothing for fund-agent's default (got "${f.fund}")`);
   }
   if (f.hosted) {
     if (f.agent !== undefined) badInput(ctx, "setup --agent on a chain with approvals on superstables.com adds the new key there by itself: drop --hosted");
@@ -1075,7 +1088,8 @@ function parseBuyOnce(cmd, f) {
   const ctx = { command: cmd };
   const where = "Base Sepolia (--rail evm --chain base-sepolia), Arc Testnet (--rail evm --chain arc-testnet), Robinhood Chain Testnet (--rail evm --chain robinhood-testnet), Tempo Moderato (--rail tempo) or Solana devnet (--rail solana)";
   if (f.chain !== undefined && !ONCE_CHAINS[f.chain]) {
-    if (/mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet: superstables budget is testnet only`);
+    const mainnetOff = mainnetSwitchRefusal();
+    if (mainnetOff && LOOKS_MAINNET.test(f.chain)) return refuse({ ...ctx, chain: f.chain }, `"${f.chain}" looks like a mainnet, and ${mainnetOff}`);
     return badInput(ctx, `buy-once pays on ${where}, not ${f.chain}. The network comes from the service's listing`);
   }
   if (f.rail !== undefined && !RAILS[f.rail]) return badInput(ctx, `--rail must be evm, tempo or solana (got "${f.rail}")`);
@@ -1540,6 +1554,7 @@ function refusalNext(f, rail) {
   const why = `${rail.reason ?? ""} ${rail.next ?? ""}`;
   const r = `--rail ${f.rail}${chainFlag(f)}${agentFlag(f)}`;
   if (/superstables budget (recover|fund-agent)/.test(rail.next ?? "")) return rail.next;
+  if (/^the agent key file records owner /.test(rail.reason ?? "") && /^superstables budget setup /.test(rail.next ?? "")) return rail.next;
   // A spent, revoked or expired budget is reported, never worked around: an offer of a new or bigger grant is the owner's to
   // make (in agent test runs, "ask the owner to run grant" here made agents propose a revoke and a new grant).
   const stop = "Report what you bought, what is left and the price in one reply (message_for_owner), and end your turn. Do not propose or start a revoke, a new or bigger grant or gas unless the owner explicitly asks for one, and never raise --max to get around it";
@@ -2390,7 +2405,7 @@ async function fundAgent({ f, ctx }) {
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
   if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
-  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet. Nothing to do: the transfer is final once its block is. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
+  if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet: the transfer is final once its block is. Start the next owner command (grant) only then. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
   emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 
@@ -2583,6 +2598,18 @@ async function rotateLocked({ f, ctx }) {
   for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
   const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
   if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
+  // recover, which rotate runs after it retires the old address, refuses this key file, so the rotation would stop half done
+  if (rail === "evm" && !existing && existsSync(agentKeyFile(rail))) {
+    const { staleOwnerLine } = await import("./evm-owner-line.mjs");
+    let fileOwner;
+    try { fileOwner = [...readRegularFile(agentKeyFile(rail), "the agent key file").matchAll(/^(?:export\s+)?B4_OWNER_ADDRESS=(.*)$/gm)].at(-1)?.[1]?.trim().replace(/^['"]|['"]$/g, ""); } catch {}
+    for (const c of fileOwner ? chains : []) {
+      let lines = {};
+      try { lines = Object.fromEntries([...readRegularFile(publicFile(rail, c), "the public file").matchAll(/^(?:export\s+)?([A-Z0-9_]+)=(.*)$/gm)].map((m) => [m[1], m[2].trim().replace(/^['"]|['"]$/g, "")])); } catch {}
+      const stale = staleOwnerLine({ B4_OWNER_ADDRESS: fileOwner }, lines, c);
+      if (stale) return refusal(`the agent key file records owner ${stale.fileOwner}, the public file for ${c} records ${stale.publicOwner}. Nothing was retired or sent`, `${stale.repair} on the machine with the agent key, then run rotate again`);
+    }
+  }
 
   // The owner's steps are the commands of the same name, run in the foreground so each approval is waited for. A test key file
   // signs them (setup takes none for a chain approved on the site: there the owner signs in).
@@ -2651,11 +2678,16 @@ const stillWaiting = (id) => `the owner has not finished. Say so in one line and
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
 function refusePending(ctx, pending) {
-  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) is still waiting for the owner on ${pending.rail} ${pending.chain}`);
+  const onChain = awaitingChain(readApproval(pending.id));
+  log(`superstables budget: refused: owner approval ${pending.id} (${pending.command}) ${onChain ? "has a reported transaction; the command is checking its outcome on" : "is still waiting for the owner on"} ${pending.rail} ${pending.chain}`);
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
-    next: `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
-    reason: `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
+    next: onChain
+      ? `nothing was started. A transaction was reported for ${pending.id}; its outcome is still being checked. Run superstables budget wait --id ${pending.id} --shown later and follow its next step before starting another owner command on this chain`
+      : `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
+    reason: onChain
+      ? `owner approval ${pending.id} (${pending.command}) has a reported transaction; its command still holds the approval lock on this chain`
+      : `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
   });
 }
 
@@ -2889,6 +2921,21 @@ function waitUnknown(id, record, reason, next) {
   process.exit(5);
 }
 
+/**
+ * The next step of an owner command that landed: the transaction is in a block the chain has not made final. The command
+ * itself is complete, but the budget is not usable and the site keeps the agent's request open until then, so the owner
+ * has nothing to do and the agent starts nothing new.
+ */
+function landedNext(r) {
+  const usually = finalWords(r.rail, r.chain);
+  const when = `the chain has not made the block final${usually ? `, usually ${usually}` : ""}`;
+  if (r.command === "grant" || r.command === "revoke") {
+    const budget = r.command === "grant" ? " Do not rely on the budget until it is final." : "";
+    return `landed, not final yet: ${when}. The owner does not need to approve again, and this is not done: run ${statusCommand({ rail: r.rail, chain: r.chain })} later, and start the next owner command only once it is final.${budget}`;
+  }
+  return `landed, not final yet: ${when}. The owner does not need to approve again. Check the reported transaction's finality on the chain before starting the next owner command. wait returns the stored result; it does not check finality again.`;
+}
+
 async function wait({ f }) {
   // every read of the record file in wait goes through readApprovalFile: a file that is there but is not a record is an approval wait cannot read
   const file = readApprovalFile(f.id);
@@ -2982,6 +3029,12 @@ async function wait({ f }) {
     // before this rule, once its wallet was asked, is answered by it as well.
     const sent = OWNER_COMMANDS.has(r.result.command) && (recordMayHaveSent(r.record) || carriesTx(r.result.tx));
     const a = sent ? afterSend(r.code, r.result, checkCommand(r.result)) : { code: r.code, fields: r.result };
+    // a transaction in a block the chain has not made final: the command ended, the outcome did not
+    const landed = a.fields.state === "landed";
+    if (landed || (Array.isArray(a.fields.steps) && a.fields.steps.some((st) => st?.state === "landed"))) {
+      writeResult({ ...a.fields, ok: a.code === 0, final: false, chain_final: false, ...(landed ? { next: landedNext(a.fields) } : {}) });
+      process.exit(a.code);
+    }
     writeResult({ ...a.fields, ok: a.code === 0, final: true });
     process.exit(a.code);
   }
@@ -2994,7 +3047,7 @@ async function wait({ f }) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, send the new message_for_owner first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
   }
   if (walletWasAsked(rec, r.page)) {
-    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${finalWait(rec)}Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
   }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true) : stillWaiting(rec.id), reason: words });
 }
@@ -3017,6 +3070,9 @@ function signedWait(record) {
     next: `if submit_budget_request returned request_id, approval_link and match_code for this request, adopt it: superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. Only if the tool never sent it, sign a new request: ${again}. While a request for this agent is open, the site refuses a new one (request_open)`,
   });
 }
+
+/** "This chain usually takes about N minutes to make a transaction final. " when that is measured, else "". */
+const finalWait = (rec) => { const w = finalWords(rec.rail, rec.chain); return w ? `The chain usually makes a transaction final ${w} after it lands, so returning before then does not by itself mean the transaction failed. ` : ""; };
 
 /**
  * What to do about a site request kept unsettled for a signed approval: its outcome is unknown until a later wait adopts it. `fix`: the

@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 0.5.0 makes testnet payments only. This page says what each way to pay protects
+Superstables client 1.1.3 makes testnet payments by default and refuses mainnet unless the operator enables it with `SUPERSTABLES_ALLOW_MAINNET`. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -238,8 +238,8 @@ authoritative, at the gate, before an approval is created at all. A payment the 
 never becomes an approval link, so there is nothing to open and nobody is asked.
 
 Nothing in the policy is enforced by the blockchain, and nothing in it is enforced by the wallet.
-A cap of 0.05 USDC per payment means this software will not ask you to sign more than that while it
-runs with your policy. An agent that runs as you can edit or delete your policy file, or run its own
+A cap you set, such as 0.05 USDC per payment (the starting value `setup` writes), means this software will not ask you to sign more than that while it
+runs with your policy. You choose the caps: change a value, or write `null` to remove one. An agent that runs as you can edit or delete your policy file, or run its own
 code, so it is not a promise against a hostile agent, and it never means your account cannot sign
 more. Your own `~/.superstables/policy.yaml` applies whichever policy file or home the environment
 names, but its daily count and the file itself are only as safe as your account's files. An empty
@@ -249,7 +249,9 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `1` or `0.05 USDC`. YAML would read `0x10` as 16 and `1e3` as 1000, so those spellings, and `.5`,
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
-authorization — and the balance of the account, which is why this release is testnet only.
+authorization — and the balance of the account. Testnet by default.
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3,
+even with the switch enabled.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -281,12 +283,15 @@ wallet the settings are ignored and the approval page says so ("Signed settings:
 do not apply to this wallet"). A signature that does not verify, or that no longer covers your
 settings or retired keys, counts as no signature; `pay` warns on stderr, and `owner settings`
 commands that change a signed setting say so. The chain gate reads its list of enabled chains only
-from a valid signature; this build signs on testnets only, so the list is empty. This is evidence,
+from a valid signature; the list that command offers is empty in this build. This is evidence,
 not enforcement: an agent that runs as you can still edit the files, and in the local wallet it can
 read the key that signs, so there the signature only makes an edit evident. The signature that
 matters is the one a wallet you keep apart from the agent makes.
 
-## Testnet only
+## Testnet by default
+
+SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3,
+even with the switch enabled.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -300,13 +305,19 @@ chain and refuses, before anyone is asked, when it is not the one the table stat
 answers for another chain. When a testnet's RPC cannot be read, `pay` goes on without that check (a
 wrong domain only makes a signature that does not verify) and reads again on the next payment. A
 budget grant never approves over a live allowance on any token, and a token that needs its
-allowance set to 0 first is never granted through an approval site such as superstables.com. A
-requirement naming anything else, every mainnet included, is refused before anyone is asked. There is no configuration that turns on mainnet. A mainnet added
-to the chain tables would still be refused by a separate check: before anything is signed, offered
-to a wallet or sent, `quote`, `pay`, the approval page, the local wallet and every
-`superstables budget` command ask it, and it refuses any chain whose table entry is not marked as
-a testnet, because mainnet signing is off in this build. `quote` and `pay` then refuse the offer;
-a budget command exits 3 before it reads a key file or the chain.
+allowance set to 0 first is never granted through an approval site such as superstables.com. A requirement naming anything else, every mainnet included, is refused before anyone is asked.
+
+Mainnet is off unless the operator turns it on. The switch is the environment variable `SUPERSTABLES_ALLOW_MAINNET`,
+read in one place. `1` or `true` turns it on. Unset, empty, `0` or `false` leave it off. Any other value, such as `yes`,
+`TRUE` or ` 1`, is an error that names the variable and refuses every mainnet: a guess would turn a typo into a silent no or
+an unintended yes, on a switch that guards money. Only the operator sets it, in their own environment. An agent never does,
+and a skill tells it so. The switch is not enough on its own. A chain table entry that is not marked as a testnet is still
+refused by a separate check unless your signed settings enable that chain and it meets the prerequisites in
+[What mainnet still needs](#what-mainnet-still-needs). Before anything is signed, offered to a wallet or sent, `quote`,
+`pay`, the approval page, the local wallet and every `superstables budget` command ask that check. While the switch is off,
+`quote` and `pay` refuse the offer and a budget command exits 3 before it reads a key file or the chain, and each
+refusal names `SUPERSTABLES_ALLOW_MAINNET`. This release's chain tables list no mainnet, so turning the switch on makes no
+chain payable yet.
 
 On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
 split a price between recipients, set a memo of their own, accept only payments they submit
@@ -593,7 +604,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   opens. A public file from before this check has no signature: on testnet the command warns and
   goes on, and running `setup` again where the agent key is records one. Deleting the signature
   lines makes a file look that old. On a chain that is not a testnet the command refuses such a file;
-  mainnet signing is off in this build, so that does not apply yet. The check proves
+  mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`, so that does not apply by default. The check proves
   who the owner on record signed for, not who that owner is. `revoke` is never blocked by it.
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.
@@ -795,8 +806,16 @@ What a compatible site must serve, with both proofs spelled out:
 
 ## What you install
 
-For 0.5.0, use the agent skill zip attached to the 0.5.0 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-0.5.0.zip`;
+The plugin (Claude Code and Codex) is one of two ways in. It installs from this repository's
+marketplace, `superstables/superstables`, which gives whatever the default branch holds, or from a
+plugin zip attached to the release with a `.sha256` file beside it. The plugin carries no client
+code. In Claude Code and Codex, it runs the CLI from npm with `npx --yes @superstables/client@<version>`,
+at the exact version its files name. In both apps, it reaches the Superstables tools at
+`https://mcp.superstables.com`. The checksum
+caveat below applies to the plugin zip as it does to the skill zip.
+
+For 1.1.3, use the agent skill zip attached to the 1.1.3 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.3.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
@@ -889,14 +908,14 @@ says "not supported", there is no command for it yet; do not move key files by h
 
 ## What mainnet still needs
 
-This client does not sign on mainnet, and no setting turns it on. This section lists what would have to be true before a
-chain that is not a testnet could be added, so that what the code enforces today stays separate from what it does not.
+This client signs on testnets by default. This section lists what has to be true before a chain that is not a testnet is
+signed on, so that what the code enforces today stays separate from what it does not.
 
 **What the code requires.** Every signature, wallet request and broadcast, in `pay` and in every `superstables budget` rail,
 passes one chain gate first. A chain whose table entry is not marked as a testnet is refused unless all three of these hold:
 
-- **The build allows mainnet signing.** A constant in the client, `MAINNET_SIGNING`, is `false`. Nothing reads it from the
-  environment or from a file.
+- **The operator allows mainnet.** `SUPERSTABLES_ALLOW_MAINNET` is `1` or `true` in the environment (see
+  [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it.
 - **Your signed settings enable the chain.** `superstables owner settings sign` has your wallet sign the list of chains
   enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
   build, so this command enables none.
@@ -906,7 +925,7 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   - a measured time to finality for the chain;
   - for the chain's budget rail, an agent key file that names the OS keychain and holds no key.
 
-  A check that cannot run counts as missing. Mainnet signing is off in this build and no chain table names a mainnet, so these
+  A check that cannot run counts as missing. No chain table names a mainnet, so these
   checks decide nothing yet. `pay` does not load the keychain check, so for `pay` the fourth always reads as missing;
   `tempo` agent keys stay in files, so that rail always misses the fourth; only two chains have a measured finality time; and
   the local wallet's key is not part of the fourth check yet.

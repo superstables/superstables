@@ -61,7 +61,7 @@ describe("judging a tempo.charge challenge", () => {
     const cases: [MppChallenge, RegExp][] = [
       [challenge({ method: "stripe" }), /stripe\.charge is not supported/],
       [challenge({ intent: "session" }), /tempo\.session is not supported/],
-      [challenge({ details: { chainId: 4217 } }), /Tempo \(mainnet\) is not supported: it is a mainnet/],
+      [challenge({ details: { chainId: 4217 } }), /Tempo \(mainnet\) is not supported: mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/],
       [challenge({ details: { chainId: 31318 } }), /chain eip155:31318 is not supported for MPP/],
       [challenge({ details: { chainId: "42431" } }), /chain id is missing or malformed/],
       [challenge({ request: { currency: `0x20C0${"0".repeat(35)}1` } }), /currency is not pathUSD/],

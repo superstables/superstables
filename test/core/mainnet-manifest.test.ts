@@ -47,8 +47,11 @@ describe("the shipped mainnet manifest", () => {
     expect(BASE_SEPOLIA.token.address).toBe("0x036CbD53842c5426634e7929541eC2318f3dCF7e");
   });
 
-  it("refuses Base and any other mainnet at the gate, with the wording this build always used", () => {
-    expect(chainGate({ rail: "evm", key: "base", chainId: 8453, testnet: false, token: MAINNET_MANIFEST.chains.base.token }, { enabledChains: ["base"] }))
+  it("refuses Base and any other mainnet at the gate: the operator switch first, then the manifest, with the wording this build always used", () => {
+    const base = { rail: "evm", key: "base", chainId: 8453, testnet: false, token: MAINNET_MANIFEST.chains.base.token };
+    expect(chainGate(base, { enabledChains: ["base"] })).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET=1/);
+    vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "1");
+    expect(chainGate(base, { enabledChains: ["base"] }))
       .toMatch(/^this client does not sign on mainnet chains: .* this build signs on testnets only$/);
     expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true }, undefined)).toBe("");
   });

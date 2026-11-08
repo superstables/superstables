@@ -227,7 +227,7 @@ describe("which Solana offers the rail pays", () => {
   it("refuses, before the owner is asked, everything it does not pay", () => {
     const payTo = randomAddress();
     const refusals: [RawAccept, 1 | 2, RegExp][] = [
-      [goodAccept({ network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }), 2, /Solana \(mainnet\).*mainnet, and this client pays on testnets only/],
+      [goodAccept({ network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" }), 2, /Solana \(mainnet\).*mainnet is off.*SUPERSTABLES_ALLOW_MAINNET/],
       [goodAccept({ network: "solana" }), 2, /mainnet/],
       // Solana testnet: another cluster, another genesis
       [goodAccept({ network: "solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z" }), 2, /chain Solana is not supported \(only .*Solana devnet/],

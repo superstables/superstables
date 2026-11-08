@@ -1,9 +1,11 @@
 // The chain gate: one check in front of every signature, wallet request and broadcast, in both builds (`pay` and its
 // signers here, and every rail of `superstables budget`). A chain is signed on only when its own table marks it as a
-// testnet. Any other entry is refused unless all of these hold: the mainnet manifest (./mainnet-manifest.js, checked by
-// ./mainnet-policy.js) is valid, says signing is live and approves that chain with the same facts the chain table states,
-// mainnet signing is not paused, the owner's signed settings enable that chain, and the chain has everything mainnet
-// needs. So adding a mainnet to a chain table never turns signing on by itself, and a pause stops the next signature.
+// testnet. Any other entry is refused unless all of these hold: the operator allows mainnet in the environment
+// (SUPERSTABLES_ALLOW_MAINNET, off unless set; read only by `mainnetSwitch` below), the mainnet manifest
+// (./mainnet-manifest.js, checked by ./mainnet-policy.js) is valid, says signing is live and approves that chain with the
+// same facts the chain table states, mainnet signing is not paused, the owner's signed settings enable that chain, and the
+// chain has everything mainnet needs. Each gate only closes: none turns signing on for another. So adding a mainnet to a
+// chain table never turns signing on by itself, and a pause stops the next signature.
 //
 // Plain JavaScript with JSDoc types, so the budget's .mjs files, its TypeScript and src/ share it; tsc emits it to dist
 // with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. It imports only ./token-facts.js,
@@ -22,6 +24,44 @@ import { mainnetRefusal, manifestState, shippedManifest } from "./mainnet-policy
  * on this: it checks the whole manifest, and the pause, on every call.
  */
 export const MAINNET_SIGNING = shippedManifest().signing === "live";
+
+/** The environment variable that lets this client sign on a chain that is not a testnet. Only the operator sets it. */
+export const MAINNET_ENV = "SUPERSTABLES_ALLOW_MAINNET";
+
+/**
+ * The one reading of MAINNET_ENV. Exact strings, no trimming and no case folding: "1" or "true" allow mainnet; unset, "",
+ * "0" or "false" keep it off; any other value is an error that names the variable. A guess ("yes", "TRUE", " 1") would turn
+ * a typo into either a silent no or an unintended yes, and this switch guards money.
+ * @param {string | undefined} raw
+ * @returns {{ enabled: boolean } | { error: string }}
+ */
+export function parseMainnetSwitch(raw) {
+  if (raw === undefined || raw === "" || raw === "0" || raw === "false") return { enabled: false };
+  if (raw === "1" || raw === "true") return { enabled: true };
+  const shown = JSON.stringify(raw.length > 24 ? `${raw.slice(0, 24)}...` : raw);
+  return { error: `${MAINNET_ENV} is ${shown}, which is not a value: use 1 or true to allow mainnet, or 0, false or unset to keep it off` };
+}
+
+/**
+ * MAINNET_ENV as the process has it now.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ enabled: boolean } | { error: string }}
+ */
+export function mainnetSwitch(env = globalThis.process?.env ?? {}) {
+  return parseMainnetSwitch(env[MAINNET_ENV]);
+}
+
+/**
+ * Why mainnet is refused whatever the chain, in words, or "" when the operator has allowed it. Every refusal of a mainnet
+ * asks this, so each one names MAINNET_ENV. An invalid value refuses like an off switch.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string}
+ */
+export function mainnetSwitchRefusal(env) {
+  const s = mainnetSwitch(env);
+  if ("error" in s) return s.error;
+  return s.enabled ? "" : `mainnet is off: only the operator turns it on, with ${MAINNET_ENV}=1 in their environment`;
+}
 
 /**
  * @typedef {object} GateChain  A chain as its own table describes it.
@@ -124,6 +164,8 @@ const chainName = (/** @type {GateChain} */ chain) => `${typeof chain?.rail === 
  */
 export function chainGate(chain, settings) {
   if (chain?.testnet === true) return "";
+  const off = mainnetSwitchRefusal();
+  if (off) return `${off}; the ${chainName(chain)} is not marked as a testnet`;
   if (manifestState().state === "off") return `this client does not sign on mainnet chains: the ${chainName(chain)} is not marked as a testnet, and this build signs on testnets only`;
   const refusal = mainnetRefusal(chain);
   if (refusal) return `this client does not sign on the ${chainName(chain)}: ${refusal}`;
@@ -131,8 +173,8 @@ export function chainGate(chain, settings) {
 }
 
 /**
- * The gate for a chain that is not a testnet, once the mainnet manifest and the pause allow it: chainGate calls it only
- * then, and tests call it directly.
+ * The gate for a chain that is not a testnet, once the operator switch, the mainnet manifest and the pause allow it:
+ * chainGate calls it only then, and tests call it directly.
  * @param {GateChain} chain
  * @param {ChainGateSettings | undefined} settings
  * @returns {string}

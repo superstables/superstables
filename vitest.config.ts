@@ -1,4 +1,19 @@
+import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 import { defineConfig } from "vitest/config";
+import { BaseSequencer, type TestSpecification } from "vitest/node";
+
+// Seconds each test file took (scripts/test-durations.mjs writes it). The suite is limited by its total time over the workers,
+// so the longest files go first and the workers finish together. Without this, a run with no vitest cache of the last run's
+// times (a fresh install, CI) starts the largest files by size first and ends with one worker on a long file, about 80 s later.
+// A file not listed yet goes first, in vitest's own order, since it may be long.
+const DURATIONS: Record<string, number> = JSON.parse(readFileSync(new URL("./test/durations.json", import.meta.url), "utf8"));
+class LongestFirst extends BaseSequencer {
+  async sort(files: TestSpecification[]) {
+    const seconds = (f: TestSpecification) => DURATIONS[relative(f.project.config.root, f.moduleId)] ?? Infinity;
+    return (await super.sort(files)).sort((a, b) => seconds(b) - seconds(a) || 0);
+  }
+}
 
 // Test files that start the CLI or other processes and take ten seconds or more on the CI runner.
 // `npm run test:fast` (the CI workflow, started by hand) skips them; `npm test` and the
@@ -70,5 +85,6 @@ export default defineConfig({
     ],
     testTimeout: 20_000,
     hookTimeout: 20_000,
+    sequence: { sequencer: LongestFirst },
   },
 });

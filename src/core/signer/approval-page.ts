@@ -457,7 +457,7 @@ function policyRows(p?: PagePolicy): string {
   if (!p) return "";
   const where =
     p.source === "program" ? "set by the program that asked for this payment" :
-    p.source === "defaults" ? `built-in defaults (no file at ${esc(p.file)})` : esc(p.file);
+    p.source === "defaults" ? `built-in defaults (no file at ${esc(p.file)}, or the file is empty)` : esc(p.file);
   const tag = p.chosen && p.source !== "program" ? ' <span class="tag">chosen for this command</span>' : "";
   const also = p.also ? `<dt>Also applies</dt><dd><span class="mono">${esc(p.also.file)}</span>: ${esc(capsText(p.also))}</dd>` : "";
   return `<dt>Spend policy</dt><dd class="mono">${where}${tag}</dd>

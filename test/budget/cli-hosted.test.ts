@@ -11,7 +11,12 @@ import { encodeFunctionData, pad, parseAbi, toEventSelector } from "viem";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import { evmOwner, evmOwnerKey, signLinkProof, startFakeRpc, startFakeSite, type FakeSite } from "../helpers/fake-site.js";
 import type { TestServer } from "../helpers/servers.js";
+import { TESTNET_LINE } from "../../budget/once.mjs";
 
+/** The testnet line as a regular expression fragment: the product sets its words (budget/once.mjs). */
+const TESTNET = TESTNET_LINE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const SKIP_WAITS = fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const CLI = resolve(ROOT, "budget/cli.mjs");
 const OWNER = evmOwner("22");
@@ -44,7 +49,7 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     Object.assign(env, extraEnv);
     delete env.SUPERSTABLES_BUDGET_APPROVAL_ID;
     tree.set({ "base-sepolia": [{ url: rpc.url, operator: "fake-a" }, { url: `${rpc.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc.url, operator: "fake-a" }] });
-    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+    const child = spawn(process.execPath, [resolve(tree.bundle(), "cli.mjs"), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -57,6 +62,10 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     });
   });
 }
+
+/** Env that skips the worker's poll gaps (helpers/skip-waits.mjs), but only once the test has created `skipFlag()`. */
+const skipFlag = () => join(home, "skip-poll-gaps");
+const skipPollGaps = () => ({ NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${SKIP_WAITS}`].filter(Boolean).join(" "), SUPERSTABLES_TEST_SKIP_WAITS_AFTER: skipFlag() });
 
 /** The Approval(owner, spender, value) log a token's approve leaves in its receipt: the effect the client checks for. */
 const approvalLog = (token: string, owner: string, spender: string, value: bigint, blockNumber: string) => ({
@@ -78,9 +87,11 @@ describe("setup --hosted: refusals before anything runs", () => {
     const agent = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--agent", "2"]);
     expect(agent.code).toBe(2);
     expect(agent.result.reason).toMatch(/setup --agent on a chain with approvals on superstables\.com adds the new key there by itself: drop --hosted/);
-    const sol = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--fund", "2"]);
-    expect(sol.code).toBe(2);
-    expect(sol.result.reason).toMatch(/--fund takes an amount of SOL above 0 and at most 1/);
+    for (const amount of ["0", "-1"]) {
+      const sol = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--fund", amount]);
+      expect(sol.code).toBe(2);
+      expect(sol.result.reason).toMatch(/--fund takes an amount of SOL above 0/);
+    }
     expect(site.posts).toEqual([]);
   });
 
@@ -398,14 +409,14 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(/^reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id oa-\S+ --shown\. .*Testnet only\. Test tokens, no real money\.$/);
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown\\. .*${TESTNET}$`));
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
     const msg = first.result.message_for_owner;
     expect(msg).toContain(first.result.url);
     expect(msg).toContain("Match code: ABC-DEF");
-    expect(msg).toMatch(/On Base Sepolia\. Testnet only\. Test tokens, no real money\./);
+    expect(msg).toMatch(new RegExp(`On Base Sepolia\\. ${TESTNET}`));
     expect(msg.endsWith("Tell me when you've approved.")).toBe(true);
     const id = first.result.id;
     const recordPath = join(approvals(), `${id}.json`);
@@ -1004,9 +1015,9 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   }, 180_000);
 
   it.each([
-    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. Nothing to do for the gas transfer: it is final once its block is/],
+    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. The gas transfer is final once its block is/],
     ["grant only", ["--grant", "0.01"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then$/],
-    ["gas only", ["--fund"], /^landed, not final yet\. Nothing to do: the gas transfer is final once its block is/],
+    ["gas only", ["--fund"], /^landed, not final yet: the gas transfer is final once its block is.* Start the next owner command only then$/],
   ])("the final head below the owner's block (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     await prepare("0x10");
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, ...flags]);
@@ -1017,7 +1028,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     for (const st of r.steps!) Object.assign(st, { state: "confirmed", tx_hash: hashes[st.kind], wallet_asked: true });
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(done.code, done.stderr).toBe(0);
-    expect(done.result).toMatchObject({ state: "ok" }); // wait keeps `final` as the command having ended
+    expect(done.result).toMatchObject({ state: "ok", final: false, chain_final: false }); // included, not final: wait does not present it as done
     expect(done.result.steps.map((x: any) => x.state)).toEqual(flags.includes("--grant") && flags.includes("--fund") ? ["landed", "landed"] : ["landed"]);
     expect(String(done.result.next).split("Then: ").pop()).toMatch(want); // the dispatcher puts the owner notice first, then "Then: " and the rail's next
     expect(done.result.next).not.toMatch(/\. [a-z]/);
@@ -1127,12 +1138,13 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
 
   it("stops waiting after the link: the grant the wallet was not asked for is withdrawn on the site before it is called unsent", async () => {
     await prepare();
-    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"], skipPollGaps());
     expect(first.code, first.stderr).toBe(0);
     const r = site.requests[0];
     Object.assign(r, { state: "linked", owner: OWNER });
     Object.assign(r.steps![0], { state: "confirmed", tx_hash: FUND_HASH, wallet_asked: true });
     Object.assign(r.steps![1], { state: "awaiting_owner" });
+    writeFileSync(skipFlag(), "");
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(r.cancels).toBe(1);
     expect(r.steps![1].state).toBe("cancelled");
@@ -1143,12 +1155,13 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
 
   it("stops waiting after the link and can't withdraw the steps: they are unknown (exit 5), never nothing sent", async () => {
     await prepare();
-    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"]);
+    const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--grant", "0.01", "--fund", "--timeout", "10"], skipPollGaps());
     expect(first.code, first.stderr).toBe(0);
     site.cancelFails = true;
     const r = site.requests[0];
     Object.assign(r, { state: "linked", owner: OWNER });
     Object.assign(r.steps![0], { state: "awaiting_owner" });
+    writeFileSync(skipFlag(), "");
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "150"]);
     expect(r.cancels).toBe(1);
     expect(done.code, done.stderr).toBe(5);

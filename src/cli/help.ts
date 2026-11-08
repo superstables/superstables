@@ -83,18 +83,19 @@ What this is:
   Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
-Two ways to pay:
-  pay      The owner approves each payment in their own wallet: a browser wallet such as MetaMask
-           (Phantom on Solana) on a page \`pay\` serves on 127.0.0.1 (the default), or the local
-           wallet process (--wallet local, EVM chains only). x402 on the EVM chains below and
-           Solana devnet, MPP on Tempo Moderato. Use it when the owner is there to approve.
-           Or \`budget buy-once\`: one purchase the owner approves on superstables.com from any
-           device (needs an account there), for the services \`superstables budget find --once\` lists.
-  budget   The owner grants an on-chain budget once, from their wallet; the agent then buys on its
-           own until the budget is spent, expires or is revoked. The chain enforces the limit.
-           Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
-           Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
+Two ways to pay: Budgets or Single purchase
+  budget   Budgets. The owner grants an on-chain budget once, from their wallet; the agent then
+           buys on its own until the budget is spent, expires or is revoked. The chain enforces
+           the limit. Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
+           Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
            (Solana devnet). Use it when the agent should buy without asking each time.
+  pay      Single purchase on your machine. The owner approves each payment in their own wallet:
+           a browser wallet such as MetaMask (Phantom on Solana) on a page \`pay\` serves on
+           127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
+           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato. Use it when the
+           owner is there to approve.
+           Or \`budget buy-once\`: Single purchase on superstables.com, approved from any
+           device (needs an account there), for the services \`superstables budget find --once\` lists.
 
 Start here, pay:
   superstables setup                                   owner, once: home directory and policy (pay only)
@@ -104,7 +105,7 @@ Start here, pay:
   superstables pay <quote-id>                          prints an approval link; the owner approves in their wallet
   superstables status <attempt-id>                     where a payment got to
 
-Start here, one purchase on superstables.com:
+Start here, Single purchase on superstables.com:
   superstables budget find --once                      the services you can buy this way
   superstables budget buy-once --service <id> --max M  the owner approves one purchase on superstables.com
 
@@ -139,7 +140,7 @@ Who runs what:
 
 Owner settings:
   superstables owner settings show   the approval site and the RPCs that owner actions trust (read only)
-  superstables owner settings sign   your wallet signs these settings, your spend policy and your retired agent keys
+  superstables owner settings sign   your wallet signs these settings, your spend policy, your retired agent keys and your enabled chains
   Changes run only in the owner's own terminal. SUPERSTABLES_SITE and the RPC variables count for
   owner actions only when they name what these settings allow. Signed settings apply only to approvals
   made with the wallet that signed them; pay and the local wallet refuse a policy file that differs from
@@ -154,7 +155,9 @@ Discovery:
   find reads a built-in catalogue and the public index at ${DEFAULT_INDEX_URL}.
   SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with \`off\`. Index listings show their payment protocols (rails) and chains, and
-  whether pay or a budget rail could pay them. Only testnets are ever payable.
+  whether pay or a budget rail could pay them. Testnet by default.
+  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3,
+  even with the switch enabled. Agents never set the variable.
 
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)

@@ -1,23 +1,54 @@
 {
   "name": "@superstables/client",
-  "version": "0.5.0",
+  "version": "1.1.3",
   "description": "Superstables client: discover paid services, quote them, and pay from an owner-controlled wallet. CLI and agent skill.",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "https://github.com/superstables/superstables.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/superstables/superstables.git"
+  },
   "homepage": "https://www.superstables.com",
-  "bugs": { "url": "https://github.com/superstables/superstables/issues" },
-  "keywords": ["x402", "mpp", "ai-agents", "payments", "usdc", "testnet"],
+  "bugs": {
+    "url": "https://github.com/superstables/superstables/issues"
+  },
+  "keywords": [
+    "x402",
+    "mpp",
+    "ai-agents",
+    "payments",
+    "usdc",
+    "testnet"
+  ],
   "type": "module",
-  "engines": { "node": ">=22" },
-  "bin": { "superstables": "./dist/cli/main.js" },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "superstables": "./dist/cli/main.js"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./seller": { "types": "./dist/seller/index.d.ts", "import": "./dist/seller/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./seller": {
+      "types": "./dist/seller/index.d.ts",
+      "import": "./dist/seller/index.js"
+    }
   },
-  "publishConfig": { "access": "public" },
-  "files": ["dist", "policy.example.yaml", "npm-shrinkwrap.json", "README.md", "CHANGELOG.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "policy.example.yaml",
+    "npm-shrinkwrap.json",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/budget-build.mjs",
     "prepare": "node scripts/prepare.mjs",
@@ -30,8 +61,10 @@
     "test:live": "SUPERSTABLES_LIVE=1 node scripts/test.mjs test/live",
     "dev": "tsx src/cli/main.ts",
     "skill": "node scripts/skill.mjs",
-    "skill:check": "node scripts/plugin-sync.mjs --check && node scripts/skill-check.mjs",
+    "skill:check": "node scripts/plugin-sync.mjs --check && node scripts/connector-contract-check.mjs && node scripts/skill-check.mjs",
+    "plugin:zip": "node scripts/plugin-zip.mjs",
     "plugin:sync": "node scripts/plugin-sync.mjs",
+    "copy:check": "node scripts/check-banned-copy.mjs",
     "plugin:check": "node scripts/plugin-sync.mjs --check",
     "install-check": "node scripts/install-check.mjs",
     "docs:cli": "node scripts/cli-docs.mjs",

@@ -38,6 +38,7 @@ import bs58 from "bs58";
 import { createServer, request as httpRequest } from "node:http";
 import type { Attempt } from "../../src/core/types.js";
 import { startFakeFacilitator, type FakeFacilitator } from "../helpers/fake-facilitator.js";
+import { budgetBundle } from "../helpers/budget-bundle.js";
 import { startPaidEndpoint, type PaidEndpoint } from "../helpers/paid-endpoint.js";
 
 const PRICE = 0.01;
@@ -1488,7 +1489,7 @@ describe("the tempo owner calldata", () => {
 // the dispatcher uses. `wait` and the refusal of a second approval run through the real CLI.
 
 const REPO = join(import.meta.dirname, "..", "..");
-const CLI = join(REPO, "budget", "cli.mjs");
+const CLI = join(budgetBundle(), "cli.mjs");
 const TSX = join(REPO, "node_modules", ".bin", "tsx");
 type Approvals = typeof import("../../budget/approvals.mjs");
 let approvals: Approvals;
@@ -1818,6 +1819,9 @@ describe("a detached owner approval", () => {
     const record = await detach();
     process.kill(-record.pid, "SIGKILL");
     expect(await gone(record.pid)).toBe(true);
+    // the leader is gone before the rest of its group (tsx's node child, the page's process) has been reaped: wait counts those as alive
+    for (let i = 0; i < 50 && approvals.processesAlive(approvals.readApproval(record.id)); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(approvals.processesAlive(approvals.readApproval(record.id))).toBe(false);
     const outcome = await budget(["wait", "--shown", "--id", record.id, "--timeout", "0"]);
     expect(outcome.code).toBe(3);
     expect(outcome.result).toMatchObject({ state: "refused_precheck", id: record.id });

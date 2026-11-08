@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { endStdin } from "../helpers/child-stdin.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const MADE_ON = "http://127.0.0.1:41111";
@@ -30,7 +31,7 @@ function budget(args: string[], terminal = "x\n", extra: Record<string, string> 
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
     child.stderr.on("data", (c) => (stderr += String(c)));
-    child.stdin.end(terminal);
+    endStdin(child, terminal);
     child.once("error", fail);
     child.once("close", (code) => {
       const line = stdout.split("\n").reverse().find((l) => l.startsWith("RESULT "));

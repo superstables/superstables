@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { builtOps } from '../helpers/journal-built-ops.js';
 
 const project = fileURLToPath(new URL('../..', import.meta.url));
 const root = resolve(process.env.BUDGET_DURABILITY_ROOT ?? project);
@@ -11,9 +12,16 @@ const homes: string[] = [];
 beforeEach(() => new Promise<void>(resolve => setImmediate(resolve)));
 const home = () => { const dir = mkdtempSync(join(tmpdir(), 'budget-journal-')); homes.push(dir); return dir; };
 afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true }); });
-const run = (helper: string, dir: string, args: string[] = [], extra = {}) => spawnSync(process.execPath, ['--import', 'tsx', join(project, 'test/helpers', helper), ...args], {
-  cwd: project, env: { ...process.env, SUPERSTABLES_HOME: dir, BUDGET_DURABILITY_ROOT: root, ...extra }, encoding: 'utf8', timeout: 15_000,
-});
+// The fault helper imports the rail writers from the folder in BUDGET_DURABILITY_BUILT (built once, see
+// test/helpers/journal-built-ops.ts); the other two helpers import plain .mjs sources. Every helper starts with node alone.
+// Without BUDGET_DURABILITY_BUILT the fault helper imports the .ts sources, which needs `node --import tsx`.
+const run = (helper: string, dir: string, args: string[] = [], extra: Record<string, string | undefined> = {}) => {
+  const fault = helper === 'budget-journal-fault.mjs';
+  const target = extra.BUDGET_DURABILITY_ROOT ?? root;
+  return spawnSync(process.execPath, [join(project, 'test/helpers', helper), ...args], {
+    cwd: project, env: { ...process.env, SUPERSTABLES_HOME: dir, BUDGET_DURABILITY_ROOT: root, ...extra, ...(fault ? { BUDGET_DURABILITY_BUILT: builtOps(target) } : {}) }, encoding: 'utf8', timeout: 15_000,
+  });
+};
 const checkpoints = [
   ['evm', 'quote'], ['evm', 'pull-intent'], ['evm', 'pull-hash'], ['evm', 'authorization'], ['evm', 'cancel-hash'], ['evm', 'return-hash'],
   ['tempo', 'quote'], ['tempo', 'push-intent'], ['tempo', 'pull-submitted'], ['tempo', 'push-submitted'],

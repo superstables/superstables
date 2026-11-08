@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { DEFAULT_NETWORK, fromAtomicString, networkFor, usdcBalance, type Rail } from "../chain.js";
 import { accountPolicyPath, browserWalletPath, ensureDir, homeDir, policyPath, recordsDir, retiredListPath } from "../home.js";
 import { signedBy, signedPolicyCheck, signedSettings } from "../owner-settings.js";
-import { CAP_DECIMALS, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
+import { CAP_DECIMALS, defaultsReason, evaluatePolicy, formatMoney, loadPaymentPolicy, policyAmount, type Money, type Policy } from "../policy.js";
 import { Records } from "../records.js";
 import { MainnetRefused, reserveMainnetSpend } from "../mainnet-spend.js";
 import { MAX_SIGNED_LIFETIME_S } from "../rails/evm.js";
@@ -342,7 +342,7 @@ function pagePolicy(policy: Policy, fromProgram: boolean): PagePolicy {
   const file = policyPath();
   return {
     file: untrustedText(file, 300),
-    source: fromProgram ? "program" : existsSync(file) ? "file" : "defaults",
+    source: fromProgram ? "program" : defaultsReason(file) ? "defaults" : "file",
     chosen: !fromProgram && resolve(file) !== resolve(accountPolicyPath()),
     perCall: capText(policy.perCall),
     perDay: capText(policy.perDay),

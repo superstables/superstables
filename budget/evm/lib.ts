@@ -4,6 +4,7 @@
 //   owner  approve(agent, cap)               (setBudget), approve(agent, 0) (revokeBudget)
 //   agent  USDC.transferFrom(owner, agent, price), then pays the seller with its own EIP-3009 signature
 //   agent  USDC.transferFrom(owner, owner, n)  (selfRevoke): lowers its own allowance without moving money
+import { rpcPause } from "../rpc-pause.mjs";
 import { readFileSync, existsSync, writeFileSync, renameSync, statSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import {
@@ -19,10 +20,12 @@ import { readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile } from "../secret-file.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
+import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { noteBinding } from "../page-facts.mjs";
 import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
+import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -69,6 +72,7 @@ export const PUBLIC_ENV = publicFile("evm", CFG.key);
 export const OPS_DIR = opsDir("evm", CFG.key);
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export { rpcPause };
 export const tx = (h: string) => `${EXPLORER}/tx/${h}`;
 export const usdc = (v: bigint) => formatUnits(v, USDC_DECIMALS);
 /** Native gas token amount (Arc: USDC with 18 decimals; Base: ETH). */
@@ -183,7 +187,7 @@ export const newKey = () => generatePrivateKey();
 // every request passes markSend: a broadcast prints SENDING before it leaves (../proof.mjs). Every answer is read through
 // cappedRpcFetch (../rpc.mjs): at most EVM_RPC_MAX_BYTES, RPC error text as one short line, a non-JSON answer named so.
 const rpcFetch = cappedRpcFetch(EVM_RPC_MAX_BYTES);
-const transport = () => http(RPC, { retryCount: 5, retryDelay: 400, onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
+const transport = () => http(RPC, { retryCount: 5, retryDelay: rpcWaitMs(400), onFetchRequest: (_request, init) => markSend(init.body), fetchFn: rpcFetch, maxResponseBodySize: EVM_RPC_MAX_BYTES });
 export const publicClient = createPublicClient({ chain, transport: transport() });
 export const walletFor = (key: Hex, opts?: { nonceManager?: NonceManager }) => {
   const account = privateKeyToAccount(key, opts?.nonceManager ? { nonceManager: opts.nonceManager } : undefined);
@@ -209,7 +213,7 @@ export const erc20Abi = parseAbi([
 export async function retry<T>(fn: () => Promise<T>, tries = 4, gap = 1500): Promise<T> {
   let last: any;
   for (let i = 0; i < tries; i++) {
-    try { return await fn(); } catch (e) { last = e; await sleep(gap); }
+    try { return await fn(); } catch (e) { last = e; await rpcPause(gap); }
   }
   throw last;
 }
@@ -560,7 +564,7 @@ export async function send(w: Wallet, to: Address, data: Hex, label: string, age
   const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  await sleep(3500);
+  await rpcPause(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
   return { hash, blockNumber: r.blockNumber, blockHash: r.blockHash as string, feeWei: feeOf(r) };
 }
@@ -587,7 +591,7 @@ export async function sendJournaled(
   await publicClient.sendRawTransaction({ serializedTransaction });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
-  await sleep(3500);
+  await rpcPause(3500);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber, feeWei: feeOf(r) });
   return { hash, blockNumber: r.blockNumber, feeWei: feeOf(r) };
 }
@@ -619,7 +623,13 @@ export async function agentCtx() {
   const key = need(env, "B4_AGENT_KEY", AGENT_ENV) as Hex;
   const agent = walletFor(key);
   if (agent.account.address.toLowerCase() !== pub.agent.toLowerCase()) throw new Error(`the agent key in ${AGENT_ENV} does not match the agent address in the public file, ${pub.agent}`);
-  if (env.B4_OWNER_ADDRESS && env.B4_OWNER_ADDRESS.toLowerCase() !== pub.owner.toLowerCase()) throw new Error(`owner address in ${AGENT_ENV} differs from the public state`);
+  const stale = staleOwnerLine(env, publicEnv(), CFG.key);
+  if (stale) {
+    // Refused here, before any signature, and not by editing the record: the owner's signature in the public file is the record.
+    const reason = `the agent key file records owner ${stale.fileOwner}, the public state records ${stale.publicOwner}. Nothing was signed`;
+    console.log(`REFUSED: ${reason}. ${AGENT_ENV} and ${PUBLIC_ENV} name different owners.`);
+    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason, owner: stale.publicOwner, agent: pub.agent, next: `${stale.repair} on the machine with the agent key. It asks the owner to sign only when the record needs a new signature. Do not edit the files by hand` }));
+  }
   return { ...pub, wallet: agent, agentKey: key };
 }
 export type AgentCtx = Awaited<ReturnType<typeof agentCtx>>;

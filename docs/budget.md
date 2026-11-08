@@ -1,12 +1,12 @@
 # Budget
 
-`budget` keeps the 0.3.0 command-completion meaning of `final`. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
+`budget` keeps the command-completion meaning `final` had before `chain_final` existed. It is `false` while an owner approval is open or a buy-once `unknown` can still be read by `wait`, and `true` otherwise. `chain_final` describes the current matching payment separately: `true` after chain finality, `false` while included but not final, and `null` when no current matching inclusion is established, including an unknown after removal. A provisional paid purchase is `settled`, with `final: true`, `chain_final: false`, and exit 0 when delivered or exit 4 when not delivered. Check finality later with `reconcile` or `wait`; never pay again for that purchase. Owner-command transactions are not seller payments and have `chain_final: null`. Older stored results without finality evidence also have `chain_final: null`.
 
 Use this when the agent should buy without asking each time. The owner grants a budget once, from
 their own wallet. The agent then buys on its own, purchase by purchase, until the budget is spent
 or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Single purchase](buy-once.md).
 
-**Testnet only.** Mainnet chains are refused. This page uses the `evm` rail, where the budget is a
+**Testnet by default.** Mainnet chains are refused unless the operator enables them with `SUPERSTABLES_ALLOW_MAINNET`. This page uses the `evm` rail, where the budget is a
 USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
 needs a seller that takes payment on Base Sepolia.
 The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet
@@ -47,11 +47,11 @@ expiry, a period and a seller list on chain; see the [security model](security.m
 
 ## Choose where to approve
 
-Start with **local approvals**, the default used below: the client serves the approval page on
-`127.0.0.1`, and the owner signs in their browser wallet with no website account. For a runtime on
-a server, **approvals on superstables.com** let the owner approve from another device without forwarding each
-approval port. Choose `setup --hosted` at the setup step and follow
-[Approve on superstables.com instead](#approve-on-superstablescom-instead).
+For a runtime on a server, **approvals on superstables.com** let the owner approve from another device
+without forwarding each approval port. Choose `setup --hosted` at the setup step and follow
+[Approve on superstables.com instead](#approve-on-superstablescom-instead). Otherwise start with **local
+approvals**, the default used below: the client serves the approval page on `127.0.0.1`, and the owner
+signs in their browser wallet with no website account.
 
 Both choices use the same installed CLI or command-capable agent skill. The budget key, purchases
 and journals stay on your machine or server.
@@ -126,6 +126,7 @@ from the chain:
 RESULT {"ok":true,"command":"grant","rail":"evm","chain":"arc-testnet","state":"settled","final":true,"chain_final":null,"amount":"0.06","remaining":"0.06","tx":{"grant":"0x3500864caba62204475387fe2f578e7da08ca6e233ae8c18a8c4b77b11eb5763"},"expiry":null,"next":"none"}
 ```
 
+A budget approved on superstables.com is at most 1,000 in the chain's test token, or less where an owner-set limit applies.
 A live budget is never replaced silently. If the owner explicitly asks to change it, revoke it
 first, then grant the amount they requested.
 
@@ -143,7 +144,7 @@ RESULT {"ok":true,"command":"status","rail":"evm","chain":"arc-testnet","state":
 RESULT {"ok":true,"command":"preflight","rail":"evm","chain":"arc-testnet","state":"ok","final":true,"chain_final":null,"amount":"0.05","payTo":"0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e",...}
 ```
 
-Buy only if the price is within what the owner allows. Set `--max` to that maximum in USDC, use the
+Buy only if the price is within what the owner allows. Set `--max` to that maximum in the service's token, use the
 `payTo` from your own preflight for `--pay-to`, and choose a new `--op` id. Here, the maximum is
 0.06 USDC:
 
@@ -235,7 +236,7 @@ revoke on chain, not the retired list, which is a file on this machine.
 
 Use approval on superstables.com when the owner wants to approve from a device other than the machine running
 the agent. superstables.com supports Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy,
-SKALE Base Sepolia, Ethereum Sepolia, Tempo Moderato and Solana devnet.
+SKALE Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato and Solana devnet.
 The owner needs a compatible wallet on that device and a superstables.com account. They sign in with an
 Ethereum or Solana wallet or an email address. An account admin links the wallets that approve on the account page:
 an Ethereum wallet for the EVM chains and Tempo, or a Solana wallet for Solana. Signing in and adding an agent do

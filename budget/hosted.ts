@@ -84,7 +84,7 @@ import { createHash, createPrivateKey, createPublicKey, randomBytes, sign as sig
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { getAddress, isAddress, recoverMessageAddress, type Hex } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, signMessage } from "viem/accounts";
 import { WALLET_STATES, sentEvidence, viewEvidence, walletEvidence } from "./site.mjs";
 import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/signer/owner-approval-server.ts";
 import { isProof } from "../src/core/proofs.mjs";
@@ -227,7 +227,13 @@ export type SolanaAgentKey = { ed25519: Uint8Array; address: string };
 export type AgentKey = Hex | SolanaAgentKey;
 const isSolanaKey = (k: AgentKey): k is SolanaAgentKey => typeof k === "object" && k !== null;
 /** The agent's address as the site knows it: 0x... (EVM) or base58 (Solana). */
-export const agentAddressOf = (k: AgentKey): string => (isSolanaKey(k) ? k.address : privateKeyToAccount(k).address);
+// Deriving an address from an EVM key is an elliptic-curve multiplication, and every signed request names the agent.
+let lastEvmAgent: { key: Hex; address: string } | undefined;
+export const agentAddressOf = (k: AgentKey): string => {
+  if (isSolanaKey(k)) return k.address;
+  if (lastEvmAgent?.key !== k) lastEvmAgent = { key: k, address: privateKeyToAccount(k).address };
+  return lastEvmAgent.address;
+};
 
 /** An ed25519 signature over `message` by a Solana secret key, 0x + 128 hex. */
 function ed25519Sign(k: SolanaAgentKey, message: string): string {
@@ -246,7 +252,7 @@ export async function agentProof(key: AgentKey, origin: string, method: string, 
   if (!/^[0-9a-f]{32}$/.test(nonce)) throw new Error("the nonce is 32 lowercase hex characters");
   const text = agentProofText(origin, method, path, rawBody, timestamp, nonce);
   const agent = agentAddressOf(key);
-  const signature = isSolanaKey(key) ? ed25519Sign(key, text) : await privateKeyToAccount(key).signMessage({ message: text });
+  const signature = isSolanaKey(key) ? ed25519Sign(key, text) : await signMessage({ message: text, privateKey: key });
   return {
     agent,
     headers: {
@@ -405,6 +411,8 @@ export interface HostedHandle {
   url: string;
   expiresAt: number;
   matchCode: string;
+  /** The site held the requested timeout to its limits: what it said, for the owner's agent to relay. */
+  notice?: string;
   /** The agent was already linked on this chain: no link to show, `settled` is already connected (with a verified proof). */
   alreadyLinked?: boolean;
   /** An earlier worker made this request and this one finishes it: the link was shown then, so it is not announced again. */
@@ -557,6 +565,12 @@ function siteReason(site: string, v: any): string {
   return `${site} gives the reason ${siteWord("code", v.reason_code)}${next ? `; ${next}` : ""}`;
 }
 
+/** The sentence the site adds when it held the requested timeout to its limits, as plain text. */
+const noticeOf = (answer: unknown): { notice?: string } => {
+  const n = (answer as { approval?: { notice?: unknown } } | undefined)?.approval?.notice;
+  return typeof n === "string" && n ? { notice: siteText(n).slice(0, 300) } : {};
+};
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,90}$/;
@@ -580,6 +594,8 @@ const railFlags = (rail: HostedRail, chain: string) => (rail === "evm" ? `--rail
 
 /** The budget API's announcement that a link may name its owner (superstables-app lib/budget/features.ts). */
 export const EXPECTED_OWNER_FEATURE = "expected_owner";
+/** The budget API's announcement that a request may set how long its link lasts, `timeout_seconds`, held to 10..3600 (superstables-app lib/approval-window.ts). */
+export const TIMEOUT_FEATURE = "timeout_seconds";
 
 /**
  * What a restarted worker's outcome rests on. Only the factories below make one, each from an answer of the site that is about
@@ -718,6 +734,8 @@ export class HostedApprovals {
       kind = k;
       body = { kind: k, rail: this.s.rail, chain: this.s.chain, agent, ...(input.kind === "solana-intent" ? { solana: input.solana } : { transaction: input.transaction }) };
     }
+    // a request signed for the connector or adopted is signed for a site that may not list the field: it keeps the site's default window
+    if (!this.s.signOnly && !this.s.adopt && (await this.features()).has(TIMEOUT_FEATURE)) body = { ...body, timeout_seconds: Math.round(input.timeoutMs / 1000) };
     const taken = this.s.resume;
     const intent = bodyHash(JSON.stringify({ kind, rail: this.s.rail, chain: this.s.chain, agent, then: then ?? null, transaction: (body as { transaction?: unknown }).transaction ?? null, solana: (body as { solana?: unknown }).solana ?? null }));
     if (taken) {
@@ -829,7 +847,8 @@ export class HostedApprovals {
       this.s.onRecord?.(record);
     }
 
-    const expiresAt = Math.min(localDeadline, created.expiresAt);
+    // the link lives until the site's expiry; this command's own wait is localDeadline
+    const expiresAt = created.expiresAt;
     if (!taken) this.audit({ id: created.id, kind, title: input.terms.title, status: "awaiting_owner", hash: seen.hash ?? undefined, sending: seen.asked || undefined });
     let resolve!: (o: OwnerActionOutcome) => void;
     const settled = new Promise<OwnerActionOutcome>((deliverOnce) => {
@@ -860,6 +879,7 @@ export class HostedApprovals {
         url: created.url,
         expiresAt,
         matchCode: created.matchCode,
+        ...noticeOf(created.answer),
         link: { id: created.id, code: created.matchCode },
         ...(taken ? { adopted: true } : {}),
         settled,
@@ -879,6 +899,7 @@ export class HostedApprovals {
       url: created.url,
       expiresAt,
       matchCode: created.matchCode,
+      ...noticeOf(created.answer),
       ...(kind === "link" ? { link: { id: created.id, code: created.matchCode } } : {}),
       ...(taken ? { adopted: true } : {}),
       settled,

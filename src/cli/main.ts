@@ -27,7 +27,7 @@ import {
   walletDir,
 } from "../core/home.js";
 import { SERVICE_BODY_LIMIT, paymentOutput, recheckChain, shownAttempt, shownPayer, shownReceipt, shownTransaction } from "../core/pay.js";
-import { POLICY_EXAMPLE, loadPaymentPolicy, loadPolicy } from "../core/policy.js";
+import { POLICY_EXAMPLE, defaultsReason, loadPaymentPolicy, loadPolicy } from "../core/policy.js";
 import { QUOTE_TTL_MS, getQuote, quote as takeQuote } from "../core/quote.js";
 import { Records, settleStaleAwaiting } from "../core/records.js";
 import { SellerUnreachableError } from "../core/x402.js";
@@ -67,7 +67,8 @@ import {
   inclusionRemoved,
   isFinalAttempt,
   nextFor,
-  policyFileFor,
+  policyRefusalHelp,
+  refusedLimit,
 } from "./outcome.js";
 import { PaymentStartedError, approveAndPay } from "./pay.js";
 import { clientPorts, creditJson, printCredit, printTopUp, runTopUp, topUpJson, type TopUpResult } from "./top-up.js";
@@ -106,7 +107,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
-      "the owner controls. Testnet only. No real money moves.",
+      "the owner controls. Testnet by default; the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -150,6 +151,7 @@ explain(
       console.log("");
       console.log(field("home", homeDir()));
       console.log(field("policy", `${policyPath()}${wrotePolicy ? " (written)" : " (already there)"}`));
+      console.log(field("limits", `${policySummary(loadPolicy(policyPath()))} (edit the caps in that file to change them; write null to remove one)`));
 
       if (mode === "browser") {
         console.log(field("signing", "MetaMask, on an approval page this client serves on 127.0.0.1"));
@@ -172,7 +174,7 @@ explain(
           // A new key is encrypted with a passphrase, and without a terminal there is nobody to type one.
           console.log(field("wallet key", "not created: setup needs a terminal to ask for the key's passphrase"));
           console.log(
-            "  run `superstables wallet init` in a terminal (or `superstables wallet init --no-passphrase` to store it unencrypted, testnet only)",
+            "  run `superstables wallet init` in a terminal (or `superstables wallet init --no-passphrase` to store it unencrypted, for a testnet key)",
           );
         } else {
           if (createdKey) initKey({ dir: walletDir(), passphrase: await askNewPassphrase() });
@@ -228,14 +230,14 @@ explain(
     .description("create this machine's wallet key, or import one")
     .option("--import-key-file <path>", "import a private key from a file (mode 600)")
     .option("--force", "replace an existing key (the old key cannot be recovered)")
-    .option("--no-passphrase", "store the key unencrypted (testnet only; anyone who can read the file can sign)")
+    .option("--no-passphrase", "store the key unencrypted (for a testnet key; anyone who can read the file can sign)")
     .action(async (options: { importKeyFile?: string; force?: boolean; passphrase: boolean }) => {
       const leftover = leftoverKeyFile(walletDir());
       if (leftover) console.error(`wallet: ${leftoverHint(leftover, walletDir())}`);
       if (options.passphrase !== false && !canAsk()) {
         throw badInput(
           "wallet init asks for a passphrase to encrypt the key, and there is no terminal to ask; run it in a terminal, " +
-            "or pass --no-passphrase to store the key unencrypted (testnet only)",
+            "or pass --no-passphrase to store the key unencrypted (for a testnet key)",
         );
       }
       ensureDir(walletDir()); // a folder that would refuse the key, before a passphrase is asked for nothing
@@ -541,7 +543,7 @@ explain(
         "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
         "does not verify that the data is real), and not said when the listing does not say (mock in --json: " +
         "true, false or null). Chains are named as the index names them: base and solana are mainnets, and " +
-        "nothing on a mainnet is payable here. By default only listings pay can call are shown.",
+        "a mainnet listing is not payable here while mainnet is off (SUPERSTABLES_ALLOW_MAINNET). By default only listings pay can call are shown.",
       "Next, per listing: the commands for each way this client could pay it, pay first. pay: " +
         "`superstables quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget " +
         "preflight` (signs nothing; prints the price and payTo), then `superstables budget buy --max <ceiling> " +
@@ -632,12 +634,15 @@ explain(
       }
       console.log(field("recipient", taken.terms.recipient));
       console.log(field("expires", `${taken.expiresAt} (${QUOTE_TTL_MS / 60_000} minutes; one quote starts at most one payment)`));
-      const where =
-        (existsSync(policyPath()) ? policyPath() : "the built-in defaults (no policy file)") +
-        (policy.also ? ` and ${policy.also.file}` : "");
+      const defaults = defaultsReason(policyPath());
+      const where = (defaults ? "the default limits" : policyPath()) + (policy.also ? ` and ${policy.also.file}` : "");
       console.log(
         field("policy", taken.policy.allowed ? `allowed by ${where}` : `refused by ${where}: ${taken.policy.reason}`),
       );
+      // On its own line: with long paths, the policy line would otherwise be cut before the reason.
+      if (defaults) {
+        console.log(field("defaults", `${defaults}; the owner runs \`superstables policy init\` (with --force if the file is there but empty) and edits that file`));
+      }
       for (const check of taken.policy.checks ?? []) {
         console.log(`    ${check.ok ? "ok     " : "REFUSED"}  ${check.rule.padEnd(12)} ${check.detail}`);
       }
@@ -646,8 +651,8 @@ explain(
         taken.policy.allowed
           ? `Nothing has been paid. Next: \`${next}\` asks the wallet's owner to approve it; ` +
               "the owner's wallet checks the policy again."
-          : `Nothing has been paid, and the spend policy refuses this payment. \`${next}\` prints the rules; ` +
-              `the owner edits ${policyFileFor(taken.policy.reason)} if they are wrong.`,
+          : `Nothing has been paid, and the spend policy refuses this payment${refusedLimit(taken.policy.reason) ? ` (${refusedLimit(taken.policy.reason)})` : ""}. ` +
+              policyRefusalHelp(taken.policy.reason),
       );
     }),
   {
@@ -1012,7 +1017,8 @@ explain(
       "The credit is added once the payment's block is final on chain. A payment the site reports as pending, or " +
         "cannot confirm, or answers with money_moved other than false, on any HTTP status, is never paid again from " +
         "here: `superstables seller credit` rechecks it. \"Nothing was charged\" is said only when nothing was " +
-        "signed. The default spend policy allows 0.05 USDC per payment, so a top-up needs a raised cap in the policy file.",
+        "signed. By default the spend policy refuses any payment above 0.05 USDC (caps.per_call in policy.yaml), so a " +
+        "top-up of more needs that cap raised, or removed by writing null as its value.",
     ],
     money: "yes, once, and only after the owner approves it in their own wallet: test USDC on Base Sepolia.",
     who: "the seller (the owner of the seller account).",
@@ -1101,7 +1107,7 @@ explain(
     notes: [
       "The seller side of the demo. Point discovery at it with " +
         `SUPERSTABLES_DEMO_SERVICE_URL=http://127.0.0.1:${DEFAULT_DEMO_SERVICE_PORT}/v1/market.`,
-      "Claim challenge, off unless set (testnet only): SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
+      "Claim challenge, off unless set: SUPERSTABLES_CLAIM_CHALLENGE=<ssc_...> serves " +
         "/.well-known/superstables.txt and adds a Superstables-Claim header to every answer of /v1/market, so " +
         "superstables.com can confirm this host is yours.",
     ],
@@ -1190,7 +1196,8 @@ const policy = explain(
     notes: [
       "policy.yaml sets caps per payment and per day, host allow and deny lists, the accepted " +
         "stablecoins and a kill switch. It is software policy, checked by this client and again by the " +
-        "wallet; the chain does not enforce it. Budgets have their own on-chain limits instead.",
+        "wallet; the chain does not enforce it. Budgets have their own on-chain limits instead. " +
+        "The caps start at 0.05 USDC per payment and 1 USDC per UTC day; the owner changes a value, or removes a cap by writing null as its value.",
       "The per-day cap: a payment counts on the day it ended, and on every day while it is still open (signed and " +
         "in flight until its authorization expires, or waiting for the owner within its approval window). pay reserves the amount before the owner " +
         "is asked, so two payments started at once cannot both pass; one that ends unsigned releases it.",
@@ -1214,7 +1221,8 @@ explain(
         console.log(json(parsed));
         return;
       }
-      console.log(field("file", existsSync(policyPath()) ? policyPath() : `${policyPath()} (missing: defaults apply)`));
+      const defaults = defaultsReason(policyPath());
+      console.log(field("file", defaults ? `${defaults}, so the default limits apply` : policyPath()));
       console.log(field("in force", policySummary(parsed)));
       if (existsSync(policyPath())) {
         console.log("");

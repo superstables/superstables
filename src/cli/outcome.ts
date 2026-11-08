@@ -8,6 +8,7 @@
 
 import { networkFor, shortLabel } from "../core/chain.js";
 import { accountPolicyPath, policyPath } from "../core/home.js";
+import { defaultsReason } from "../core/policy.js";
 import { railFor } from "../core/rails/index.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { FINAL_ATTEMPT_STATES } from "../core/types.js";
@@ -115,6 +116,29 @@ export function policyFileFor(reason: string | undefined): string {
   return reason?.endsWith(`(in ${account})`) ? account : policyPath();
 }
 
+/** The rule a policy reason names: caps.per_call, caps.per_day or kill_switch; undefined for a host or coin rule. */
+export function refusedLimit(reason: string | undefined): string | undefined {
+  return /caps\.per_call|caps\.per_day|kill_switch/.exec(reason ?? "")?.[0];
+}
+
+/** How the owner replaces the default caps with their own: init writes a missing file, --force an empty one. */
+export const DEFAULTS_HELP = "To change or remove them, the owner runs `superstables policy init` (with --force if the file is there but empty) and edits that file.";
+
+const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** What to tell the owner when the spend policy refused: the rule, the file, and that a cap can be changed or removed. */
+export function policyRefusalHelp(reason: string | undefined): string {
+  const limit = refusedLimit(reason);
+  const file = policyFileFor(reason);
+  // A refusal "(in <account file>)" came from that file, so it is there; any other came from the chosen file or, when
+  // that file is missing, from the defaults.
+  const fromAccountFile = reason?.endsWith(`(in ${accountPolicyPath()})`) ?? false;
+  const defaults = fromAccountFile ? undefined : defaultsReason(file);
+  if (defaults) return `${capitalized(defaults)}, so the default limits apply. ${DEFAULTS_HELP}`;
+  const cap = limit?.startsWith("caps.") ? ` To change this limit, set ${limit.slice(5)} there to a new value, or to null to remove it.` : "";
+  return `\`superstables policy show\` prints the rules; the owner edits ${file} if they are wrong.${cap}`;
+}
+
 /** The terminal's Next line. A removed inclusion's warning is already in the opening, so it is not repeated here. */
 export function humanNextFor(attempt: Attempt, quote?: Quote): string {
   if (inclusionRemoved(attempt)) return `${searchCommand(attempt)}This attempt stays uncertain even after expiry. Ask the owner to check their wallet activity and report the payment to the seller.`;
@@ -169,7 +193,7 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
     }
     case "failed":
       if (attempt.refusal === "policy") {
-        return `A spend policy refused it. \`superstables policy show\` prints the rules; the owner edits ${policyFileFor(attempt.reason)} if they are wrong.`;
+        return `A spend policy refused it${refusedLimit(attempt.reason) ? ` (${refusedLimit(attempt.reason)})` : ""}. ${policyRefusalHelp(attempt.reason)}`;
       }
       if (attempt.refusal === "approval_page") {
         return (

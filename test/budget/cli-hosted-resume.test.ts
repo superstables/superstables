@@ -17,6 +17,7 @@ import { evmOwner, startFakeRpc, startFakeSite, type FakeSite } from "../helpers
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import type { TestServer } from "../helpers/servers.js";
 
+const SKIP_WAITS = fileURLToPath(new URL("../helpers/skip-waits.mjs", import.meta.url));
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const OWNER = evmOwner("22");
 const AGENT = "0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A";
@@ -52,7 +53,7 @@ function budget(args: string[], extraEnv: Record<string, string> = {}): Promise<
     for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_BUDGET_HOLDER", "SUPERSTABLES_BUDGET_RESUME"]) delete env[k];
     Object.assign(env, extraEnv);
     tree.set({ "base-sepolia": [{ url: rpc!.url, operator: "fake-a" }, { url: `${rpc!.url}/`, operator: "fake-b" }], "arc-testnet": [{ url: rpc!.url, operator: "fake-a" }] });
-    const child = spawn(process.execPath, [resolve(tree.root, "budget/cli.mjs"), ...args], { cwd: tree.root, env });
+    const child = spawn(process.execPath, [(extraEnv.NODE_OPTIONS ? resolve(tree.root, "budget/cli.mjs") : resolve(tree.bundle(), "cli.mjs")), ...args], { cwd: tree.root, env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (c) => (stdout += String(c)));
@@ -732,7 +733,7 @@ describe("grant, revoke and fund-agent, when the host ends the worker before the
     // the site is quiet: it answers neither reads nor the cancel
     site.cancelFails = true;
     site.readAnswer = (_r, view) => (++reads === 1 ? { status: 200, body: { ...view, state: "awaiting_owner", final: false } } : { status: 503, body: {} });
-    const quiet = await budget(["wait", "--shown", "--id", id, "--timeout", "55"]);
+    const quiet = await budget(["wait", "--shown", "--id", id, "--timeout", "55"], { NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${SKIP_WAITS}`].filter(Boolean).join(" ") });
     expect(quiet.result).toMatchObject({ final: false });
     expect(record(id).final).toBeUndefined();
     expect(record(id).hosted.token).toMatch(/^ssbt_/);
