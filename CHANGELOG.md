@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Testnet only.
+
+### Changed
+
+- **Mainnet signing:** Signing on a mainnet chain now also needs a checked mainnet manifest that says signing is live and approves the chain, and it stops while mainnet is paused (`SUPERSTABLES_MAINNET_PAUSE`, or a `mainnet-paused` file in the client's home folder). An approved chain has a cap for one payment or grant and a cap for any 24 hours. This release ships the manifest off, so no mainnet chain is signable, with or without `SUPERSTABLES_ALLOW_MAINNET`. Testnets are unaffected.
+
 ## [1.1.3] - Approval link timeouts and final transactions
 
 Testnet only.
