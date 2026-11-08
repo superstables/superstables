@@ -26,7 +26,6 @@ Run these when a change touches what they cover:
 | Skill zip | `npm run skill`, then `npm run skill:check` (needs the network) |
 | Docs, README or any shipped text | `npm run copy:check` |
 | Install routes | `npm run install-check` |
-| Release version | `npm run version:set -- <x.y.z> [--title "Changelog title"]` writes every pin (`package.json`, the lockfile, the docs and help text that name the release) and runs `plugin:sync`; there is no other bump script, and `sed` over the files skips the generated ones. `npm test` fails, naming the file, when a pin disagrees with `package.json`. Then `npm run build && npm run docs:cli -- --check`. |
 
 ## Where things live
 
