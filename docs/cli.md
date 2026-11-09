@@ -32,9 +32,10 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 ```text
 Usage: superstables [options] [command]
 
-Find services that charge per request, quote them, and pay them with test USDC
-from a wallet the owner controls. Testnet by default; mainnet needs a release
-that approves the chain and SUPERSTABLES_ALLOW_MAINNET.
+Find services that charge per request, quote them, and pay them with test
+stablecoins from a wallet the owner controls. Testnet by default. Mainnet
+requires a release that approves the chain and operator permission. Stop and ask
+the owner.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -161,7 +162,7 @@ Discovery:
   SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
-  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3,
+  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.2.0,
   even with the switch enabled. Agents never set the variable.
 
 Environment:

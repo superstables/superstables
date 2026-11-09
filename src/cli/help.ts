@@ -156,7 +156,7 @@ Discovery:
   SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with \`off\`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
-  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3,
+  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.2.0,
   even with the switch enabled. Agents never set the variable.
 
 Environment:

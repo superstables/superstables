@@ -92,7 +92,7 @@ describe("the superstables CLI", () => {
       expect(result.stdout).toContain(command);
     }
     // The one sentence a reader must not miss.
-    expect(result.stdout).toContain("Testnet by default; mainnet needs a release");
+    expect(result.stdout).toContain("Testnet by default. Mainnet");
     // The hosted catalogue is not simulated as a whole: its market data service returns live prices.
     expect(result.stdout).not.toMatch(/simulated demo services/);
     expect(result.stdout).toMatch(/most are simulated; the market data service returns live prices/);
@@ -352,7 +352,7 @@ describe("the help", () => {
   it("explains the two ways to pay, where to start each, the environment and the exit codes", async () => {
     const { stdout, code } = await run(["--help"]);
     expect(code).toBe(0);
-    expect(stdout).toContain("Testnet by default; mainnet needs a release");
+    expect(stdout).toContain("Testnet by default. Mainnet");
     expect(stdout).toContain("Two ways to pay");
     expect(stdout).toContain("superstables budget setup --rail evm");
     expect(stdout).toContain("`superstables setup` is for pay only");

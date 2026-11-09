@@ -115,7 +115,7 @@ You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.1.3 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.2.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -314,7 +314,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
-- Mainnet: refused until a release approves a chain.
+- Mainnet: refused until a release approves a chain and the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.
 - Expiry, period and seller list on `evm` and `solana`: the chain cannot enforce them, so `superstables budget grant` refuses them.
 - Tempo payment sessions, Solana Squads spending limits and Solana Subscriptions are not behind `superstables budget`: `buy` pays one charge or one transfer at a time.
