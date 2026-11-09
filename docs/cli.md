@@ -33,8 +33,8 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with test USDC
-from a wallet the owner controls. Testnet by default; the operator turns mainnet
-on with SUPERSTABLES_ALLOW_MAINNET.
+from a wallet the owner controls. Testnet by default; mainnet needs a release
+that approves the chain and SUPERSTABLES_ALLOW_MAINNET.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -71,10 +71,11 @@ Commands:
                                  which the fees of referred sales come out of
   demo-service [options]         run the demo paid service, so there is
                                  something to buy on this machine
-  budget [args...]               on-chain budgets (testnets): the owner grants a
-                                 budget once, then the agent buys alone. Start
-                                 with `superstables budget setup --rail evm`;
-                                 `superstables budget --help` lists its commands
+  budget [args...]               on-chain budgets (testnet by default): the
+                                 owner grants a budget once, then the agent buys
+                                 alone. Start with `superstables budget setup
+                                 --rail evm`; `superstables budget --help` lists
+                                 its commands
   doctor [options]               check everything pay needs, one line at a time
   policy                         the spend policy this client and the wallet
                                  both apply to pay
@@ -429,8 +430,7 @@ simulated is yes when the listing marks the output as prepared sample output, no
 not sample output (Superstables' market data service, which returns live prices; no does not verify
 that the data is real), and not said when the listing does not say (mock in --json: true, false or
 null). Chains are named as the index names them: base and solana are mainnets, and a mainnet listing
-is not payable here while mainnet is off (SUPERSTABLES_ALLOW_MAINNET). By default only listings pay
-can call are shown.
+is not payable here while mainnet is off. By default only listings pay can call are shown.
 
 Next, per listing: the commands for each way this client could pay it, pay first. pay: `superstables
 quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget preflight` (signs

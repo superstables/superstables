@@ -3,7 +3,7 @@
 The Superstables client is a command, `superstables`, and the `superstables` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off: it opens only on a chain a release approves, and only when the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
 
 ## What you need
 

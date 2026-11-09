@@ -107,7 +107,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
-      "the owner controls. Testnet by default; the operator turns mainnet on with SUPERSTABLES_ALLOW_MAINNET.",
+      "the owner controls. Testnet by default; mainnet needs a release that approves the chain and SUPERSTABLES_ALLOW_MAINNET.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -543,7 +543,7 @@ explain(
         "it marks it as not sample output (Superstables' market data service, which returns live prices; no " +
         "does not verify that the data is real), and not said when the listing does not say (mock in --json: " +
         "true, false or null). Chains are named as the index names them: base and solana are mainnets, and " +
-        "a mainnet listing is not payable here while mainnet is off (SUPERSTABLES_ALLOW_MAINNET). By default only listings pay can call are shown.",
+        "a mainnet listing is not payable here while mainnet is off. By default only listings pay can call are shown.",
       "Next, per listing: the commands for each way this client could pay it, pay first. pay: " +
         "`superstables quote`, then `superstables pay <quote-id>`. A budget on evm: `superstables budget " +
         "preflight` (signs nothing; prints the price and payTo), then `superstables budget buy --max <ceiling> " +
@@ -1128,7 +1128,7 @@ explain(
 program
   .command("budget")
   .description(
-    "on-chain budgets (testnets): the owner grants a budget once, then the agent buys alone. " +
+    "on-chain budgets (testnet by default): the owner grants a budget once, then the agent buys alone. " +
       "Start with `superstables budget setup --rail evm`; `superstables budget --help` lists its commands",
   )
   .helpOption(false)

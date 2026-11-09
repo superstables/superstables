@@ -68,7 +68,7 @@ describe("termsFor", () => {
     expect(judged.supported).toBe(false);
     if (judged.supported) return;
     expect(judged.reason).toContain("Base (mainnet)");
-    expect(judged.reason).toContain("mainnet is off: only the operator turns it on, with SUPERSTABLES_ALLOW_MAINNET=1 in their environment (Base Sepolia");
+    expect(judged.reason).toContain("mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator and a release that approves the chain (Base Sepolia");
   });
 
   it("refuses x402 on Tempo Moderato as the protocol it is, not as a chain this client does not pay on", () => {

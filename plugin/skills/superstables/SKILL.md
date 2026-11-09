@@ -6,7 +6,7 @@ description: Finds services that charge per request, requests a single purchase 
 # Superstables
 
 Use the connected Superstables tools to find a service and request a purchase.
-Testnet-first: test tokens, no real money. Mainnet is off, and only the operator turns it on (`SUPERSTABLES_ALLOW_MAINNET`); you never set it, and when a refusal names it you report the refusal and stop.
+Testnet-first: test tokens, no real money. Mainnet is off until a release approves a chain and the operator allows it (`SUPERSTABLES_ALLOW_MAINNET`); you never set it, and when a refusal names it you report the refusal and stop.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 

@@ -60,7 +60,7 @@ export function mainnetSwitch(env = globalThis.process?.env ?? {}) {
 export function mainnetSwitchRefusal(env) {
   const s = mainnetSwitch(env);
   if ("error" in s) return s.error;
-  return s.enabled ? "" : `mainnet is off: only the operator turns it on, with ${MAINNET_ENV}=1 in their environment`;
+  return s.enabled ? "" : `mainnet is off: it needs ${MAINNET_ENV}=1 from the operator and a release that approves the chain`;
 }
 
 /**
