@@ -346,7 +346,9 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/superstables/superstables/compare/v1.1.3...v1.2.0
+[1.1.3]: https://github.com/superstables/superstables/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/superstables/superstables/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/superstables/superstables/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/superstables/superstables/compare/v1.0.0...v1.1.0

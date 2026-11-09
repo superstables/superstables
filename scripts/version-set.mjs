@@ -19,6 +19,7 @@
 //   - a registered pin names another version, or a file has none,
 //   - the plugin check (`plugin-sync --check`) fails,
 //   - package-lock.json disagrees with package.json,
+//   - CHANGELOG.md's `[Unreleased]` link does not compare from the current version, or that version has no link,
 //   - a tracked file other than those listed in OTHER_FILES names the current version, which means
 //     a new pin was added without a place in PINS.
 
@@ -85,6 +86,10 @@ const fix = "Run `npm run version:set -- <x.y.z>`, which rewrites every pin from
 
 const read = (root, file) => readFileSync(join(root, file), "utf8");
 
+const COMPARE = "https://github.com/superstables/superstables/compare";
+const unreleasedLink = (version) => `[Unreleased]: ${COMPARE}/v${version}...HEAD`;
+const versionLink = (version) => new RegExp(`^\\[${escape(version)}\\]: `, "m");
+
 /** The problems found, each naming a file and the fix. Empty when every pin agrees. */
 export function checkPins(root) {
   const version = JSON.parse(read(root, "package.json")).version;
@@ -100,6 +105,11 @@ export function checkPins(root) {
   const lock = JSON.parse(read(root, "package-lock.json"));
   for (const [where, v] of [["version", lock.version], ['packages[""].version', lock.packages?.[""]?.version]]) {
     if (v !== version) problems.push(`package-lock.json: ${where} is ${v} but package.json is ${version}. ${fix}`);
+  }
+
+  const log = read(root, "CHANGELOG.md");
+  if (!log.includes(`${unreleasedLink(version)}\n`) || !versionLink(version).test(log)) {
+    problems.push(`CHANGELOG.md: the links at the end need \`${unreleasedLink(version)}\` and a \`[${version}]: \` compare link. Run \`npm run version:set -- <x.y.z> --title "..."\`, or fix the links by hand.`);
   }
 
   try {
@@ -151,7 +161,11 @@ export function setVersion(root, next, { title, plugin = true } = {}) {
     const log = read(root, "CHANGELOG.md");
     const marker = "## [Unreleased]\n\n";
     if (!log.includes(marker)) throw new Error("CHANGELOG.md has no `## [Unreleased]` heading to cut");
-    put("CHANGELOG.md", log.replace(marker, `${marker}## [${next}] - ${title}\n\n`));
+    const cut = log.replace(marker, `${marker}## [${next}] - ${title}\n\n`);
+    const added = versionLink(next).test(cut) ? "" : `[${next}]: ${COMPARE}/v${old}...v${next}\n`;
+    const linked = cut.replace(/^\[Unreleased\]: .*\n/m, `${unreleasedLink(next)}\n${added}`);
+    if (!linked.includes(unreleasedLink(next))) throw new Error("CHANGELOG.md has no `[Unreleased]: ` compare link to update");
+    put("CHANGELOG.md", linked);
   }
   if (plugin) {
     execFileSync(process.execPath, [join(root, "scripts/plugin-sync.mjs")], { cwd: root, stdio: "inherit" });

@@ -1,4 +1,4 @@
-# Superstables payments
+# Superstables CLI
 
 The `superstables` CLI finds services that charge per request, reads their price without paying, and pays them with test stablecoins. **Testnet-first: test tokens, no real money.** Mainnet is off until a release approves a chain and the operator allows it (`SUPERSTABLES_ALLOW_MAINNET`); you never set it. There are two ways to pay:
 

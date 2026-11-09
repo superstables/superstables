@@ -106,7 +106,7 @@ program
   // person reaches for when a machine has been installed over more than once.
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
-    "Find services that charge per request, quote them, and pay them with test USDC from a wallet " +
+    "Find services that charge per request, quote them, and pay them with test stablecoins from a wallet " +
       "the owner controls. Testnet by default; mainnet needs a release that approves the chain and SUPERSTABLES_ALLOW_MAINNET.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")

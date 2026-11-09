@@ -314,7 +314,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
-- Mainnet: refused until a release approves a chain.
+- Mainnet: refused until a release approves a chain and the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.
 - Expiry, period and seller list on `evm` and `solana`: the chain cannot enforce them, so `superstables budget grant` refuses them.
 - Tempo payment sessions, Solana Squads spending limits and Solana Subscriptions are not behind `superstables budget`: `buy` pays one charge or one transfer at a time.

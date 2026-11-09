@@ -48,7 +48,7 @@ describe("version pins", { timeout: 120_000 }, () => {
     const before = versionOf(dir);
     edit(dir, "docs/install.md", (t) => `${t}\nThe 1.0.0 release added this feature. The ${before} release added that one.\n`);
     expect(checkPins(dir)).toEqual([]);
-    setVersion(dir, "1.2.3");
+    setVersion(dir, "1.2.3", { title: "Example" });
     expect(checkPins(dir)).toEqual([]);
     expect(readFileSync(join(dir, "docs/install.md"), "utf8")).toContain(`The 1.0.0 release added this feature. The ${before} release added that one.`);
   });
@@ -74,6 +74,18 @@ describe("version pins", { timeout: 120_000 }, () => {
     expect(readFileSync(join(dir, "CHANGELOG.md"), "utf8")).toContain("## [1.2.5] - More words");
     expect(run("--title", "Words").status).toBe(2);
     expect(run("--check").status).toBe(0);
+  });
+
+  it("names the changelog links when they lag, and --title writes them", () => {
+    const dir = copy();
+    const version = versionOf(dir);
+    edit(dir, "CHANGELOG.md", (t) => t.replace(`compare/v${version}...HEAD`, "compare/v1.0.0...HEAD"));
+    expect(checkPins(dir).join("\n")).toContain("CHANGELOG.md: the links");
+    setVersion(dir, "1.2.3", { title: "Words" });
+    const log = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
+    expect(log).toContain("[Unreleased]: https://github.com/superstables/superstables/compare/v1.2.3...HEAD\n");
+    expect(log).toContain(`[1.2.3]: https://github.com/superstables/superstables/compare/v${version}...v1.2.3\n`);
+    expect(checkPins(dir)).toEqual([]);
   });
 
   it("registers every pin file as a pattern list", () => {

@@ -730,7 +730,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
---mainnet, or a mainnet chain, is refused unless the operator sets SUPERSTABLES_ALLOW_MAINNET=1; agents never set it.`;
+--mainnet, or a mainnet chain, is refused unless a release approves the chain and the operator sets SUPERSTABLES_ALLOW_MAINNET=1; agents never set it.`;
 
 // ---- output -----------------------------------------------------------------------------------------
 // control characters (C0, DEL, C1) and the Unicode line and paragraph separators become spaces: one line, always

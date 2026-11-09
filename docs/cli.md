@@ -32,9 +32,9 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 ```text
 Usage: superstables [options] [command]
 
-Find services that charge per request, quote them, and pay them with test USDC
-from a wallet the owner controls. Testnet by default; mainnet needs a release
-that approves the chain and SUPERSTABLES_ALLOW_MAINNET.
+Find services that charge per request, quote them, and pay them with test
+stablecoins from a wallet the owner controls. Testnet by default; mainnet needs
+a release that approves the chain and SUPERSTABLES_ALLOW_MAINNET.
 
 Options:
   -V, --version                  print the version of this client and exit
