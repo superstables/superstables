@@ -33,8 +33,9 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with test
-stablecoins from a wallet the owner controls. Testnet by default; mainnet needs
-a release that approves the chain and SUPERSTABLES_ALLOW_MAINNET.
+stablecoins from a wallet the owner controls. Testnet by default. Mainnet
+requires a release that approves the chain and operator permission. Stop and ask
+the owner.
 
 Options:
   -V, --version                  print the version of this client and exit

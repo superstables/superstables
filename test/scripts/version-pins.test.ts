@@ -80,7 +80,7 @@ describe("version pins", { timeout: 120_000 }, () => {
     const dir = copy();
     const version = versionOf(dir);
     edit(dir, "CHANGELOG.md", (t) => t.replace(`compare/v${version}...HEAD`, "compare/v1.0.0...HEAD"));
-    expect(checkPins(dir).join("\n")).toContain("CHANGELOG.md: the links");
+    expect(checkPins(dir).join("\n")).toContain("CHANGELOG.md: restore the `[Unreleased]` compare link");
     setVersion(dir, "1.2.3", { title: "Words" });
     const log = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
     expect(log).toContain("[Unreleased]: https://github.com/superstables/superstables/compare/v1.2.3...HEAD\n");

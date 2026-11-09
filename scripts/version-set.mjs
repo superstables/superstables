@@ -109,7 +109,7 @@ export function checkPins(root) {
 
   const log = read(root, "CHANGELOG.md");
   if (!log.includes(`${unreleasedLink(version)}\n`) || !versionLink(version).test(log)) {
-    problems.push(`CHANGELOG.md: the links at the end need \`${unreleasedLink(version)}\` and a \`[${version}]: \` compare link. Run \`npm run version:set -- <x.y.z> --title "..."\`, or fix the links by hand.`);
+    problems.push(`CHANGELOG.md: restore the \`[Unreleased]\` compare link from ${version} to HEAD and the ${version} compare link.`);
   }
 
   try {
@@ -135,6 +135,9 @@ export function checkPins(root) {
 /**
  * Writes `next` into every pin, whatever version each names now, so a run with the current
  * version repairs pins that fell behind. `title` cuts the Unreleased changelog into a section.
+ * @param {string} root
+ * @param {string} next
+ * @param {{ title?: string, plugin?: boolean }} [options]
  */
 export function setVersion(root, next, { title, plugin = true } = {}) {
   if (!STRICT.test(next)) throw new Error(`"${next}" is not a version of the form major.minor.patch`);
