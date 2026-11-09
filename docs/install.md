@@ -121,7 +121,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 `npm run skill` in a checkout builds `build/superstables-skill-<version>.zip`, and
 the 1.1.3 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables/`, and needs
-only Node. If you installed the earlier zip, delete its `superstables-payments` folder first:
+only Node:
 
 ```bash
 node ~/.claude/skills/superstables/scripts/superstables.mjs --version

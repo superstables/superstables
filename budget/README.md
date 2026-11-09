@@ -260,7 +260,7 @@ An agent with a budget can offer a single purchase when the price exceeds what i
 
 The `superstables` skill ([cli.md](../skill-source/cli.md)) explains commands and exit codes. When you have not said how to pay, it asks once whether you want one purchase you approve or a budget, and then reads the reference for that way: [references/once.md](../skill-source/references/once.md) or [references/budget.md](../skill-source/references/budget.md). The agent may use it without being asked by name.
 
-1. Install the skill as `~/.claude/skills/superstables` for Claude Code or `~/.agents/skills/superstables` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link the `plugin/skills/superstables/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together. If you installed the earlier zip, delete its `superstables-payments` folder first.
+1. Install the skill as `~/.claude/skills/superstables` for Claude Code or `~/.agents/skills/superstables` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link the `plugin/skills/superstables/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together.
 2. Give the agent a shell (in the checkout, if you linked the folder), its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
 3. Ask for the purchase, or invoke the standalone skill as `/superstables` in Claude Code or `$superstables` in Codex. The plugin's skill is `/superstables:superstables` in Claude Code and `$superstables` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
 
