@@ -165,7 +165,9 @@ export function setVersion(root, next, { title, plugin = true } = {}) {
     const marker = "## [Unreleased]\n\n";
     if (!log.includes(marker)) throw new Error("CHANGELOG.md has no `## [Unreleased]` heading to cut");
     const cut = log.replace(marker, `${marker}## [${next}] - ${title}\n\n`);
-    const added = versionLink(next).test(cut) ? "" : `[${next}]: ${COMPARE}/v${old}...v${next}\n`;
+    // package.json already names `next` when an earlier run set it without --title.
+    const previous = log.match(/^## \[(\d+\.\d+\.\d+)\]/m)?.[1] ?? old;
+    const added = versionLink(next).test(cut) ? "" : `[${next}]: ${COMPARE}/v${previous}...v${next}\n`;
     const linked = cut.replace(/^\[Unreleased\]: .*\n/m, `${unreleasedLink(next)}\n${added}`);
     if (!linked.includes(unreleasedLink(next))) throw new Error("CHANGELOG.md has no `[Unreleased]: ` compare link to update");
     put("CHANGELOG.md", linked);

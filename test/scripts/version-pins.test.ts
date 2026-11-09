@@ -76,6 +76,14 @@ describe("version pins", { timeout: 120_000 }, () => {
     expect(run("--check").status).toBe(0);
   });
 
+  it("--title after a run without it links from the last release, not from the version just set", () => {
+    const dir = copy();
+    const before = versionOf(dir);
+    setVersion(dir, "1.2.3");
+    setVersion(dir, "1.2.3", { title: "Example" });
+    expect(readFileSync(join(dir, "CHANGELOG.md"), "utf8")).toContain(`[1.2.3]: https://github.com/superstables/superstables/compare/v${before}...v1.2.3\n`);
+  });
+
   it("names the changelog links when they lag, and --title writes them", () => {
     const dir = copy();
     const version = versionOf(dir);
