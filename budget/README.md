@@ -89,7 +89,7 @@ In a terminal the command waits for you, as above. Run by an agent (stdout is no
 | `tempo` | An access key with a cap, an expiry and an optional seller list | `moderato` | You need the chain itself to enforce an expiry, a per-period cap or a seller list, or the seller speaks MPP |
 | `solana` | An SPL token delegate | `devnet` | The seller takes x402 on Solana |
 
-Only Tempo enforces an expiry and a seller list on chain. On `evm` and `solana` the chain enforces a total cap only, so a stolen agent key can pay any address up to the cap, and the budget does not expire by itself. `superstables budget grant` refuses `--expiry`, `--period` and `--sellers` there instead of pretending. Details: [references/budget.md](../skills/superstables-payments/references/budget.md).
+Only Tempo enforces an expiry and a seller list on chain. On `evm` and `solana` the chain enforces a total cap only, so a stolen agent key can pay any address up to the cap, and the budget does not expire by itself. `superstables budget grant` refuses `--expiry`, `--period` and `--sellers` there instead of pretending. Details: [references/budget.md](../skill-source/references/budget.md).
 
 ## EVM chains
 
@@ -124,7 +124,7 @@ Install. Pick one; all run the same commands on the same keys and state.
   ```
 
   Then `npm link` puts `superstables` on your PATH, and `superstables budget ...` runs the tool from the checkout's TypeScript sources. `node budget/cli.mjs ...` does the same without the build or the link. Without the dev packages (`npm ci --omit=dev`), both run the checkout's `dist/budget` build instead, and `--version` says so. Don't use plain `npx superstables`: where npx doesn't find this checkout's command, it downloads whatever package the npm registry has under that name. At the repository root, `npx --no superstables` stops instead.
-- **The standalone skill zip.** `npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`. Unzip it into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex: it unpacks to `superstables-payments/`. Then `node ~/.claude/skills/superstables-payments/scripts/superstables.mjs budget ...` (or the `~/.agents` path) runs the tool with Node alone, with no checkout and no `npm install`: `scripts/` holds the whole `superstables` CLI, bundled. Use it in place of `superstables budget` below. `--version` names the build, and `scripts/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **The standalone skill zip.** `npm run skill` in a checkout builds `build/superstables-skill-<version>.zip`. Unzip it into your agent's skills folder, `~/.claude/skills/` for Claude Code or `~/.agents/skills/` for Codex: it unpacks to `superstables/`. Then `node ~/.claude/skills/superstables/scripts/superstables.mjs budget ...` (or the `~/.agents` path) runs the tool with Node alone, with no checkout and no `npm install`: `scripts/` holds the whole `superstables` CLI, bundled. Use it in place of `superstables budget` below. `--version` names the build, and `scripts/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 
 Where things live. `SUPERSTABLES_HOME` is the client's home, `~/.superstables` unless you set it:
 
@@ -258,11 +258,11 @@ An agent with a budget can offer a single purchase when the price exceeds what i
 
 ## Use it from an agent
 
-The `superstables-payments` skill ([SKILL.md](../skills/superstables-payments/SKILL.md)) explains commands and exit codes. When you have not said how to pay, it asks once whether you want one purchase you approve or a budget, and then reads the reference for that way: [references/once.md](../skills/superstables-payments/references/once.md) or [references/budget.md](../skills/superstables-payments/references/budget.md). The agent may use it without being asked by name.
+The `superstables` skill ([cli.md](../skill-source/cli.md)) explains commands and exit codes. When you have not said how to pay, it asks once whether you want one purchase you approve or a budget, and then reads the reference for that way: [references/once.md](../skill-source/references/once.md) or [references/budget.md](../skill-source/references/budget.md). The agent may use it without being asked by name.
 
-1. Install the skill as `~/.claude/skills/superstables-payments` for Claude Code or `~/.agents/skills/superstables-payments` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link the `skills/superstables-payments/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together.
+1. Install the skill as `~/.claude/skills/superstables` for Claude Code or `~/.agents/skills/superstables` for Codex: unzip the standalone skill zip into that skills folder (see Install), or link the `plugin/skills/superstables/` folder there from a checkout. Keep `SKILL.md`, references and `agents/openai.yaml` together.
 2. Give the agent a shell (in the checkout, if you linked the folder), its agent key file and the public address file for the selected chain. That is all it holds, on every rail: no owner key.
-3. Ask for the purchase, or invoke the standalone skill as `/superstables-payments` in Claude Code or `$superstables-payments` in Codex. The plugin's skill is `/superstables:superstables` in Claude Code and `$superstables` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
+3. Ask for the purchase, or invoke the standalone skill as `/superstables` in Claude Code or `$superstables` in Codex. The plugin's skill is `/superstables:superstables` in Claude Code and `$superstables` in Codex. Supply the testnet, seller URL, price ceiling and, when known, seller address.
 
 Give the agent a purchase scope and price ceiling. The agent chooses purchases within that authorization. The CLI checks them before signing; these checks do not constrain a stolen key.
 

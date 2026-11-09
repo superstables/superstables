@@ -1,5 +1,5 @@
 
-// The skill the zip ships: one SKILL.md that points to files that exist, and the run paragraph scripts/skill.mjs replaces.
+// The CLI instructions (skill-source/cli.md) that become references/cli.md in the plugin and the zip: they point to files that exist, and hold the run paragraph that plugin-sync and scripts/skill.mjs replace.
 // It teaches the hosted path the Get started prompt on superstables.com relies on: ask how to pay first, buy once or a
 // hosted budget, write every approval link in a reply and end the turn, and a no or a spent budget is final.
 import { existsSync, readFileSync } from "node:fs";
@@ -7,11 +7,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "../../skills/superstables-payments");
-const skill = readFileSync(resolve(SKILL, "SKILL.md"), "utf8");
+const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "../../skill-source");
+const skill = readFileSync(resolve(SKILL, "cli.md"), "utf8");
 const ref = (f: string) => readFileSync(resolve(SKILL, f), "utf8");
 
-describe("skills/superstables-payments/SKILL.md", () => {
+describe("skill-source/cli.md", () => {
   it("does not call Superstables' services simulated as a group: the market data service returns live prices", () => {
     for (const [name, text] of [["SKILL.md", skill], ["discovery.md", ref("references/discovery.md")], ["once.md", ref("references/once.md")]]) {
       expect(text, name).not.toMatch(/simulated demo services/);
@@ -33,10 +33,8 @@ describe("skills/superstables-payments/SKILL.md", () => {
   });
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
-    const top = skill.split("\n").slice(0, 12).join("\n");
+    const top = skill.split("\n").slice(0, 6).join("\n");
     expect(top).toMatch(/Testnet-first: test tokens, no real money\./);
-    // The description names both tokens, and Budgets before Single purchase.
-    expect(top).toMatch(/using test USDC, test USDG or test pathUSD\. Testnet-first: mainnet is off, and only the operator turns it on\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
@@ -100,7 +98,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
   });
 });
 
-describe("skills/superstables-payments/references/pay.md: seller text", () => {
+describe("skill-source/references/pay.md: seller text", () => {
   it("has the money rule: report payment from the client result, never 'nothing was paid' beside payment evidence", () => {
     const rules = skill.slice(skill.indexOf("## Safety rules"), skill.indexOf("## Before you answer"));
     const at = rules.indexOf("12. **Report payment from the client result.**");

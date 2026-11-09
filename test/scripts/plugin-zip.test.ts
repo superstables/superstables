@@ -19,7 +19,7 @@ const pluginSkill = text("plugin/skills/superstables/SKILL.md");
 // When this file is out of date the server changed: regenerate it there (`npm run contract`) and copy it here.
 const contract = JSON.parse(text("test/scripts/connector-contract.json")) as { tools: string[]; waits: Record<string, number>; purchaseWait: { tool: string; param: string; seconds: number } };
 const CONNECTOR_TOOLS = contract.tools;
-const cliSkill = text("skills/superstables-payments/SKILL.md");
+const cliSkill = text("skill-source/cli.md");
 
 describe("plugin zips", () => {
   const built = buildPluginZips(repo, out);

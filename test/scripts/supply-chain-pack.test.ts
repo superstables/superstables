@@ -88,9 +88,9 @@ describe("the skill zip", () => {
     const hash = (b: Buffer) => createHash("sha256").update(b).digest("hex");
     expect(hash(two)).toBe(hash(one));
     const entries = unzipSync(one);
-    expect(Object.keys(entries)).toContain("superstables-payments/scripts/sbom.cdx.json");
+    expect(Object.keys(entries)).toContain("superstables/scripts/sbom.cdx.json");
     // node_modules is a link here, so the bundled folders are outside the copy: the SBOM still names lockfile locations
-    const bom = JSON.parse(Buffer.from(entries["superstables-payments/scripts/sbom.cdx.json"]).toString("utf8"));
+    const bom = JSON.parse(Buffer.from(entries["superstables/scripts/sbom.cdx.json"]).toString("utf8"));
     const { checkPaths } = await import("../../scripts/bundle-audit.mjs");
     expect(checkPaths([bom], JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8")).packages)).toEqual([]);
     for (const c of bom.components) {

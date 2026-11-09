@@ -1,10 +1,10 @@
-# Evaluations for the superstables-payments skill
+# Evaluations for the superstables skill
 
-These scenarios check that an agent with the `superstables-payments` skill uses the `superstables` CLI the way it is meant to be used: it finds and prices a service before paying, picks the right way to pay, leaves every approval to the owner, keeps to the ceiling it was given, and reads results correctly. Each file is one scenario:
+These scenarios check that an agent with the `superstables` skill uses the `superstables` CLI the way it is meant to be used: it finds and prices a service before paying, picks the right way to pay, leaves every approval to the owner, keeps to the ceiling it was given, and reads results correctly. Each file is one scenario:
 
 ```json
 {
-  "skills": ["superstables-payments"],
+  "skills": ["superstables"],
   "query": "what the user says, word for word",
   "files": [],
   "expected_behavior": ["what a good run does, one checkable statement each"]
@@ -42,7 +42,7 @@ They are run by hand, or with the sandboxed runner in `hostile/` (`hostile/run-e
 
 ## What you need
 
-- The skill zip: `npm ci && npm run skill` at the repository root builds `build/superstables-payments-skill-<version>.zip`.
+- The skill zip: `npm ci && npm run skill` at the repository root builds `build/superstables-skill-<version>.zip`.
 - An agent that loads Agent Skills and has a shell: Claude Code or Codex.
 - Node 22 or newer, on Linux or macOS (on Windows, WSL).
 - An owner wallet in a browser on the same computer, funded on Base Sepolia from faucets: test USDC ([faucet.circle.com](https://faucet.circle.com)) and a little Base Sepolia ETH for fees. Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.1.3, even with the switch enabled. No real money moves.
@@ -51,11 +51,11 @@ They are run by hand, or with the sandboxed runner in `hostile/` (`hostile/run-e
 
 ## Install the skill
 
-Unzip into the agent's skills folder. It unpacks to `superstables-payments/`:
+Unzip into the agent's skills folder. It unpacks to `superstables/`:
 
 ```sh
-unzip build/superstables-payments-skill-<version>.zip -d ~/.claude/skills/   # Claude Code
-unzip build/superstables-payments-skill-<version>.zip -d ~/.agents/skills/   # Codex
+unzip build/superstables-skill-<version>.zip -d ~/.claude/skills/   # Claude Code
+unzip build/superstables-skill-<version>.zip -d ~/.agents/skills/   # Codex
 ```
 
 The zip holds the whole CLI, so the agent needs no checkout. Keys and state go to `$SUPERSTABLES_HOME` (default `~/.superstables`). Use a separate home for evaluation runs, for example `export SUPERSTABLES_HOME=~/superstables-eval` before starting the agent, so runs do not touch your usual keys.
@@ -91,7 +91,7 @@ Run by hand, prefer the runner: its sandbox leaves your own owner settings untou
 2. Paste the `query` exactly as written. Do not add hints.
 3. Act as the owner when the agent shows an approval link: approve, reject or let it expire, and note which. Do not tell the agent which commands to run.
 4. Save the transcript, including every command the agent ran and its output.
-5. Run the same scenario again **without the skill** (move `superstables-payments/` out of the skills folder, and put the CLI on the path: `npm link` in a checkout, or an alias to `node <unzipped folder>/scripts/superstables.mjs`). This measures how far the CLI's own `--help` gets an agent, and what the skill adds. Two modes, reported apart:
+5. Run the same scenario again **without the skill** (move `superstables/` out of the skills folder, and put the CLI on the path: `npm link` in a checkout, or an alias to `node <unzipped folder>/scripts/superstables.mjs`). This measures how far the CLI's own `--help` gets an agent, and what the skill adds. Two modes, reported apart:
    - **CLI named** (the runner's `cli` skill mode): the message starts with "The `superstables` command-line tool is installed on this computer, on your PATH." and nothing else about it. This is the without-skill baseline: it measures `--help`, not whether the agent finds the tool.
    - **Not told** (the runner's `without` mode): the message is the query alone. Many agents never look for the CLI. Report that as discoverability (whether an agent that was not told finds `superstables` and its `--help`), not as skill quality, and do not mix it into the baseline.
 6. Where you can, repeat with each model you intend to support.

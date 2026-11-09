@@ -9,11 +9,11 @@ import { refuseSymlinkPath, syncPlugin } from "../../scripts/plugin-sync.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
 const scratch: string[] = [];
-const skill = "skills/superstables-payments";
+const skill = "skill-source";
 const pluginSkill = "plugin/skills/superstables";
 const bundle = `${pluginSkill}/references`;
 const manifests = ["plugin/plugin.json", "plugin/.claude-plugin/plugin.json"];
-const sourceSkill = "---\nname: superstables-payments\n---\n\nBefore. [Pay](references/pay.md)\n<!-- run: how to run -->\nRun from a checkout.\n<!-- /run -->\nAfter.\n";
+const sourceSkill = "Before. [Pay](references/pay.md)\n<!-- run: how to run -->\nRun from a checkout.\n<!-- /run -->\nAfter.\n";
 
 function write(root: string, file: string, text: string) {
   mkdirSync(dirname(join(root, file)), { recursive: true });
@@ -26,13 +26,13 @@ function fixture() {
   execFileSync("git", ["init", "--quiet", root]);
   write(root, "package.json", JSON.stringify({ version: "1.2.3" }));
   for (const manifest of manifests) write(root, manifest, JSON.stringify({ name: "superstables", version: "0.0.0" }));
-  write(root, `${skill}/SKILL.md`, sourceSkill);
+  write(root, `${skill}/cli.md`, sourceSkill);
   write(root, `${skill}/references/pay.md`, "Payment instructions. See SKILL.md and [budgets](budget.md).\n");
   write(root, `${skill}/references/budget.md`, "Budgets.\n");
   write(root, `${pluginSkill}/SKILL.md`, "---\nname: superstables\n---\n\nRoute.\n");
   write(root, "plugin/assets/icon.png", "png");
   write(root, "plugin/assets/icon.svg", "<svg/>");
-  execFileSync("git", ["add", "skills"], { cwd: root });
+  execFileSync("git", ["add", "skill-source"], { cwd: root });
   return root;
 }
 
@@ -106,7 +106,7 @@ describe("plugin synchronization", () => {
 
   it("keeps the single-purchase order in references/cli.md: buy-once first, local pay as the fallback", () => {
     const cli = readFileSync(join(repo, bundle, "cli.md"), "utf8");
-    const source = readFileSync(join(repo, skill, "SKILL.md"), "utf8").replace(/^---\n[\s\S]*?\n---\n/, "");
+    const source = readFileSync(join(repo, skill, "cli.md"), "utf8");
     for (const line of source.split("\n").filter((text) => /budget buy-once|Single purchase on superstables\.com/.test(text))) {
       expect(cli, line.slice(0, 60)).toContain(line.replace(/\]\(references\//g, "]("));
     }
@@ -168,7 +168,7 @@ describe("plugin synchronization", () => {
     expect(bundled).toContain("Never run unscoped `npx superstables`");
     expect(bundled).not.toContain("<!--");
     expect(bundled).toMatch(/^Before\. \[Pay\]\(pay\.md\)\n[\s\S]*\nAfter\.\n$/);
-    expect(readFileSync(join(root, skill, "SKILL.md"), "utf8")).toBe(sourceSkill);
+    expect(readFileSync(join(root, skill, "cli.md"), "utf8")).toBe(sourceSkill);
     expect(() => syncPlugin({ root, check: true })).not.toThrow();
     write(root, `${bundle}/cli.md`, sourceSkill);
     expect(() => syncPlugin({ root, check: true })).toThrow(/cli.md: differs/);
@@ -190,7 +190,7 @@ describe("plugin synchronization", () => {
 
   it.each(["missing", "duplicate"])("refuses a %s run block before updating manifests", (kind) => {
     const root = fixture();
-    write(root, `${skill}/SKILL.md`, kind === "missing" ? "No run block.\n" : sourceSkill + sourceSkill);
+    write(root, `${skill}/cli.md`, kind === "missing" ? "No run block.\n" : sourceSkill + sourceSkill);
     const previous = readFileSync(join(root, manifests[0]), "utf8");
     expect(() => syncPlugin({ root })).toThrow(/exactly one run block/);
     expect(readFileSync(join(root, manifests[0]), "utf8")).toBe(previous);
@@ -201,17 +201,17 @@ describe("plugin synchronization", () => {
     const root = fixture();
     syncPlugin({ root });
     expect(readdirSync(join(root, bundle)).sort()).toEqual(["budget.md", "cli.md", "pay.md"]);
-    expect(existsSync(join(root, "plugin/skills/superstables-payments"))).toBe(false);
+    expect(existsSync(join(root, "plugin/skills/other"))).toBe(false);
     for (const file of readdirSync(join(root, bundle))) expect(brokenLinks(join(root, bundle, file))).toEqual([]);
   });
 
   it("refuses a second skill folder in the plugin, in both modes, before updating manifests", () => {
     const root = fixture();
     syncPlugin({ root });
-    write(root, "plugin/skills/superstables-payments/SKILL.md", "---\nname: superstables-payments\n---\n");
+    write(root, "plugin/skills/other/SKILL.md", "---\nname: other\n---\n");
     write(root, "package.json", JSON.stringify({ version: "2.0.0" }));
     for (const check of [true, false]) {
-      expect(() => syncPlugin({ root, check })).toThrow(/plugin\/skills may hold only the superstables skill; remove plugin\/skills\/superstables-payments/);
+      expect(() => syncPlugin({ root, check })).toThrow(/plugin\/skills may hold only the superstables skill; remove plugin\/skills\/other/);
     }
     expect(JSON.parse(readFileSync(join(root, manifests[0]), "utf8")).version).toBe("1.2.3");
   });
@@ -259,14 +259,14 @@ describe("plugin synchronization", () => {
   it("refuses a tracked source symlink rather than copying its target", () => {
     const root = fixture();
     symlinkSync(join(root, "package.json"), join(root, skill, "linked.json"));
-    execFileSync("git", ["add", "skills"], { cwd: root });
+    execFileSync("git", ["add", "skill-source"], { cwd: root });
     expect(() => syncPlugin({ root })).toThrow(/Symlinks are not allowed/);
   });
 
   it.each([
     "plugin", "plugin/skills", pluginSkill, bundle, `${bundle}/pay.md`,
     "plugin/.claude-plugin", "plugin/.claude-plugin/plugin.json", "plugin/plugin.json",
-    "skills", skill, `${skill}/references`, `${skill}/references/pay.md`,
+    skill, `${skill}/references`, `${skill}/references/pay.md`,
   ])("refuses a symlink at %s without touching its target or updating manifests", (file) => {
     const root = fixture();
     syncPlugin({ root });

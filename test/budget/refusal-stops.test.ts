@@ -11,9 +11,9 @@ const RULE = /refused[\s\S]{0,120}(revoked|nothing left)[\s\S]{0,600}say so and 
 
 describe("a refused budget purchase stops the agent", () => {
   for (const file of [
-    "skills/superstables-payments/SKILL.md",
+    "skill-source/cli.md",
     "plugin/skills/superstables/SKILL.md",
-    "skills/superstables-payments/references/budget.md",
+    "skill-source/references/budget.md",
     "plugin/skills/superstables/references/budget.md",
   ]) {
     it(`${file} says to report the refusal, ask before a single purchase and request it only on a yes`, () => {

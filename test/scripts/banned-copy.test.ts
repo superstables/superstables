@@ -9,7 +9,7 @@ describe("banned copy", () => {
   });
 
   it("covers the surfaces the label could appear on", () => {
-    for (const path of ["plugin/skills/superstables/SKILL.md", "skills/superstables-payments/SKILL.md", "plugin/plugin.json", ".claude-plugin/marketplace.json", "README.md", "docs/cli.md", "src/cli/main.ts"]) expect(isShipped(path), path).toBe(true);
+    for (const path of ["plugin/skills/superstables/SKILL.md", "skill-source/cli.md", "plugin/plugin.json", ".claude-plugin/marketplace.json", "README.md", "docs/cli.md", "src/cli/main.ts"]) expect(isShipped(path), path).toBe(true);
     for (const path of ["test/scripts/plugin-zip.test.ts", "CHANGELOG.md", "evals/results/2026-10-18-hostile-cli-named.md"]) expect(isShipped(path), path).toBe(false);
   });
 

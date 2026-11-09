@@ -1,6 +1,6 @@
 # Install the client
 
-The Superstables client is a command, `superstables`, and the `superstables-payments` agent skill
+The Superstables client is a command, `superstables`, and the `superstables` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
 each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off (it stays off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET`).
@@ -118,13 +118,13 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 
 ### The agent skill, with the whole CLI bundled
 
-`npm run skill` in a checkout builds `build/superstables-payments-skill-<version>.zip`, and
+`npm run skill` in a checkout builds `build/superstables-skill-<version>.zip`, and
 the 1.1.3 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
-Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables-payments/`, and needs
+Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables/`, and needs
 only Node:
 
 ```bash
-node ~/.claude/skills/superstables-payments/scripts/superstables.mjs --version
+node ~/.claude/skills/superstables/scripts/superstables.mjs --version
 ```
 
 Use that path wherever these pages say `superstables`. `scripts/THIRD_PARTY_NOTICES.txt` lists
@@ -209,9 +209,9 @@ waiting on it, the page takes a free port instead, and the approval link names t
 
 ## Set up your agent app
 
-The plugin brings its own skill, so a plugin install needs nothing here. The skill is called `superstables` in the plugin (`/superstables:superstables` in Claude Code, `$superstables` in Codex). Without the plugin, an agent uses the client through the Superstables skill from the skill zip, `superstables-payments` (`/superstables-payments` in Claude Code, `$superstables-payments` in Codex), and a shell. The skill guides
+The plugin brings its own skill, so a plugin install needs nothing here. The skill is called `superstables` in the plugin (`/superstables:superstables` in Claude Code, `$superstables` in Codex). Without the plugin, an agent uses the client through the same skill from the skill zip (`/superstables` in Claude Code, `$superstables` in Codex), and a shell. The skill guides
 it through finding a service, pricing it and both ways to pay, with their safety rules. Use the
-skill zip installed above, or link the `skills/superstables-payments/` folder from a checkout into
+skill zip installed above, or link the `plugin/skills/superstables/` folder from a checkout into
 your agent's skills folder. Keep `SKILL.md`, `references/` and `agents/openai.yaml` together.
 
 ### Which build is running

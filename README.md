@@ -53,7 +53,7 @@ An app that takes connectors can add `https://mcp.superstables.com` on its own, 
    > Use the Superstables skill to help me set up a small budget for paid services.
    > Explain what I need and show me the approval links. I'll review and sign in my wallet.
 
-To call the skill by name, use `/superstables:superstables` in Claude Code or `$superstables` in Codex when you installed the plugin, and `/superstables-payments` or `$superstables-payments` when you installed the skill zip.
+To call the skill by name, use `/superstables:superstables` in Claude Code or `$superstables` in Codex when you installed the plugin, and `/superstables` in Claude Code or `$superstables` in Codex when you installed the skill zip.
 
 For one purchase instead, ask it to find a service, check the price and request your approval.
 The agent starts the request; you approve in your wallet.
