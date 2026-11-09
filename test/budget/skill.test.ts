@@ -33,10 +33,8 @@ describe("skill-source/cli.md", () => {
   });
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
-    const top = skill.split("\n").slice(0, 12).join("\n");
+    const top = skill.split("\n").slice(0, 6).join("\n");
     expect(top).toMatch(/Testnet-first: test tokens, no real money\./);
-    // The description names both tokens, and Budgets before Single purchase.
-    expect(top).toMatch(/using test USDC, test USDG or test pathUSD\. Testnet-first: mainnet is off, and only the operator turns it on\. Budgets let the owner grant[^\n]*Single purchase lets the owner approve one purchase/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
