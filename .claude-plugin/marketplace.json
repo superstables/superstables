@@ -4,14 +4,14 @@
     "name": "Superstables"
   },
   "metadata": {
-    "description": "Find paid services, use budgets, and request single purchases you approve. Testnet only."
+    "description": "Find paid services, use budgets, and request single purchases you approve. Testnets in this release."
   },
   "plugins": [
     {
       "name": "superstables",
       "source": "./plugin",
       "displayName": "Superstables",
-      "description": "Find paid services, use budgets, and request single purchases you approve. Testnet only.",
+      "description": "Find paid services, use budgets, and request single purchases you approve. Testnets in this release.",
       "category": "Payments",
       "tags": [
         "payments",

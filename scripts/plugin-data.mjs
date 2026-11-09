@@ -23,10 +23,10 @@ export const PLUGIN_ZIPS = [
 export const PLUGIN_LISTING = {
   name: "superstables",
   displayName: "Superstables",
-  shortDescription: "Find paid services, use budgets, and request single purchases you approve. Testnet only.",
+  shortDescription: "Find paid services, use budgets, and request single purchases you approve. Testnets in this release.",
   longDescription:
-    "Superstables lets your agent find services that charge per request and read what they cost. In an app with a terminal, Budgets let you approve a total spending limit in your wallet, on superstables.com or on your machine. The agent can then spend within that limit without approval for each purchase. You can revoke the budget by signing a transaction in your wallet. For a single purchase through the connector, an account member approves and signs in their wallet on superstables.com before payment. Testnet only: test tokens, no real money.",
-  marketplaceDescription: "Find paid services, use budgets, and request single purchases you approve. Testnet only.",
+    "Superstables lets your agent find services that charge per request and read what they cost. In an app with a terminal, Budgets let you approve a total spending limit in your wallet, on superstables.com or on your machine. The agent can then spend within that limit without approval for each purchase. You can revoke the budget by signing a transaction in your wallet. For a single purchase through the connector, an account member approves and signs in their wallet on superstables.com before payment. Testnets in this release: test tokens, no real money.",
+  marketplaceDescription: "Find paid services, use budgets, and request single purchases you approve. Testnets in this release.",
   developerName: "Superstables",
   category: "Payments",
   homepage: "https://www.superstables.com",
