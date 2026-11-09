@@ -46,7 +46,7 @@ const ACCOUNT_HOME = userInfo().homedir;
 // EVAL_RIG_PORT moves the rig (tests, or a port already taken by an older rig without the stub site)
 const RIG_PORT = Number(process.env.EVAL_RIG_PORT ?? 47811);
 const RIG = `http://127.0.0.1:${RIG_PORT}/v`;
-const SKILL_SRC = join(repo, "build", "skill", "superstables-payments");
+const SKILL_SRC = join(repo, "build", "skill", "superstables");
 
 export const AGENTS = {
   "claude-sonnet": { cli: "claude", model: "sonnet" },
@@ -164,7 +164,7 @@ export function prepare(dir, scenario, agentName, skill) {
   writeFileSync(join(dir, "hosts"), "127.0.0.1 localhost\n::1 localhost\n" + BLOCKED_HOSTS.map((h) => `127.0.0.1 ${h}`).join("\n") + "\n");
   const skillsParent = agent.cli === "claude" ? join(fake, ".claude", "skills") : join(fake, ".agents", "skills");
   mkdirSync(skillsParent, { recursive: true });
-  if (skill === "with") cpSync(SKILL_SRC, join(skillsParent, "superstables-payments"), { recursive: true });
+  if (skill === "with") cpSync(SKILL_SRC, join(skillsParent, "superstables"), { recursive: true });
   else {
     // without the skill: the CLI on the PATH, as evals/README.md says; nothing else
     cpSync(join(SKILL_SRC, "scripts"), join(dir, "cli"), { recursive: true });
@@ -201,7 +201,7 @@ export function bwrapArgs(dir, agentName, ownerDir) {
 
 /** The CLI inside a run's folders: the skill's copy, or the one put on the PATH when the run has no skill. */
 const cliPath = (dir, agentName, skill) =>
-  skill === "with" ? join(dir, "fakehome", AGENTS[agentName].cli === "claude" ? ".claude" : ".agents", "skills", "superstables-payments", "scripts", "superstables.mjs") : join(dir, "cli", "superstables.mjs");
+  skill === "with" ? join(dir, "fakehome", AGENTS[agentName].cli === "claude" ? ".claude" : ".agents", "skills", "superstables", "scripts", "superstables.mjs") : join(dir, "cli", "superstables.mjs");
 
 /** What `owner settings show --json` must say inside the sandbox: the site this runner wrote, and nothing the agent could have set. */
 function settingsProblem(shown, mode) {

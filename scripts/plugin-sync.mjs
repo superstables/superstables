@@ -6,7 +6,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { trackedFiles } from "./package-root.mjs";
 import { PLUGIN_LISTING as L } from "./plugin-data.mjs";
 
-const SKILL = "skills/superstables-payments";
+// The CLI instructions: cli.md and references/*.md. They are not a skill; the plugin's skill is the only one.
+const SOURCE = "skill-source";
 const PLUGIN_SKILL = "skills/superstables";
 const REFERENCES = `${PLUGIN_SKILL}/references`;
 
@@ -53,13 +54,37 @@ const SKILL_ICON_COPIES = [
   ["plugin/assets/icon.png", `plugin/${PLUGIN_SKILL}/${L.skillIcons.large}`],
 ];
 
-function runInPlugin(version) {
+export function runInPlugin(version) {
   const cli = `npx --yes @superstables/client@${version}`;
   return `**This reference needs an agent on the owner's machine, such as Claude Code or Codex.** In a chat app, don't run commands to check; decline operations that need a local signature and use the connector tools in SKILL.md.
 
 Run the CLI as \`${cli} <command>\`, for example \`${cli} find weather\` or \`${cli} budget doctor --rail evm\`. In the commands below, \`superstables\` is shorthand for \`${cli}\`. If \`superstables\` is already installed at version ${version}, that works too. Node 22 or newer is required. Keys and state are in \`$SUPERSTABLES_HOME\` (default \`~/.superstables\`), shared with any other copy of the tool on this machine. Never run unscoped \`npx superstables\`: it can download a different package. Use the scoped, pinned package above.
 
 If \`npx\` reports that the pinned \`@superstables/client\` version is unavailable (E404 or ETARGET), stop and ask the owner to check the plugin installation against the public marketplace, \`superstables/superstables\`. Do not substitute another version, package or download source.`;
+}
+
+function referenceText(text, file) {
+  text = text.replace(/\bSKILL\.md\b/g, "cli.md");
+  if (text.includes("<!--")) throw new Error(`${SOURCE}/${file}: HTML comments are not allowed in the plugin copy`);
+  return text;
+}
+
+/**
+ * The text of references/cli.md: skill-source/cli.md with its run block replaced by `runParagraph`, which says how to
+ * run the CLI. The plugin passes runInPlugin; the skill zip passes its bundled-script paragraph.
+ * @param {string} root
+ * @param {string} runParagraph
+ */
+export function cliReference(root, runParagraph) {
+  const file = join(root, SOURCE, "cli.md");
+  refuseSymlinkPath(file, root);
+  const block = /<!-- run:[^>]*-->\n[\s\S]*?\n<!-- \/run -->\n/g;
+  const text = readFileSync(file, "utf8");
+  if ((text.match(block) ?? []).length !== 1) throw new Error(`${SOURCE}/cli.md needs exactly one run block`);
+  // cli.md sat one folder above references/ before it moved; it sits beside them in the skill.
+  const out = text.replace(block, () => runParagraph + "\n").replace(/\]\(references\//g, "](");
+  if (out.includes("<!--")) throw new Error(`${SOURCE}/cli.md: HTML comments are not allowed in the skill copy`);
+  return out;
 }
 
 function statIfPresent(path) {
@@ -104,7 +129,7 @@ export function syncPlugin({ root, check = false }) {
     refuseSymlinkPath(path, root);
     return path;
   };
-  const source = join(root, SKILL);
+  const source = join(root, SOURCE);
   refuseSymlinkPath(source, root);
   filesIn(source);
   const skills = destinationPath("skills");
@@ -113,31 +138,18 @@ export function syncPlugin({ root, check = false }) {
   if (!statIfPresent(destinationPath(`${PLUGIN_SKILL}/SKILL.md`))) throw new Error(`plugin/${PLUGIN_SKILL}/SKILL.md must exist`);
   const destination = destinationPath(REFERENCES);
   const bundled = filesIn(destination).sort();
-  const files = trackedFiles(root, SKILL).sort();
-  if (!files.includes("SKILL.md")) throw new Error(`${SKILL}/SKILL.md must be tracked`);
+  const files = trackedFiles(root, SOURCE).sort();
+  if (!files.includes("cli.md")) throw new Error(`${SOURCE}/cli.md must be tracked`);
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const expected = new Map();
   for (const file of files) {
-    if (file === "agents/openai.yaml") continue;
-    const sourceFile = file === "SKILL.md" ? file : file.startsWith("references/") ? file.slice("references/".length) : undefined;
-    if (sourceFile === undefined || sourceFile.includes("/")) throw new Error(`${SKILL}/${file}: no place in the plugin's references`);
+    const sourceFile = file === "cli.md" ? file : file.startsWith("references/") ? file.slice("references/".length) : undefined;
+    if (sourceFile === undefined || sourceFile.includes("/")) throw new Error(`${SOURCE}/${file}: no place in the plugin's references`);
     const path = join(source, file);
     const stat = lstatSync(path);
     if (!stat.isFile()) throw new Error(`Expected a regular source file: ${file}`);
-    let text = readFileSync(path, "utf8");
-    let name = sourceFile;
-    if (file === "SKILL.md") {
-      const block = /<!-- run:[^>]*-->\n[\s\S]*?\n<!-- \/run -->\n/g;
-      if ((text.match(block) ?? []).length !== 1) throw new Error(`${SKILL}/SKILL.md needs exactly one run block`);
-      text = text.replace(/^---\n[\s\S]*?\n---\n\n?/, "").replace(block, () => runInPlugin(version) + "\n");
-      // SKILL.md sat one folder above references/; cli.md sits beside them.
-      text = text.replace(/\]\(references\//g, "](");
-      name = "cli.md";
-    } else {
-      text = text.replace(/\bSKILL\.md\b/g, "cli.md");
-    }
-    if (text.includes("<!--")) throw new Error(`${SKILL}/${file}: HTML comments are not allowed in the plugin copy`);
-    expected.set(name, { path: destinationPath(`${REFERENCES}/${name}`), content: Buffer.from(text), mode: stat.mode & 0o777 });
+    const text = file === "cli.md" ? cliReference(root, runInPlugin(version)) : referenceText(readFileSync(path, "utf8"), file);
+    expected.set(sourceFile, { path: destinationPath(`${REFERENCES}/${sourceFile}`), content: Buffer.from(text), mode: stat.mode & 0o777 });
   }
   const problems = [];
   const outputs = [...listingFiles(version)].map(([file, text]) => ({ file, content: Buffer.from(text) }));

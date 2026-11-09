@@ -815,7 +815,7 @@ at the exact version its files name. In both apps, it reaches the Superstables t
 caveat below applies to the plugin zip as it does to the skill zip.
 
 For 1.1.3, use the agent skill zip attached to the 1.1.3 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-payments-skill-1.1.3.zip`;
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-skill-1.1.3.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with

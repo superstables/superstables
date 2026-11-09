@@ -10,7 +10,7 @@ const read = (f: string) => readFileSync(resolve(ROOT, f), "utf8");
 const FIRST_CLI = /`superstables [a-z]/;
 
 describe("connector-first routing in the references", () => {
-  for (const base of ["skills/superstables-payments/references", "plugin/skills/superstables/references"]) {
+  for (const base of ["skill-source/references", "plugin/skills/superstables/references"]) {
     it(`${base}/once.md names request_purchase and get_purchase_status before its first CLI command`, () => {
       const text = read(`${base}/once.md`);
       const cli = text.search(FIRST_CLI);
@@ -24,7 +24,7 @@ describe("connector-first routing in the references", () => {
     });
 
     it(`${base} tells a chat app to decline local-signature operations without running commands`, () => {
-      const text = read(base.startsWith("plugin") ? "plugin/skills/superstables/SKILL.md" : "skills/superstables-payments/SKILL.md");
+      const text = read(base.startsWith("plugin") ? "plugin/skills/superstables/SKILL.md" : "skill-source/cli.md");
       expect(text).toMatch(/In a chat app[\s\S]*?don.t run\s+commands to check[\s\S]*?decline/);
       expect(text).toMatch(/signature/);
       expect(text).not.toMatch(/temporary sandbox is not enough/);

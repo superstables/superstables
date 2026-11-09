@@ -1,6 +1,6 @@
 // A CycloneDX 1.5 software bill of materials (JSON) of what the client ships, written by the builds:
 //   dist/sbom.cdx.json                                         the npm package (scripts/budget-build.mjs)
-//   superstables-payments/scripts/sbom.cdx.json in the skill zip (scripts/cli-build.mjs)
+//   superstables/scripts/sbom.cdx.json in the skill zip (scripts/cli-build.mjs)
 //
 // Each component is one name@version with its licence, the npm tarball it came from and that tarball's SHA-512, and
 // two kinds of property: `superstables:delivery` (installed: an install of the client adds it; bundled: dist/budget or

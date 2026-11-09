@@ -83,7 +83,7 @@ export function makeBinsExecutable(root) {
  * included. Only the release script sets it, on an export it has just made.
  *
  * @param {string} root the package folder
- * @param {string} folder a folder inside it, such as skills/superstables-payments
+ * @param {string} folder a folder inside it, such as skill-source
  * @param {Record<string, string | undefined>} [env]
  * @returns {string[]}
  */

@@ -96,7 +96,7 @@ jobs:
       # Every package the client installs or bundles (the SBOMs the build and the skill wrote), against the registry's
       # advisories. It fails on an advisory for any of them, and when the registry can't be reached.
       - name: Audit the shipped packages
-        run: node scripts/bundle-audit.mjs --sbom dist/sbom.cdx.json --sbom build/skill/superstables-payments/scripts/sbom.cdx.json
+        run: node scripts/bundle-audit.mjs --sbom dist/sbom.cdx.json --sbom build/skill/superstables/scripts/sbom.cdx.json
 
   reproducible:
     if: github.event.repository.private && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/maint/'))

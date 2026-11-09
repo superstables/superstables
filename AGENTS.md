@@ -37,8 +37,8 @@ Run these when a change touches what they cover:
 | `src/wallet/` | Local wallet and keystore |
 | `src/demo-service/` | The demo paid service behind `superstables demo-service` |
 | `budget/` | The `superstables budget` commands, `buy-once` included. Built into `dist/budget/` by `scripts/budget-build.mjs`; see `budget/README.md` |
-| `skills/superstables-payments/` | The agent skill that ships in the skill zip |
-| `plugin/` | The plugin for Claude Code, Codex and Claude apps; its `skills/superstables/references/` is synced from `skills/superstables-payments/` by `npm run plugin:sync` |
+| `skill-source/` | The CLI instructions (`cli.md`, `references/`). Not a skill: `npm run plugin:sync` writes them to `plugin/skills/superstables/references/`, and the skill zip carries them too |
+| `plugin/` | The plugin for Claude Code, Codex and Claude apps; its `skills/superstables/` is the one skill (`superstables`), also the skill zip's content, and its `references/` is synced from `skill-source/` by `npm run plugin:sync` |
 | `.claude-plugin/marketplace.json` | Marketplace listing; its plugin source is `./plugin` |
 | `docs/` | User docs. `docs/cli.md` and `docs/cli-budget.md` are generated from `--help` |
 | `evals/` | Scenarios that check an agent using the skill |

@@ -50,11 +50,11 @@ export const PINS = {
     MAINNET,
     "^For VER, use the agent skill zip",
     "attached to the VER release on",
-    String.raw`superstables-payments-skill-VER\.zip`,
+    String.raw`superstables-skill-VER\.zip`,
   ],
   "docs/seller-referrals.md": [MAINNET],
   "evals/README.md": [MAINNET],
-  "skills/superstables-payments/references/discovery.md": [MAINNET],
+  "skill-source/references/discovery.md": [MAINNET],
   "src/cli/help.ts": [MAINNET],
 };
 const PIN_FILES = Object.keys(PINS);

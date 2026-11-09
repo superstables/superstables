@@ -6,7 +6,7 @@
 // `budget --help`, `budget --version` and `budget doctor --rail evm` (reads keys and balances, signs nothing). Any
 // import the bundle is missing fails here, not on a user's machine.
 //
-// node scripts/skill-check.mjs [--zip <path>]   default build/superstables-payments-skill-<package.json version>.zip
+// node scripts/skill-check.mjs [--zip <path>]   default build/superstables-skill-<package.json version>.zip
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const NAME = "superstables-payments";
+const NAME = "superstables";
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const i = process.argv.indexOf("--zip");
 const zip = i > 0 ? resolve(process.argv[i + 1]) : join(root, "build", `${NAME}-skill-${pkg.version}.zip`);
@@ -32,7 +32,14 @@ try {
   }
 
   const skills = join(tmp, "skills");
-  for (const [name, data] of Object.entries(unzipSync(readFileSync(zip)))) {
+  const entries = unzipSync(readFileSync(zip));
+  // One skill, `superstables`: the zip has one top folder, whose SKILL.md is named superstables and whose cli.md runs the bundled script.
+  const tops = [...new Set(Object.keys(entries).map((name) => name.split("/")[0]))];
+  if (tops.join() !== NAME) throw new Error(`the zip's top folder must be ${NAME}/ and nothing else; it has ${tops.join(", ")}`);
+  if (!new RegExp(`^---\\nname: ${NAME}\\n`).test(Buffer.from(entries[`${NAME}/SKILL.md`] ?? []).toString("utf8"))) throw new Error(`${NAME}/SKILL.md must be named ${NAME}`);
+  const cliMd = Buffer.from(entries[`${NAME}/references/cli.md`] ?? []).toString("utf8");
+  if (!cliMd.includes(`${NAME}/scripts/superstables.mjs`) || cliMd.includes("npx --yes @superstables/client")) throw new Error(`${NAME}/references/cli.md must run the bundled scripts/superstables.mjs, not npx`);
+  for (const [name, data] of Object.entries(entries)) {
     if (name.endsWith("/")) continue;
     mkdirSync(dirname(join(skills, name)), { recursive: true });
     writeFileSync(join(skills, name), data);

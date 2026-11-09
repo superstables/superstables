@@ -1,5 +1,5 @@
 
-// The skill the zip ships: one SKILL.md that points to files that exist, and the run paragraph scripts/skill.mjs replaces.
+// The CLI instructions (skill-source/cli.md) that become references/cli.md in the plugin and the zip: they point to files that exist, and hold the run paragraph that plugin-sync and scripts/skill.mjs replace.
 // It teaches the hosted path the Get started prompt on superstables.com relies on: ask how to pay first, buy once or a
 // hosted budget, write every approval link in a reply and end the turn, and a no or a spent budget is final.
 import { existsSync, readFileSync } from "node:fs";
@@ -7,11 +7,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "../../skills/superstables-payments");
-const skill = readFileSync(resolve(SKILL, "SKILL.md"), "utf8");
+const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "../../skill-source");
+const skill = readFileSync(resolve(SKILL, "cli.md"), "utf8");
 const ref = (f: string) => readFileSync(resolve(SKILL, f), "utf8");
 
-describe("skills/superstables-payments/SKILL.md", () => {
+describe("skill-source/cli.md", () => {
   it("does not call Superstables' services simulated as a group: the market data service returns live prices", () => {
     for (const [name, text] of [["SKILL.md", skill], ["discovery.md", ref("references/discovery.md")], ["once.md", ref("references/once.md")]]) {
       expect(text, name).not.toMatch(/simulated demo services/);
@@ -100,7 +100,7 @@ describe("skills/superstables-payments/SKILL.md", () => {
   });
 });
 
-describe("skills/superstables-payments/references/pay.md: seller text", () => {
+describe("skill-source/references/pay.md: seller text", () => {
   it("has the money rule: report payment from the client result, never 'nothing was paid' beside payment evidence", () => {
     const rules = skill.slice(skill.indexOf("## Safety rules"), skill.indexOf("## Before you answer"));
     const at = rules.indexOf("12. **Report payment from the client result.**");

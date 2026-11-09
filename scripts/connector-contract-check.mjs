@@ -12,7 +12,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 export const CONTRACT_FILE = "test/scripts/connector-contract.json";
 export const SKILL_FILE = "plugin/skills/superstables/SKILL.md";
 /** Other files that may talk about the connector. They are held to the forbidden phrases only. */
-export const OTHER_FILES = ["plugin/skills/superstables/references/cli.md", "skills/superstables-payments/SKILL.md", "skills/superstables-payments/references/budget.md"];
+export const OTHER_FILES = ["plugin/skills/superstables/references/cli.md", "skill-source/cli.md", "skill-source/references/budget.md"];
 
 const FORBIDDEN = [
   { pattern: /connector has no tool/i, why: "the connector has the tool; send the person to it" },
