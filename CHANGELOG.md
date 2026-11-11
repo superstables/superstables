@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Getting started:** The README lists the install routes together, and the plugin has its own guide.
+
 ## [1.2.0] - One skill, mainnet signing disabled
 
 Testnet by default.
