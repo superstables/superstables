@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill also responds to common terms for paid APIs.
+
 ## [1.2.0] - One skill, mainnet signing disabled
 
 Testnet by default.
