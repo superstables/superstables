@@ -33,7 +33,7 @@ const MAINNET = "No mainnet chain is payable in VER";
 export const PINS = {
   "budget/CLI.md": [MAINNET],
   "budget/README.md": ["pinned to the full VER release commit"],
-  "budget/cli.mjs": [MAINNET],
+  "budget/command.mjs": [MAINNET],
   "budget/once.mjs": [MAINNET],
   "budget/owner-page.ts": [MAINNET],
   "docs/buy-once.md": [MAINNET],
