@@ -29,9 +29,9 @@ const ENTRY = `#!/usr/bin/env node
 const major = Number(process.versions.node.split(".")[0]);
 if (major < 22) {
   console.error(\`superstables needs Node 22 or newer; this is Node \${process.versions.node}.\`);
-  process.exit(1);
+  process.exit(2);
 }
-await import("./cli/main.mjs");
+void import("./cli/main.mjs");
 `;
 
 export async function buildCli(outdir = join(root, "build", "cli"), version) {

@@ -15,6 +15,8 @@ function copy() {
   dirs.push(dir);
   execFileSync("git", ["clone", "-q", "--no-hardlinks", root, dir]);
   copyFileSync(join(root, "scripts/version-set.mjs"), join(dir, "scripts/version-set.mjs"));
+  copyFileSync(join(root, "budget/command.mjs"), join(dir, "budget/command.mjs"));
+  copyFileSync(join(root, "budget/cli.mjs"), join(dir, "budget/cli.mjs"));
   return dir;
 }
 const edit = (dir: string, file: string, f: (text: string) => string) => writeFileSync(join(dir, file), f(readFileSync(join(dir, file), "utf8")));
