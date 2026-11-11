@@ -90,7 +90,7 @@ export function runnableEntries() {
     }
   }
   // Every script the dispatcher spawns must be one of them.
-  const cli = readFileSync(join(src, "cli.mjs"), "utf8");
+  const cli = readFileSync(join(src, "command.mjs"), "utf8");
   for (const [, letter, name] of cli.matchAll(/\b([TSOE])\("([A-Za-z-]+)"/g)) {
     if (!RUNNABLE[DISPATCH[letter]].includes(name)) throw new Error(`budget/cli.mjs runs ${DISPATCH[letter]}/${name}, which RUNNABLE in scripts/budget-build.mjs does not list`);
   }
@@ -380,7 +380,7 @@ export async function buildStandalone({ outdir, entryPoints, name, title, builtB
 // each under prefix.
 export function budgetEntryPoints(prefix = "") {
   const entries = {};
-  for (const file of [join(src, "cli.mjs"), join(src, "doctor.mjs"), ...runnableEntries()]) {
+  for (const file of [join(src, "cli.mjs"), join(src, "command.mjs"), join(src, "doctor.mjs"), ...runnableEntries()]) {
     entries[prefix + relative(src, file).split(sep).join("/").replace(/\.(ts|mjs)$/, "")] = file;
   }
   return entries;

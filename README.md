@@ -92,6 +92,12 @@ To build it from source instead, follow [Install from a checkout](docs/install.m
 Continue with [Budgets](docs/budget.md) or [Single purchase](docs/buy-once.md).
 Don't run `npx superstables`; it can download a different package.
 
+## Update or remove
+
+For update and removal steps for Claude Code, Codex, Claude, the skill zip and the CLI, see [Update or remove](docs/install.md#update-or-remove). Removing an app or connector does not revoke a budget; follow the guide before deleting keys.
+
+When run in a terminal, `superstables doctor` checks npm for a newer client release. The request goes to `registry.npmjs.org`; set `SUPERSTABLES_NO_UPDATE_CHECK=1` to skip it. It is not run by purchases or JSON output, and a failed check is silent.
+
 ## Next steps
 
 - [Installation and agent setup](docs/install.md)

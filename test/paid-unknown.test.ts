@@ -1703,14 +1703,14 @@ function commandsOf(help: string): string[] {
  * CLI (it parses process.argv at the top level), so its text is read, as scripts/budget-build.mjs reads it.
  */
 function budgetHandlers(): string[] {
-  const line = /^const HANDLERS = \{ (.+) \};$/m.exec(readFileSync(BUDGET, "utf8"))?.[1];
+  const line = /^const HANDLERS = \{ (.+) \};$/m.exec(readFileSync(resolve(ROOT, "budget/command.mjs"), "utf8"))?.[1];
   if (!line) throw new Error("budget/cli.mjs has no one-line HANDLERS table to read");
   return line.split(", ").map((entry) => entry.split(":")[0].replace(/"/g, "").trim());
 }
 
 /** budget/cli.mjs's owner commands on each of its rails, `budget <command> <rail>`, read from its OWNER_COMMANDS_LIST and RAILS. */
 function ownerCommandsByRail(): string[] {
-  const text = readFileSync(BUDGET, "utf8");
+  const text = readFileSync(resolve(ROOT, "budget/command.mjs"), "utf8");
   const commands = JSON.parse(/^const OWNER_COMMANDS_LIST = (\[.*\]);$/m.exec(text)?.[1] ?? "null") as string[] | null;
   const rails = [.../^const RAILS = \{\n((?: {2}\w+: .*\n)+)\};$/m.exec(text)?.[1].matchAll(/^ {2}(\w+):/gm) ?? []].map((m) => m[1]);
   if (!commands?.length || !rails.length) throw new Error("budget/cli.mjs has no one-line OWNER_COMMANDS_LIST or no RAILS table to read");
@@ -1735,7 +1735,7 @@ function assertCovered(row: Row, seen: Seen[]): void {
 
 const RAIL_DIRS = ["evm", "solana", "tempo"];
 /** The code that answers for an owner approval from outside its rail script: the dispatcher, the worker's record, the pages. */
-const ANSWERING = ["budget/approvals.mjs", "budget/owner-page.ts", "budget/hosted.ts", "budget/cli.mjs"];
+const ANSWERING = ["budget/approvals.mjs", "budget/owner-page.ts", "budget/hosted.ts", "budget/command.mjs"];
 /**
  * A place that may end failed or not_revoked: the word as a string, wherever it is written (a page verdict, a RESULT's
  * state, a call that takes it, a variable or one arm of a ternary, on one line or on its own line), except where it is
@@ -1794,7 +1794,7 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/tempo/preflight.ts", has: "if (off) result('failed', { reason: off", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "offer cannot be paid", why: READ_ONLY },
   { file: "budget/tempo/preflight.ts", has: "main().catch((err) => result('failed'", why: READ_ONLY },
-  { file: "budget/cli.mjs", has: "this home has no approval with that id", why: "wait found no approval record under that id: nothing in this home was approved, sent or paid, and the answer says so" },
+  { file: "budget/command.mjs", has: "this home has no approval with that id", why: "wait found no approval record under that id: nothing in this home was approved, sent or paid, and the answer says so" },
   { file: "budget/tempo/reconcile.ts", has: "done('failed'", why: TEMPO_PURCHASE },
   { file: "budget/tempo/revokeBudget.ts", has: "The chain still shows the key as live", why: AFTER_SEND_UNPROVEN },
   { file: "budget/tempo/revokeBudget.ts", has: "the key still reads as live on chain", why: AFTER_SEND_UNPROVEN },
@@ -1809,23 +1809,23 @@ const UNPROVEN_FAILED: { file: string; has: string; why: string }[] = [
   { file: "budget/solana/owner.ts", has: 'status: tx.meta?.err ? "failed" : "success"', why: "the chain's own status for a transaction it shows with an error (meta.err): the rails name it as the reverted proof only when the transaction is the requested one (budget/site.mjs differsFromRequest)" },
   { file: "budget/approvals.mjs", has: 'state: "failed", id, next: "check wallet activity and budget status before retrying"', why: "the link wait or the worker's exit before any page: decided under the record's lock (recordFinalWith), failed only when the record holds no send (recordMayHaveSent), else unknown (rows: budget recover, detached ...)" },
   { file: "budget/approvals.mjs", has: '{ kind: "failed", record, reason: failedReason }', why: "startDetached's own result, not an answer: only after the worker's group stopped, and with no send on the record when it stored that under the record's lock; a group that would not stop is kind unstopped, which the dispatcher's ownerGate answers unknown" },
-  { file: "budget/cli.mjs", has: "emit(2, { ...ctx, state: \"failed\", next: `fix the command; see superstables budget ${ctx.command", why: "badInput: through emit, whose afterSend answers unknown for an owner command that may have sent. wait is not an owner command, so badInput itself answers wait unknown (exit 5, final false, no write) whenever --id names an approval record in this home (waitRecord in budget/cli.mjs); it ends failed only for an --id that is malformed or names no record, where there is no approval to speak of" },
-  { file: "budget/cli.mjs", has: "native Windows is not supported; use WSL", why: "refused before any command runs" },
-  { file: "budget/cli.mjs", has: "a checkout without dev packages needs its dist/budget build", why: "refused before any command runs" },
-  { file: "budget/cli.mjs", has: "the rail script rejected the input", why: "normalize serves buy and reconcile only: the rail refused its flags before it read the journal or signed anything" },
-  { file: "budget/cli.mjs", has: 'const state = ["buy", "reconcile"].includes(cmd) ? "unknown" : "failed";', why: "normalize serves buy and reconcile only, and both take unknown here; failed is for a command that is neither, which no caller passes" },
-  { file: "budget/cli.mjs", has: "doctor check", why: "doctor reads files and the chain; it sends nothing" },
-  { file: "budget/cli.mjs", has: "the preflight script exited ${r.code} without a RESULT line", why: READ_ONLY },
-  { file: "budget/cli.mjs", has: 'state: ok ? "ok" : "failed", amount: ok ? rr.price', why: READ_ONLY },
-  { file: "budget/cli.mjs", has: "no budget yet in ${HOME}", why: "status reads files and the chain; it sends nothing" },
-  { file: "budget/cli.mjs", has: "setup is done, but the budget could not be read from the chain", why: "status reads files and the chain; it sends nothing" },
-  { file: "budget/cli.mjs", has: "const OWNER_STATES = {", why: "the map from a rail's state to the dispatcher's: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
-  { file: "budget/cli.mjs", has: 'const byCode = { 0: "settled", 2: "failed"', why: "ownerOutcome's state for an exit code: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
-  { file: "budget/cli.mjs", has: 'state: rr?.state ?? "failed", owner: rr?.owner', why: "setup --fund-only on tempo: the faucet tops up the owner, and the answer goes through emit's afterSend like every owner command" },
-  { file: "budget/cli.mjs", has: 'return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying', why: "startDetached's failed: the worker's group stopped with no send on its record, stored under the record's lock (budget/approvals.mjs endWithoutLink); a group that would not stop answers unknown (row: its process group would not stop)" },
-  { file: "budget/cli.mjs", has: 'emit(2, { ...ctx, service: f.service, state: "failed"', why: "buy-once's bad input, before any purchase exists on the site" },
-  { file: "budget/cli.mjs", has: 'this site has no purchase API; a service can still be paid from a budget', why: "find reads a site's service list; it sends nothing" },
-  { file: "budget/cli.mjs", has: "no list to show; ${any}", why: "find reads a site's service list; it sends nothing" },
+  { file: "budget/command.mjs", has: "emit(2, { ...ctx, state: \"failed\", next: `fix the command; see superstables budget ${ctx.command", why: "badInput: through emit, whose afterSend answers unknown for an owner command that may have sent. wait is not an owner command, so badInput itself answers wait unknown (exit 5, final false, no write) whenever --id names an approval record in this home (waitRecord in budget/cli.mjs); it ends failed only for an --id that is malformed or names no record, where there is no approval to speak of" },
+  { file: "budget/command.mjs", has: "native Windows is not supported; use WSL", why: "refused before any command runs" },
+  { file: "budget/command.mjs", has: "a checkout without dev packages needs its dist/budget build", why: "refused before any command runs" },
+  { file: "budget/command.mjs", has: "the rail script rejected the input", why: "normalize serves buy and reconcile only: the rail refused its flags before it read the journal or signed anything" },
+  { file: "budget/command.mjs", has: 'const state = ["buy", "reconcile"].includes(cmd) ? "unknown" : "failed";', why: "normalize serves buy and reconcile only, and both take unknown here; failed is for a command that is neither, which no caller passes" },
+  { file: "budget/command.mjs", has: "doctor check", why: "doctor reads files and the chain; it sends nothing" },
+  { file: "budget/command.mjs", has: "the preflight script exited ${r.code} without a RESULT line", why: READ_ONLY },
+  { file: "budget/command.mjs", has: 'state: ok ? "ok" : "failed", amount: ok ? rr.price', why: READ_ONLY },
+  { file: "budget/command.mjs", has: "no budget yet in ${HOME}", why: "status reads files and the chain; it sends nothing" },
+  { file: "budget/command.mjs", has: "setup is done, but the budget could not be read from the chain", why: "status reads files and the chain; it sends nothing" },
+  { file: "budget/command.mjs", has: "const OWNER_STATES = {", why: "the map from a rail's state to the dispatcher's: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
+  { file: "budget/command.mjs", has: 'const byCode = { 0: "settled", 2: "failed"', why: "ownerOutcome's state for an exit code: every owner command's answer then goes through emit's afterSend, which keeps failed only with the chain's proof" },
+  { file: "budget/command.mjs", has: 'state: rr?.state ?? "failed", owner: rr?.owner', why: "setup --fund-only on tempo: the faucet tops up the owner, and the answer goes through emit's afterSend like every owner command" },
+  { file: "budget/command.mjs", has: 'return emit(1, { ...ctx, state: "failed", id, next: `check wallet activity before retrying', why: "startDetached's failed: the worker's group stopped with no send on its record, stored under the record's lock (budget/approvals.mjs endWithoutLink); a group that would not stop answers unknown (row: its process group would not stop)" },
+  { file: "budget/command.mjs", has: 'emit(2, { ...ctx, service: f.service, state: "failed"', why: "buy-once's bad input, before any purchase exists on the site" },
+  { file: "budget/command.mjs", has: 'this site has no purchase API; a service can still be paid from a budget', why: "find reads a site's service list; it sends nothing" },
+  { file: "budget/command.mjs", has: "no list to show; ${any}", why: "find reads a site's service list; it sends nothing" },
 ];
 
 describe("the send mark a rail keeps on its approval record (budget/proof.mjs sendBegins)", () => {
