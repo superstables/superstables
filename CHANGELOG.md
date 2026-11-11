@@ -9,7 +9,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill also responds to common terms for paid APIs.
+- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill’s description now includes “x402” and “pay per call” as reasons to use it.
 
 ### Changed
 
