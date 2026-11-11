@@ -15,7 +15,7 @@
 //
 // node scripts/cli-build.mjs [--outdir <dir>] [--version <version>]   default build/cli/
 
-import { writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { budgetEntryPoints, buildStandalone, checkSelfContained } from "./budget-build.mjs";
@@ -31,11 +31,11 @@ if (major < 22) {
   console.error(\`superstables needs Node 22 or newer; this is Node \${process.versions.node}.\`);
   process.exit(2);
 }
-void import("./cli/main.mjs");
+void new Function('return import("./cli/main.mjs")')();
 `;
 
 export async function buildCli(outdir = join(root, "build", "cli"), version) {
-  const entryPoints = { "cli/main": join(root, "src", "cli", "main.ts"), ...budgetEntryPoints("budget/") };
+  const entryPoints = { "cli/command": join(root, "src", "cli", "command.ts"), ...budgetEntryPoints("budget/") };
   const built = await buildStandalone({
     outdir,
     entryPoints,
@@ -47,6 +47,8 @@ export async function buildCli(outdir = join(root, "build", "cli"), version) {
     versionFiles: ["VERSION.json", "budget/VERSION.json"],
   });
   writeFileSync(join(outdir, "superstables.mjs"), ENTRY);
+  writeFileSync(join(outdir, "cli", "main.mjs"), readFileSync(join(root, "src", "cli", "main.ts"), "utf8").replace("./command.js", "./command.mjs"));
+  copyFileSync(join(root, "budget", "cli.mjs"), join(outdir, "budget", "cli.mjs"));
   // Everything the skill runs is bundled: its SBOM lists the bundle and nothing installed.
   writeSbom(join(outdir, "sbom.cdx.json"), { root, stamp: built.version, installed: [], bundled: built.packages });
   checkSelfContained(outdir);
