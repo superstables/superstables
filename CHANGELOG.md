@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Budget purchase refusals:** When an EVM seller asks more than the ceiling, the result says what happened and how to find another service.
+
 ## [1.2.0] - One skill, mainnet signing disabled
 
 Testnet by default.
