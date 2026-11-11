@@ -1174,8 +1174,13 @@ explain(
     .description("check everything pay needs, one line at a time")
     .option("--json", "print the checks as JSON")
     .action(async (options: { json?: boolean }) => {
+      const notice = !options.json && process.stdout.isTTY
+        ? import("./update-notice.js").then(({ updateNotice }) => updateNotice()).catch(() => undefined)
+        : Promise.resolve(undefined);
       const report = await runDoctor(walletModeFromEnvironment());
+      const newer = await notice;
       console.log(options.json ? json(report) : formatReport(report));
+      if (newer) console.log(`\n${newer}`);
       if (!report.ok) process.exitCode = EXIT.failed;
     }),
   {
