@@ -11,6 +11,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Updates:** Interactive `superstables doctor` can report a newer client release, and the install guide explains how to update or remove each install.
 
+### Fixed
+
+- The CLI reports that it needs Node 22 or newer when started on an older Node version.
+
 ## [1.2.0] - One skill, mainnet signing disabled
 
 Testnet by default.

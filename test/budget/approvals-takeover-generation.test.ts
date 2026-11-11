@@ -179,7 +179,7 @@ describe("where the check is made, and who is told which restart they are", () =
 
   it("the dispatcher stores a restarted worker's result only through recordFinalAsRestart, and the rail's takeover mark carries the number", () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
-    const cli = readFileSync(resolve(root, "budget/cli.mjs"), "utf8");
+    const cli = readFileSync(resolve(root, "budget/command.mjs"), "utf8");
     const emit = cli.slice(cli.indexOf("function emit(code, fields)"), cli.indexOf("function emit(code, fields)") + 6000);
     expect(emit).toMatch(/if \(APPROVAL_ID && RESUMING\) \{\s*if \(!recordFinalAsRestart\(APPROVAL_ID, RESUME_GENERATION, code, out\)\.stored\)/);
     expect(emit.match(/\brecordFinal\(APPROVAL_ID/g)?.length).toBe(1);

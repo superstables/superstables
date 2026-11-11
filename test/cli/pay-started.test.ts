@@ -88,7 +88,7 @@ async function pay(json: boolean): Promise<{ code: number | string | undefined; 
   vi.spyOn(console, "log").mockImplementation((line) => void out.push(String(line)));
   vi.spyOn(console, "error").mockImplementation((line) => void err.push(String(line)));
   try {
-    await import("../../src/cli/main.js");
+    await import("../../src/cli/command.js");
     return { code: process.exitCode, out: out.join("\n"), err: err.join("\n") };
   } finally {
     process.argv = argv;
