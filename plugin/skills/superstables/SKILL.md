@@ -10,6 +10,20 @@ Testnet-first: test tokens, no real money. Mainnet is off until a release approv
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 
+## Update or remove
+
+When the owner asks to update or remove Superstables, use their install route:
+
+- Claude Code, Git marketplace: update with `claude plugin marketplace update superstables`, then `claude plugin update superstables@superstables`; remove with `claude plugin uninstall superstables@superstables`.
+- Codex, Git marketplace: run `codex plugin marketplace upgrade superstables`, then remove and reinstall with `codex plugin remove superstables@superstables` and `codex plugin add superstables@superstables`. To remove it, run the remove command.
+- Claude Code or Codex, plugin zip: download and verify the latest zip, unpack it to a new folder, remove the installed plugin in Codex, remove the old marketplace, then add the new folder and install the plugin.
+- Claude: delete the plugin in Customize › Plugins, then upload the verified new zip there. To remove it, delete it there and disconnect its connector separately in Customize › Connectors.
+- Skill zip: download and verify the new zip, then replace the installed `superstables` skill folder; to uninstall, remove that folder.
+- npm CLI: update with `npm install -g @superstables/client@latest`; remove with `npm uninstall -g @superstables/client`.
+- Chat connectors: ask the owner to end access on their [account page](https://www.superstables.com/account). They can disconnect in Claude, choose Actions › Disconnect in ChatGPT, or choose Remove account in Grok Bot.
+
+Removing a connector or plugin does not revoke agent budgets; ask the owner to revoke those separately before deleting keys. The [install guide](https://github.com/superstables/superstables/blob/main/docs/install.md#update-or-remove) has the detailed steps.
+
 ## The connector tools
 
 - `get_my_account`: read the account and wallets connected to this chat.

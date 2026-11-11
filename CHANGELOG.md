@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Updates:** Interactive `superstables doctor` can report a newer client release, and the install guide explains how to update or remove each install.
+
 ## [1.2.0] - One skill, mainnet signing disabled
 
 Testnet by default.
