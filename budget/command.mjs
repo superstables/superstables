@@ -1570,6 +1570,7 @@ function refusalNext(f, rail) {
     if (f.rail === "tempo") return `no budget has been granted to this key. Nothing was signed. Start a grant (superstables budget grant ${r} --amount A) only if the owner asked you for one in this session and named the amount; otherwise tell them and end your turn`;
     return `no allowance is available: it may be spent, revoked or never granted. Nothing was signed. Report that in one reply (message_for_owner) and end your turn. Do not propose or start a grant, a revoke or gas unless the owner explicitly asks for one`;
   }
+  if (f.rail === "evm" && /^price [0-9.]+ [A-Z]+ exceeds --max [0-9.]+ [A-Z]+$/.test(rail.reason ?? "")) return "Nothing was signed or sent in this attempt. Run superstables find --budget to look for another service within the ceiling.";
   if (/exceeds the (allowance|remaining budget)/.test(why)) return `the budget left cannot cover this purchase. Nothing was signed. ${stop}`;
   if (/exceeds the owner's/.test(why)) return `the owner's balance is less than the price. Nothing was signed. Tell the owner in one reply and end your turn; never raise --max to get around it`;
   return "respect the refusal; nothing was signed; never raise --max to get around it";

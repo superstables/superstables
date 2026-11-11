@@ -88,6 +88,18 @@ describe("the signer checks the whole payment before the pull", () => {
     expect(genuine).toBe(true);
   }, 90_000);
 
+  it.concurrent("an offer above the ceiling is refused before payment and names a next step", async () => {
+    const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, amount: "100000" }) });
+    const r = await buy(s, sel.url, "above-ceiling");
+    expect(r.code, r.stdout + r.stderr).toBe(3);
+    expect(r.result).toMatchObject({ state: "refused_precheck", paid: false, amount: "0" });
+    expect(r.result.reason).toContain("exceeds --max");
+    expect(r.result.next).toContain("Nothing was signed or sent in this attempt");
+    expect(r.result.next).toContain("superstables find --budget");
+    expect(s.chain.sentRaw).toEqual([]);
+    expect(sel.creds).toEqual([]);
+  }, 90_000);
+
   it.concurrent("a seller that names another domain version is refused before the pull (regression guard)", async () => {
     const s = await setup(), sel = await seller(s, { mutate: (req) => ({ ...req, extra: { name: "USDC", version: "1" } }) });
     const r = await buy(s, sel.url, "t1b");
