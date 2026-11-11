@@ -323,6 +323,7 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_ALLOW_MAINNET` | unset (off) | The operator's switch for mainnet. `1` or `true` lets the client consider chains that are not testnets; unset, empty, `0` or `false` keeps mainnet off, and any other value is an error that names the variable. Agents never set it. The owner's signed settings must still enable a chain, and the chain must meet its prerequisites ([what mainnet needs](security.md#what-mainnet-still-needs)) |
 | `SUPERSTABLES_ALLOW_SITE` | unset | No longer read; a warning is printed when it is set. Use `superstables owner settings site <origin>` |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
+| `SUPERSTABLES_NO_UPDATE_CHECK` | unset | `1` skips the interactive doctor check for a newer client release |
 
 `SUPERSTABLES_HOME` is read when state is first touched, so set it before starting a process
 rather than during one. The CLI's `--home <dir>` sets it for you, and `--wallet <mode>` sets
@@ -360,6 +361,20 @@ With these defaults, none is reachable from another machine; `SUPERSTABLES_DEMO_
 the demo service to another interface. If a port is busy, move it with the matching
 variable or `--port`. The approval page moves by itself: a busy approval port usually means another
 payment is waiting there for its owner, so leave that process running.
+
+## Update or remove
+
+Use the route you installed. Start a new agent session after changing a plugin or skill.
+
+- **Claude Code, Git marketplace:** update the marketplace with `claude plugin marketplace update superstables`, then run `claude plugin update superstables@superstables`. Remove the plugin with `claude plugin uninstall superstables@superstables`.
+- **Codex, Git marketplace:** run `codex plugin marketplace upgrade superstables`, then `codex plugin remove superstables@superstables` and `codex plugin add superstables@superstables` to reinstall it. Remove it with `codex plugin remove superstables@superstables`.
+- **Claude Code or Codex, downloaded plugin zip:** download and verify the new release zip, unpack it to a new folder, for Codex first run `codex plugin remove superstables@superstables`, then remove the old marketplace with `claude plugin marketplace remove superstables` or `codex plugin marketplace remove superstables`. Follow the [plugin install steps](../README.md#the-plugin) using the new folder. Removing a marketplace can also remove its installed plugins.
+- **Claude:** download and verify the new Claude plugin zip, delete the installed plugin from Customize › Plugins, then upload the new zip there. To remove it, delete it there and disconnect its connector separately in Customize › Connectors. See [Claude’s plugin guide](https://support.claude.com/en/articles/13837440-use-plugins-in-claude).
+- **Skill zip:** download and verify the new skill zip, then replace the `superstables` folder in your agent's skills directory. Remove that folder to uninstall the skill.
+- **npm CLI:** update with `npm install -g @superstables/client@latest`; remove with `npm uninstall -g @superstables/client`. A checkout or git install must instead be updated at its source or installed again at the new release commit.
+- **Chat connectors:** end the connection on your [account page](https://www.superstables.com/account). In Claude, disconnect it in Customize › Connectors; in ChatGPT, choose Actions › Disconnect; in Grok Bot, choose Remove account. Ending app access does not revoke agent budgets; revoke them separately.
+
+Interactive `superstables doctor` checks `https://registry.npmjs.org/@superstables%2fclient/latest` for a newer client and prints a notice when it finds one. The request tells npm your IP address. Set `SUPERSTABLES_NO_UPDATE_CHECK=1` to disable it; `SUPERSTABLES_DOCTOR_OFFLINE=1` also skips it. The check is silent on failure, does not run for JSON output or purchases, and is not run when stdout is not a terminal.
 
 ## Uninstalling
 
