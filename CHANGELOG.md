@@ -13,6 +13,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Budget purchase refusals:** When an EVM seller asks more than the ceiling, the result says what happened and how to find another service.
 - **Updates:** Interactive `superstables doctor` can report a newer client release, and the install guide explains how to update or remove each install.
 
 ### Fixed
