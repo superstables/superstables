@@ -7,9 +7,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill’s description now includes “x402” and “pay per call” as reasons to use it.
+
 ### Changed
 
 - **Getting started:** The README lists the install routes together, and the plugin has its own guide.
+- **Connector tools:** The skill now names the tools to list and cancel purchase requests.
 - **Budget purchase refusals:** When an EVM seller asks more than the ceiling, the result says what happened and how to find another service.
 - **Updates:** Interactive `superstables doctor` can report a newer client release, and the install guide explains how to update or remove each install.
 

@@ -1,6 +1,6 @@
 ---
 name: superstables
-description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a testnet budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked to find a paid API, quote what a call costs, pay for one, make a single purchase, or set up, grant, check, revoke or recover a testnet budget. Testnet-first.
+description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a testnet budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked about x402, pay per call, a paid API, finding a service, quoting or paying for one, or setting up, granting, checking, revoking or recovering a testnet budget. Testnet-first.
 ---
 
 # Superstables
@@ -9,6 +9,10 @@ Use the connected Superstables tools to find a service and request a purchase.
 Testnet-first: test tokens, no real money. Mainnet is off until a release approves a chain and the operator allows it (`SUPERSTABLES_ALLOW_MAINNET`); you never set it, and when a refusal names it you report the refusal and stop.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
+
+## First run
+
+Ask what service the owner needs and whether they want a budget or a single purchase, unless they already said. Explain that this release uses test tokens and that the owner approves in their wallet. Follow the route they choose; ask for a budget amount before starting a grant. In Claude Code with the plugin installed, `/superstables:setup` guides this choice and `/superstables:status` checks an existing account or budget.
 
 ## Update or remove
 
@@ -30,6 +34,8 @@ Removing a connector or plugin does not revoke agent budgets; ask the owner to r
 - `find_services`: find services, prices, chains and required inputs. No sign-in needed. This pays nothing.
 - `request_purchase`: request a service by its `service_id` and inputs. Use a new `operation_id` for each purchase; reuse it when retrying the same request on the same connection.
 - `get_purchase_status`: read the purchase's payment status, service response and receipt using its `purchase_id`.
+- `list_my_purchases`: list up to 50 recent purchase requests from this connection, newest first. Use `get_purchase_status` for the current status and result.
+- `cancel_purchase`: cancel a request from this connection while it waits for approval. If payment may have been sent, the outcome is unknown; use `get_purchase_status`.
 - `find_budget_services`: list the services a budget can pay, or with `once` what Single purchase on superstables.com can buy. `chain` narrows the list.
 - `preflight_budget_purchase`: the listed price, recipient and chain for one service from `find_budget_services`; with `agent`, whether what is left of that agent's budget covers it.
 - `list_my_budgets`: read each agent's budget, what is left and its state.

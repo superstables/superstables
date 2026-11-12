@@ -5,6 +5,8 @@
     "find_services",
     "request_purchase",
     "get_purchase_status",
+    "list_my_purchases",
+    "cancel_purchase",
     "list_my_budgets",
     "get_budget_request",
     "request_budget_revoke",
