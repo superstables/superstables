@@ -7,16 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.3.0] - Setup and status commands, update guidance
+
+Testnet only.
+
 ### Added
 
-- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill’s description now includes “x402” and “pay per call” as reasons to use it.
+- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`.
 
 ### Changed
 
 - **Getting started:** The README lists the install routes together, and the plugin has its own guide.
 - **Connector tools:** The skill now names the tools to list and cancel purchase requests.
 - **Budget purchase refusals:** When an EVM seller asks more than the ceiling, the result says what happened and how to find another service.
-- **Updates:** Interactive `superstables doctor` can report a newer client release, and the install guide explains how to update or remove each install.
+- **Updates:** Interactive `superstables doctor` checks npm for a newer release; `SUPERSTABLES_NO_UPDATE_CHECK=1` disables the check. The install guide explains how to update or remove each install.
 
 ### Fixed
 
@@ -361,7 +365,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/superstables/superstables/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/superstables/superstables/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/superstables/superstables/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/superstables/superstables/compare/v1.1.1...v1.1.2

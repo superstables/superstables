@@ -75,6 +75,7 @@ export const OTHER_FILES = new Set([
   "plugin/.cursor-plugin/plugin.json",
   "plugin/skills/superstables/references/cli.md",
   "plugin/skills/superstables/references/discovery.md",
+  "budget/evm/delegation.ts", // MetaMask Delegation Framework's own version, not ours
   "scripts/version-set.mjs", // the example version 1.2.3 in the usage comment
   "test/scripts/plugin-sync.test.ts", // fixture versions
   "test/scripts/version-pins.test.ts", // fixture versions
