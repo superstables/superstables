@@ -7,6 +7,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **First run:** Claude Code can start with `/superstables:setup` or check an account and budget with `/superstables:status`. The skill’s description now includes “x402” and “pay per call” as reasons to use it.
+
 ### Changed
 
 - **Connector tools:** The skill now names the tools to list and cancel purchase requests.
