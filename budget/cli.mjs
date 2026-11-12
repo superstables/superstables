@@ -3,4 +3,4 @@ if (Number(process.versions.node.split(".")[0]) < 22) {
   process.stderr.write(`superstables budget needs Node 22 or newer; this is Node ${process.versions.node}.\n`);
   process.exit(2);
 }
-void import("./command.mjs");
+void new Function('return import("./command.mjs")')();
