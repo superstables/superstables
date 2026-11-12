@@ -34,6 +34,8 @@ Removing a connector or plugin does not revoke agent budgets; ask the owner to r
 - `find_services`: find services, prices, chains and required inputs. No sign-in needed. This pays nothing.
 - `request_purchase`: request a service by its `service_id` and inputs. Use a new `operation_id` for each purchase; reuse it when retrying the same request on the same connection.
 - `get_purchase_status`: read the purchase's payment status, service response and receipt using its `purchase_id`.
+- `list_my_purchases`: list up to 50 recent purchase requests from this connection, newest first. Use `get_purchase_status` for the current status and result.
+- `cancel_purchase`: cancel a request from this connection while it waits for approval. If payment may have been sent, the outcome is unknown; use `get_purchase_status`.
 - `find_budget_services`: list the services a budget can pay, or with `once` what Single purchase on superstables.com can buy. `chain` narrows the list.
 - `preflight_budget_purchase`: the listed price, recipient and chain for one service from `find_budget_services`; with `agent`, whether what is left of that agent's budget covers it.
 - `list_my_budgets`: read each agent's budget, what is left and its state.
