@@ -5,6 +5,15 @@ With Budgets, you approve an amount in your wallet and the agent can spend withi
 
 **Testnet by default.** Uses test tokens, no real money. Mainnet is off: this build ships the mainnet manifest off, so `SUPERSTABLES_ALLOW_MAINNET` alone does not turn it on.
 
+## Choose an install
+
+| Route | Use it for |
+| --- | --- |
+| [Plugin](#the-plugin) | Add the skill and connector to Claude Code, Codex or Claude. |
+| [Connector](#or-the-connector) | Connect Claude, ChatGPT or Grok Bot to Superstables. |
+| [Skill zip](#or-the-skill-zip) | Give a command-running agent the skill and bundled CLI. |
+| [CLI](#use-the-cli) | Run the client from a terminal or script. |
+
 ## Get started with your agent
 
 You need Node 22+, Linux or macOS, or WSL on Windows, and an agent that can run commands.
