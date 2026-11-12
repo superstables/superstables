@@ -653,7 +653,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   wallet: `approve(agent, 0)` on `evm`, `revokeKey` on `tempo`, the SPL `Revoke` on `solana`. It
   works even if the agent key was stolen. It does not reverse confirmed payments or return funds
   already transferred. On `evm`, a purchase whose price was already pulled can still settle, and
-  `recover` returns the USDC it can, leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
+  `recover` returns the token it can (USDC; USDG on Robinhood Chain Testnet), leaving up to 2 USDC of gas on Arc Testnet. On `tempo`, it does
   not close payment sessions the key opened elsewhere. An access key signs with the owner's account nonce, so while a stolen key keeps sending transactions the owner's wallet can refuse a revoke with "nonce too low"; the command answers unknown, and the owner reads `status` and retries the revoke. The key's limit still bounds what it can spend. `revoke` sends its transaction every time it
   is asked, even when the budget already reads empty or revoked: one RPC's read is not proof that
   nothing is live. On `solana` it sends nothing only when the owner has no USDC account, and on

@@ -70,7 +70,7 @@ with `request_budget_revoke` (it returns the owner's link on superstables.com
 and signs nothing). Check a revoke with `get_budget_status`, and count it done
 only when its `revoke` says it is final.
 
-**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on superstables.com or on their machine, may be offered only as a question. Request it only when the owner says yes: with `request_purchase`, or, in a coding agent on the owner's machine, `buy-once` or `pay`. They asked for the budget, so do not switch the way of paying on your own.
+**A refused budget purchase is the answer.** When a budget purchase is refused (the budget is revoked, has nothing left, or the price is over the per-purchase limit), say so and stop. A single purchase, which the owner approves on superstables.com (or, in a coding agent, on their machine), may be offered only as a question. Request it only when the owner says yes: with `request_purchase`, or, in a coding agent on the owner's machine, `buy-once` or `pay`. They asked for the budget, so do not switch the way of paying on your own.
 
 ## What stays on the CLI
 
@@ -98,8 +98,9 @@ commands to check what is available: decline budget set-up, grant, fund, budget
 buy and the CLI's `pay` straight away, because each needs a signature on the
 owner's machine. Don't offer to send a signed block either. Say so and point the owner to Claude Code, Codex or
 another agent that can run commands. The tools can find services, request a purchase the owner approves on
-superstables.com, read budgets, follow a budget approval and give the revoke
-link: offer those.
+superstables.com, read budgets, follow a budget approval, give the revoke
+link, and remove an agent once Superstables confirms it has no spending permission
+(revoke a live Tempo key first): offer those.
 
 ## When the connector is missing or signed out
 

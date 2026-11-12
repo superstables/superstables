@@ -44,14 +44,15 @@ decline to connect. Its install steps are in the README and on superstables.com'
 In Claude (claude.ai, Claude desktop and mobile), the plugin zip is uploaded in Customize › Plugins.
 
 **The connector.** A chat app (Claude, ChatGPT or Grok Bot) adds `https://mcp.superstables.com`
-without the plugin. It can find services, request a purchase you approve on superstables.com, read
-budgets and give you the link to revoke one. It cannot run the client, so it declines budget set-up,
+without the plugin. It can find services, request a purchase you approve on superstables.com, list or
+cancel the purchase requests it made, read budgets, give you the link to revoke one, and remove an agent
+that has no spending permission. It cannot run the client, so it declines budget set-up,
 grants, funding, buying under a budget and `pay`. The chat shows each approval link with a line
 naming the account's wallets by their last four characters; if that is not your account, don't
 approve. Grok Bot takes the same URL: ask the bot in chat to add a remote MCP server with it, then
 sign in. The sign-in page should name the app Grok Bot; if it names another app, stop. In our testing
-on testnet, the Grok Bot desktop app completed single purchases on Base Sepolia; other chains and
-phone use are not tested yet. The steps for each app are at
+on testnet, the Grok Bot desktop app signed in, found services and completed single purchases on Base
+Sepolia. Other chains, reading an existing budget and phone use are not tested yet. The steps for each app are at
 [superstables.com/docs/chat-apps](https://www.superstables.com/docs/chat-apps), and
 [the README](../README.md#or-the-connector) says what Grok Bot can and can't do.
 
