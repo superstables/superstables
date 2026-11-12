@@ -28,7 +28,7 @@
 // node scripts/budget-build.mjs [--outdir <dir>] [--sbom <file>]
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -412,6 +412,8 @@ export async function buildBudget(outdir = join(root, "dist", "budget")) {
   if (bad.length) throw new Error(`a dynamic import of a CommonJS package does not survive the bundle; import it statically:\n  ${bad.join("\n  ")}`);
   const entryPoints = budgetEntryPoints();
   const built = await buildStandalone({ outdir, entryPoints, name: "superstables-budget", title: "superstables budget", builtBy: "scripts/budget-build.mjs", rebuild: "npm run build" });
+  copyFileSync(join(src, "cli.mjs"), join(outdir, "cli.mjs"));
+  checkSelfContained(outdir);
   console.log(`budget: ${built.summary}, ${Object.keys(entryPoints).length - 2} rail scripts`);
   return built;
 }
@@ -424,6 +426,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const outdir = arg("--outdir");
   if (outdir) mkdirSync(dirname(outdir), { recursive: true });
   const built = await buildBudget(outdir);
+  if ((!outdir || outdir === join(root, "dist", "budget")) && existsSync(join(root, "dist", "cli", "main.js"))) {
+    copyFileSync(join(root, "src", "cli", "main.ts"), join(root, "dist", "cli", "main.js"));
+  }
   // `npm run build` has just compiled the rest of dist/ with tsc
   if (!outdir) console.log(`budget: no budget-only package in the client's ${checkClientImports()} files in dist/`);
   // The npm package's SBOM: what an install of it adds, and what dist/budget carries bundled.
