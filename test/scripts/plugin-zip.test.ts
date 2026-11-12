@@ -44,6 +44,10 @@ describe("plugin zips", () => {
       if (layout === "marketplace") {
         expect(names).toContain(".claude-plugin/marketplace.json");
         expect(names).toContain("plugin/skills/superstables/SKILL.md");
+        if (app === "claude-code") {
+          expect(names).toContain("plugin/commands/setup.md");
+          expect(names).toContain("plugin/commands/status.md");
+        }
         expect(names).toContain("plugin/assets/icon.png");
         expect(names).toContain("plugin/skills/superstables/assets/icon-large.png");
       } else if (layout === "claude-root") {
