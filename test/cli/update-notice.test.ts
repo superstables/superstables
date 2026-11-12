@@ -23,7 +23,7 @@ describe("update notice", () => {
     expect(newerRelease("2.3.4", "2.3.4")).toBe(false);
     expect(newerRelease("1.10.0", "1.9.0")).toBe(false);
     expect(newerRelease("2.3.4", "2.4.0-beta")).toBe(false);
-    expect(newerRelease("unknown", "1.3.0")).toBe(false);
+    expect(newerRelease("unknown", "99.0.0")).toBe(false);
   });
 
   it("reports a newer release from the registry", async () => {
