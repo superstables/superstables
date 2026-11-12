@@ -12,7 +12,7 @@ Only operations needing a local signature go through the CLI; everything else go
 
 ## First run
 
-Ask what service the owner needs and whether they want a budget or a single purchase, unless they already said. Explain that this release uses test tokens and that the owner approves in their wallet. Follow the route they choose; ask for a budget amount before starting a grant. In Claude Code with the plugin installed, `/superstables:setup` guides this choice and `/superstables:status` checks an existing account or budget.
+Ask what service the owner needs and, in an agent that can run commands, whether they want a budget or a single purchase, unless they already said; in a chat app, offer a single purchase the owner approves on superstables.com. Explain that this release uses test tokens and that the owner approves in their wallet. Follow the route they choose; ask for a budget amount before starting a grant. In Claude Code with the plugin installed, `/superstables:setup` guides this choice and `/superstables:status` checks an existing account or budget.
 
 ## Update or remove
 

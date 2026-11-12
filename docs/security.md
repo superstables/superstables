@@ -951,9 +951,10 @@ These are known limits of this release.
 - **Windows.** Windows is not supported (use WSL), and `superstables budget` refuses to run on native Windows. The code that
   opens a page in the browser still names Windows' `start`: the budget's opener and `owner settings sign` run `cmd /c start`,
   and the wallet runs `start` through a shell. Nothing on this page is claimed for native Windows.
-- **`doctor` contacts other hosts.** `superstables doctor` asks the Superstables index, the demo service and each public
-  facilitator whether they answer, so those hosts see this machine's address. That is what it is for.
-  `SUPERSTABLES_DOCTOR_OFFLINE=1` skips every one of those checks and says so on each line.
+- **`doctor` contacts other hosts.** `superstables doctor` checks the Superstables index, demo service and public
+  facilitators. With terminal output and without `--json`, it also checks npm for a newer client release. Those hosts see
+  this machine's address. `SUPERSTABLES_DOCTOR_OFFLINE=1` skips all these checks; `SUPERSTABLES_NO_UPDATE_CHECK=1` skips
+  only the npm check.
 - **The owner's-terminal check is a speed bump.** `superstables budget unlock`, `superstables owner settings` changes and
   `owner settings sign` run only when standard input is a terminal, and the first two also ask for a typed confirmation. An
   agent that drives a pseudo-terminal can pass that check. It stops an agent that runs the command carelessly, not one that
