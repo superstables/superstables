@@ -30,7 +30,8 @@ agent key on that runtime. Test-token and gas requirements belong to the chosen
 [Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com.
+testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
+interactive `superstables doctor`, the npm registry (`SUPERSTABLES_NO_UPDATE_CHECK=1` turns that off).
 
 ## Install
 
