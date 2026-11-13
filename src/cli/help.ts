@@ -79,7 +79,7 @@ export const EXIT_CODE_TABLE = `Exit codes (the same numbers as \`superstables b
 
 export const MAIN_HELP = `
 What this is:
-  A client for paying per request with test USDC (pathUSD on Tempo, USDG on Robinhood Chain
+  A client for paying per request with test stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain
   Testnet): find a paid service, quote it, and pay it.
   The agent can ask for a payment but cannot approve one.
 
@@ -179,7 +179,8 @@ Environment:
   SUPERSTABLES_APPROVE_PORT      a fixed port for pay's approval page; unset, this install's own port or a free one when busy
   SUPERSTABLES_WALLET_URL        the local wallet over TCP, for one started with wallet serve --tcp (default: its private
                                  socket in the wallet folder; its page is on http://127.0.0.1:${DEFAULT_WALLET_PORT})
-  SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks
+  SUPERSTABLES_DOCTOR_OFFLINE    1: doctor skips the network checks and the npm update check
+  SUPERSTABLES_NO_UPDATE_CHECK   1: interactive doctor does not ask npm for a newer client release
   SUPERSTABLES_DEMO_PAY_TO       where demo-service's earnings go
   SUPERSTABLES_SELLER_API_KEY    the seller API key seller credit and seller top-up send to superstables.com
                                  (never printed)

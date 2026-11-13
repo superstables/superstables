@@ -1184,7 +1184,7 @@ explain(
       if (!report.ok) process.exitCode = EXIT.failed;
     }),
   {
-    notes: ["For budgets, run `superstables budget doctor --rail evm` instead."],
+    notes: ["For budgets, run `superstables budget doctor --rail evm` instead.", "In a terminal it also asks registry.npmjs.org for a newer client release; SUPERSTABLES_NO_UPDATE_CHECK=1 skips that."],
     money: "no.",
     who: "the agent or the owner.",
     examples: ["superstables doctor", "superstables --wallet local doctor --json"],

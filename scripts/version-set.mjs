@@ -32,13 +32,15 @@ const MAINNET = "No mainnet chain is payable in VER";
 /** File -> anchored patterns; VER marks the version. Only these places are pins. */
 export const PINS = {
   "budget/CLI.md": [MAINNET],
-  "budget/README.md": ["pinned to the full VER release commit"],
+  "budget/README.md": ["pinned to the full VER release commit", MAINNET],
   "budget/command.mjs": [MAINNET],
   "budget/once.mjs": [MAINNET],
   "budget/owner-page.ts": [MAINNET],
+  "docs/budget.md": [MAINNET],
   "docs/buy-once.md": [MAINNET],
   "docs/cli-budget.md": [MAINNET],
   "docs/cli.md": [MAINNET],
+  "README.md": [String.raw`@superstables/client@VER`],
   "docs/install.md": [
     String.raw`describe \*\*client VER\*\*`,
     String.raw`@superstables/client@VER`,
@@ -55,6 +57,8 @@ export const PINS = {
   ],
   "docs/seller-referrals.md": [MAINNET],
   "evals/README.md": [MAINNET],
+  "plugin/skills/superstables/SKILL.md": [MAINNET],
+  "skill-source/cli.md": [MAINNET],
   "skill-source/references/discovery.md": [MAINNET],
   "src/cli/help.ts": [MAINNET],
 };
