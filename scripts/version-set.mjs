@@ -57,6 +57,7 @@ export const PINS = {
   ],
   "docs/seller-referrals.md": [MAINNET],
   "evals/README.md": [MAINNET],
+  "plugin/skills/superstables/SKILL.md": [MAINNET],
   "skill-source/cli.md": [MAINNET],
   "skill-source/references/discovery.md": [MAINNET],
   "src/cli/help.ts": [MAINNET],
