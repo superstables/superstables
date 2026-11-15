@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Testnet only.
+
+### Added
+
+- **Purchase reports:** The client can now report settled budget purchases to the linked site when it supports reports. A failed report leaves the purchase result unchanged. Set `SUPERSTABLES_PURCHASE_REPORTS=off` to stop reporting. See [what is sent](docs/budget.md#approve-on-superstablescom-instead).
+- **Tempo:** The Tempo budget can sign requests to the site with its agent key, as the EVM and Solana budgets do.
+
 ## [1.3.0] - Setup and status commands, update guidance
 
 Testnet only.

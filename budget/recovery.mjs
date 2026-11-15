@@ -1059,8 +1059,9 @@ async function runAttempt(deps, record, attempt) {
     const end = await endUnpaid(deps, record, "attempt_refused");
     if (end.kind === "result") return end;
   }
-  // paid, unknown, or refused: the order ends with this attempt's own answer
-  return { kind: "result", code: got.code, fields: switchedFields(record, attempt, got.fields) };
+  // paid, unknown, or refused: the order ends with this attempt's own answer. `ranNow` tells it from an answer read back from an
+  // earlier run's journal: only a purchase this run made is reported to the site (command.mjs emitReported).
+  return { kind: "result", code: got.code, ranNow: true, fields: switchedFields(record, attempt, got.fields) };
 }
 
 function switchedFields(record, attempt, fields) {

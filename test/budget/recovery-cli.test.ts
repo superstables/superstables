@@ -45,11 +45,11 @@ afterEach(async () => {
 // ---- the stand-ins -------------------------------------------------------------------------------------------------
 
 type SiteCall = { path: string; body: any; headers: Record<string, string | string[] | undefined>; raw: string; signed: boolean };
-interface Site { url: string; servicesGate: Promise<void> | null; servicesReached: (() => void) | null; reportGate: Promise<void> | null; reportReached: (() => void) | null; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; }
+interface Site { url: string; servicesGate: Promise<void> | null; servicesReached: (() => void) | null; reportGate: Promise<void> | null; reportReached: (() => void) | null; serviceReads: { signed: boolean; nonce: string; method: string }[]; servicesStatus: number; calls: SiteCall[]; features: string[]; advice: (req: any) => { status: number; body: unknown } | Promise<{ status: number; body: unknown }>; adviceCalls: SiteCall[]; reportCalls: SiteCall[]; purchaseReports: any[]; }
 
 /** A fake superstables.com: the feature list, and the two recovery routes, which check the agent's signature like the real one. */
 async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}): Promise<Site & { close(): Promise<void> }> {
-  const site: Site = { url: "", servicesGate: null, servicesReached: null, reportGate: null, reportReached: null, serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], ...over };
+  const site: Site = { url: "", servicesGate: null, servicesReached: null, reportGate: null, reportReached: null, serviceReads: [], servicesStatus: 200, calls: [], features: ["recovery_advice_v1"], advice: () => ({ status: 404, body: { error: "not_found" } }), adviceCalls: [], reportCalls: [], purchaseReports: [], ...over };
   const server = createServer(async (req, res) => {
     const raw = await text(req);
     if (req.method === "GET" && req.url === "/api/v1/budget/services") {
@@ -71,6 +71,11 @@ async function startSite(over: Partial<Pick<Site, "features" | "advice">> = {}):
       site.reportReached?.();
       if (site.reportGate) await site.reportGate;
       return json(res, 202, { ok: true });
+    }
+    // the report of a settled purchase (purchase-report.mjs): sent only to a site that lists purchase_reports_v1
+    if (req.method === "POST" && req.url === "/api/v1/budget/purchases") {
+      try { site.purchaseReports.push(JSON.parse(raw)); } catch { /* */ }
+      return json(res, 202, { accepted: true, replayed: false });
     }
     return json(res, 404, { error: "not_found" });
   });
@@ -1492,7 +1497,7 @@ describe("a crash in the middle of a switch", () => {
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     cleanups.push(() => closeServer(server));
     const gate = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]) });
+    const site = await startSite({ advice: adviceFor([arcCandidate(gate)]), features: ["recovery_advice_v1", "purchase_reports_v1"] });
     setUpEvm(site.url);
 
     const first = await buy(`${gate}/spot`, { op: "rec-crash", onSpawn: (pid) => { killer = () => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }; } });
@@ -1513,12 +1518,16 @@ describe("a crash in the middle of a switch", () => {
     expect(site.adviceCalls).toHaveLength(1);
     expect(hits.filter((h) => h === "/spot")).toHaveLength(baseReads);
     expect(base.sentRaw).toEqual([]);
+    // the rerun made this purchase, so it reports it, as the attempt that paid
+    expect(site.purchaseReports).toHaveLength(1);
+    expect(site.purchaseReports[0]).toMatchObject({ version: 1, rail: "evm", chain: "arc-testnet", op: aop("rec-crash"), tx: again.result.tx.settle });
 
     // and a third run answers from the candidate's journal without paying again
     const third = await buy(`${gate}/spot`, { op: "rec-crash" });
     expect(third.result).toMatchObject({ chain: "arc-testnet", op: aop("rec-crash") });
     expect(["settled", "unknown"]).toContain(third.result.state);
     expect(arcSeller.settled).toHaveLength(1);
+    expect(site.purchaseReports, "a rerun that only answers again reports nothing").toHaveLength(1);
   }, 300_000);
 });
 

@@ -264,6 +264,12 @@ revoke budgets. It shows Single purchase requests made on superstables.com, not 
 read [local budget records](records.md#budget-records) for those. After requesting a revoke, check
 `budget status` and wallet activity: the permission ends only when the transaction confirms.
 
+When `budget buy` settles and pays, the client attempts one report to the budget's linked site, if that site supports reports.
+
+The report contains the report version, rail, chain, operation id, seller URL (scheme, host and path), amount debited in the token's smallest unit, payee address (or null), transaction that paid the seller and delivery status. The signing headers contain the agent address, timestamp, nonce and signature. No seller request body, seller response or owner-address field is sent.
+
+Reporting never changes the purchase result or exit code. Reports are not retried; `reconcile` and rerunning a settled operation send no report. Budgets approved on your machine and single purchases send no purchase reports. Set `SUPERSTABLES_PURCHASE_REPORTS=off` to stop reporting.
+
 This is optional. Approvals on this machine remain the default and need no account. Approvals on superstables.com
 need a superstables.com account, or a compatible deployment the owner names with `--site`
 or `SUPERSTABLES_SITE`. Approvals on a site other than `https://www.superstables.com` or `https://superstables.com`,
