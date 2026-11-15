@@ -521,6 +521,10 @@ Nobody approves it: the chain enforces the budget. It asks the seller for its pr
 --pay-to ADDR refuses unless the seller's payee is exactly ADDR (preflight prints it). --op ID names this purchase
 (default: a generated id, printed): a purchase is never paid twice under one id, and reconcile takes it.
 --method and --body are for tempo and solana; evm buys are GET only. --agent LABEL (tempo) picks the access key.
+When the buy settles and the budget is linked to superstables.com (setup --hosted), the client then sends that site one
+report of it, signed with the agent key: rail, chain, op, the seller URL without its query string, the amount, the payee,
+the transaction and whether the seller delivered. Only when the site says it takes reports. It never changes this RESULT
+or the exit code; a failed send is one line on stderr. SUPERSTABLES_PURCHASE_REPORTS=off sends nothing.
 
 Before the first buy: the owner has run setup and grant (on evm and solana also fund-agent). Check with
 superstables budget status --rail R (is there a budget, how much is left) and superstables budget doctor --rail R (keys,

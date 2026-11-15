@@ -169,6 +169,7 @@ Environment:
   SUPERSTABLES_CATALOGUE_URL     where those services are listed; \`off\` to skip it
   SUPERSTABLES_DEMO_SERVICE_URL  another instance of the demo market-data service
   SUPERSTABLES_REFERRALS         off: do not remember or send the referral tokens of index listings
+  SUPERSTABLES_PURCHASE_REPORTS  off: do not report settled budget purchases to the site the budget is linked to
   SUPERSTABLES_RPC_URL           the Base Sepolia RPC for balances and the chain check on a settlement
                                  (https, or http on this machine); wallets adding the chain get the public RPC;
                                  unset: the RPC set with superstables owner settings rpc, else the chain's public one

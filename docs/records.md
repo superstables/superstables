@@ -21,8 +21,9 @@ activity before deciding what to do; approval, payment and delivery are separate
 
 `--shown` means the agent wrote the approval link, terms and match code when present in a visible
 reply to the owner.
-Approval on superstables.com leaves budget journals and the agent key on your runtime; the site account is not
-a complete budget purchase ledger. To stop spending, [revoke](budget.md#7-revoke-owner). To return
+Approval on superstables.com leaves budget journals and the agent key on your runtime. The client reports each
+settled purchase to the site once, best effort, so the site account is not a complete budget purchase ledger
+([what is sent](budget.md#approve-on-superstablescom-instead), and how to switch it off). To stop spending, [revoke](budget.md#7-revoke-owner). To return
 stranded EVM USDC, use [recovery](budget.md#recovery-and-ending-use), which requires the agent key
 and uses local owner approvals even with setup on superstables.com. Preserve these files until unresolved
 outcomes and key-held funds are checked, then follow [Uninstalling](install.md#uninstalling).

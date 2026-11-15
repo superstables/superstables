@@ -41,6 +41,7 @@ import { ownerSteps, setupGaps } from "./setup-check.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteRequestId, listSiteServices, scrubAgentTokens, siteName, siteOrigin, siteRequestProblem, siteText } from "./site.mjs";
+import { purchaseReportsOn, reportSettled } from "./purchase-report.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { mainnetSwitchRefusal } from "../src/core/chain-gate.js";
@@ -356,6 +357,10 @@ ${MAX_HELP}
 --pay-to ADDR refuses unless the seller's payee is exactly ADDR (preflight prints it). --op ID names this purchase
 (default: a generated id, printed): a purchase is never paid twice under one id, and reconcile takes it.
 --method and --body are for tempo and solana; evm buys are GET only. --agent LABEL (tempo) picks the access key.
+When the buy settles and the budget is linked to superstables.com (setup --hosted), the client then sends that site one
+report of it, signed with the agent key: rail, chain, op, the seller URL without its query string, the amount, the payee,
+the transaction and whether the seller delivered. Only when the site says it takes reports. It never changes this RESULT
+or the exit code; a failed send is one line on stderr. SUPERSTABLES_PURCHASE_REPORTS=off sends nothing.
 
 Before the first buy: the owner has run setup and grant (on evm and solana also fund-agent). Check with
 superstables budget status --rail R (is there a budget, how much is left) and superstables budget doctor --rail R (keys,
@@ -1136,6 +1141,9 @@ const opt = (name, v) => (v === undefined ? [] : [`--${name}`, v]);
 /** The owner flags every owner script takes: how long the link stays open, whether to open a browser, the test key file. */
 const ownerOpts = (f) => [...opt("timeout", f.timeout), ...(f["no-open"] ? ["--no-open"] : []), ...opt("owner-key-file", f["owner-key-file"])];
 
+/** The arguments of a rail's siteCall script: the site, the route, the method, the JSON body and how long the site may take (ms). */
+const siteCallArgv = (extra) => ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : []), ...(extra.timeoutMs ? ["--timeout-ms", String(extra.timeoutMs)] : [])];
+
 /** The command line of a rail script; `owner` marks the owner script of an owner command (the one that asks the owner). */
 function railCommand(verb, f, extra = {}) {
   const spec = railSpec(verb, f, extra);
@@ -1154,6 +1162,8 @@ function railSpec(verb, f, extra) {
       case "grant": return T("setBudget", ["--amount", f.amount, "--expiry-seconds", String(extra.expirySeconds), ...opt("period-seconds", f.period), ...opt("sellers", f.sellers), ...agent, ...ownerOpts(f)]);
       case "revoke": return T("revokeBudget", [...agent, ...ownerOpts(f)]);
       case "setup": return f["fund-only"] ? T("setup", ["--fund-only"]) : T("setup", [...agent, ...(f["new-owner"] ? ["--new-owner"] : []), ...(f.hosted ? ["--hosted", "--site", f.site] : []), ...opt("grant", f.grant), ...ownerOpts(f)]);
+      // one request to the site, signed with the agent key (never a payment)
+      case "site-call": return T("siteCall", [...siteCallArgv(extra), ...agent]);
     }
   }
   if (f.rail === "solana") {
@@ -1176,7 +1186,7 @@ function railSpec(verb, f, extra) {
       case "rotate-confirm-sweep": return S("rotate", ["--confirm", extra.signatures]);
       case "rotate-clear": return S("rotate", ["--clear-agent", extra.agent]);
       // recovery: one request to the site, signed with the agent key (never a payment)
-      case "site-call": return O("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
+      case "site-call": return O("siteCall", siteCallArgv(extra));
     }
   }
   return evmCommand(verb, f, extra);
@@ -1197,7 +1207,7 @@ function evmCommand(verb, f, extra = {}) {
     case "fund-agent": return E("fundAgent", [...opt("amount", f.amount), ...ownerOpts(f)]);
     case "rotate-address": return E("rotate", ["--address"]);
     case "rotate-clear": return E("rotate", ["--clear-agent", extra.agent]);
-    case "site-call": return E("siteCall", ["--site", extra.site, "--path", extra.path, ...(extra.method ? ["--method", extra.method] : []), ...(extra.body !== undefined ? ["--body", extra.body] : [])]);
+    case "site-call": return E("siteCall", siteCallArgv(extra));
   }
 }
 const evmReadFromResult = (r) => r.state !== "ok" ? { ok: false, code: 1 } : ({ ok: true, remaining: r.allowance ?? null, expiry: r.expiry ?? null, revoked: r.revoked === true, atRisk: r.maxMovable ?? null, agent: r.agent ?? null, lastOwnerAction: r.lastOwnerAction ?? null });
@@ -1811,10 +1821,10 @@ function recoverySite(f) {
   return checked.error ? null : checked.origin;
 }
 /** One request to the site, signed with the agent key by the rail's site-call script (never a payment). */
-async function signedCall(f, method, path, body) {
+async function signedCall(f, method, path, body, timeoutMs) {
   const origin = recoverySite(f);
   if (!origin) return { network: "no site" };
-  const r = await run(railCommand("site-call", f, { site: origin, path, method, ...(method === "POST" ? { body: JSON.stringify(body) } : {}) }));
+  const r = await run(railCommand("site-call", f, { site: origin, path, method, ...(timeoutMs ? { timeoutMs } : {}), ...(method === "POST" ? { body: JSON.stringify(body) } : {}) }));
   const out = r.signal || interrupted ? null : railResult(r.stdout, { last: true });
   const reply = out?.reply;
   return reply && typeof reply === "object" && (Number.isInteger(reply.status) || typeof reply.network === "string") ? reply : { network: "no answer from the signing step" };
@@ -2058,7 +2068,7 @@ async function buy({ f, ctx }) {
   if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
     waited = true;
     const moved = await recoveryFor(f, ctx, rr, advised);
-    if (moved?.kind === "result") return emit(moved.code, moved.fields);
+    if (moved?.kind === "result") return emitReported(f, moved.code, moved.fields);
     if (moved?.kind === "original") return originalAnswer(f, ctx);
     // an op of the order could not be marked: it may be in use or may have signed. Its own journal decides, later; now it is unknown.
     if (moved?.freezeFailed) return frozeNot(ctx, f, moved.freezeFailed);
@@ -2072,7 +2082,26 @@ async function buy({ f, ctx }) {
     const meanwhile = signedMeanwhile(f, ctx);
     if (meanwhile) return meanwhile();
   }
-  emit(n.code, n.fields);
+  return emitReported(f, n.code, n.fields);
+}
+
+/**
+ * The answer of a buy that ran, after the purchase report (purchase-report.mjs) if it settled. The report is best effort and runs
+ * once the journal is final: it never changes the code or the fields, and it never throws, so the RESULT is always written.
+ */
+async function emitReported(f, code, fields) {
+  await reportSettled(fields, {
+    on: purchaseReportsOn,
+    interrupted: () => interrupted,
+    journal: (t) => readJournal(t),
+    decimals: (t) => (t.rail === "evm" ? EVM_CHAINS[t.chain]?.token.decimals ?? 6 : 6),
+    site: (t) => recoverySite(t),
+    // the agent label of --agent belongs to the buy's own rail (tempo); another rail's attempt signs with its own key
+    call: (t, method, path, body, timeoutMs) => signedCall(t.rail === f.rail ? { ...t, agent: f.agent } : t, method, path, body, timeoutMs),
+    stop: () => currentChild?.kill("SIGTERM"),
+    log, now: Date.now,
+  });
+  return emit(code, fields);
 }
 
 async function unlock({ f, ctx }) {
