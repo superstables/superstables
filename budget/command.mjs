@@ -357,10 +357,9 @@ ${MAX_HELP}
 --pay-to ADDR refuses unless the seller's payee is exactly ADDR (preflight prints it). --op ID names this purchase
 (default: a generated id, printed): a purchase is never paid twice under one id, and reconcile takes it.
 --method and --body are for tempo and solana; evm buys are GET only. --agent LABEL (tempo) picks the access key.
-When the buy settles and the budget is linked to superstables.com (setup --hosted), the client then sends that site one
-report of it, signed with the agent key: rail, chain, op, the seller URL without its query string, the amount, the payee,
-the transaction and whether the seller delivered. Only when the site says it takes reports. It never changes this RESULT
-or the exit code; a failed send is one line on stderr. SUPERSTABLES_PURCHASE_REPORTS=off sends nothing.
+When this buy settles and pays, the client attempts one signed purchase report to the budget's linked site,
+if that site supports reports. Reporting never changes this RESULT or the exit code.
+SUPERSTABLES_PURCHASE_REPORTS=off stops reporting.
 
 Before the first buy: the owner has run setup and grant (on evm and solana also fund-agent). Check with
 superstables budget status --rail R (is there a budget, how much is left) and superstables budget doctor --rail R (keys,
@@ -1922,7 +1921,8 @@ async function buyRecovered({ f, ctx, record }) {
     return unknown(reason, `the owner checks ${join(STATE_DIR, "recovery")} and the agent's payments on chain; never pay again for this op`);
   }
   const again = await recoveryFor(f, ctx, null);
-  if (again?.kind === "result") return emit(again.code, again.fields);
+  // a switch this rerun carried on and paid is a purchase of this run; one answered from its journal was reported, or not, by the run that paid
+  if (again?.kind === "result") return again.ranNow ? emitReported(f, again.code, again.fields) : emit(again.code, again.fields);
   if (again?.kind === "original") return originalAnswer(f, ctx);
   if (again?.freezeFailed) return frozeNot(ctx, f, again.freezeFailed);
   if (again?.kind !== "none" || again.closed !== true) {
@@ -2068,7 +2068,7 @@ async function buy({ f, ctx }) {
   if (n.fields.state === "refused_precheck" && railTermsFailure(rr) && !railSending) {
     waited = true;
     const moved = await recoveryFor(f, ctx, rr, advised);
-    if (moved?.kind === "result") return emitReported(f, moved.code, moved.fields);
+    if (moved?.kind === "result") return moved.ranNow ? emitReported(f, moved.code, moved.fields) : emit(moved.code, moved.fields);
     if (moved?.kind === "original") return originalAnswer(f, ctx);
     // an op of the order could not be marked: it may be in use or may have signed. Its own journal decides, later; now it is unknown.
     if (moved?.freezeFailed) return frozeNot(ctx, f, moved.freezeFailed);

@@ -7,9 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Testnet only.
+
 ### Added
 
-- **Purchase reports:** After a budget purchase settles, and when the budget is linked to superstables.com, the client sends that site one signed report: the chain, operation id, seller URL without its query string, amount, payee, transaction and whether the seller delivered. It is sent only when the site takes reports, it never changes the result or exit code of the buy, and `SUPERSTABLES_PURCHASE_REPORTS=off` stops it. Budgets approved on your machine send nothing.
+- **Purchase reports:** The client can now report settled budget purchases to the linked site when it supports reports. A failed report leaves the purchase result unchanged. Set `SUPERSTABLES_PURCHASE_REPORTS=off` to stop reporting. See [what is sent](docs/budget.md#approve-on-superstablescom-instead).
 - **Tempo:** The Tempo budget can sign requests to the site with its agent key, as the EVM and Solana budgets do.
 
 ## [1.3.0] - Setup and status commands, update guidance

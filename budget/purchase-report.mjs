@@ -105,12 +105,12 @@ export async function reportSettled(fields, deps) {
       if (done.over) return;
       const host = (() => { try { return new URL(origin).host; } catch { return "the site"; } })();
       if (reply?.status === 202 && reply.body?.accepted === true) deps.log(`superstables budget: purchase reported to ${host}; SUPERSTABLES_PURCHASE_REPORTS=off stops this.`);
-      else if (typeof reply?.status === "number") deps.log(`superstables budget: ${host} did not take the purchase report (HTTP ${reply.status}); the purchase is unaffected.`);
-      else deps.log(`superstables budget: the purchase report to ${host} was not sent (${String(reply?.network ?? "no answer").slice(0, 80)}); the purchase is unaffected.`);
+      else if (typeof reply?.status === "number") deps.log(`superstables budget: ${host} did not confirm the purchase report (HTTP ${reply.status}); the purchase is unaffected.`);
+      else deps.log(`superstables budget: could not confirm the purchase report to ${host} (${String(reply?.network ?? "no answer").slice(0, 80)}); the purchase is unaffected.`);
     })();
     const late = new Promise((resolve) => { done.timer = setTimeout(() => { done.over = true; try { deps.stop(); } catch { /* the call ends on its own limit */ } resolve("late"); }, REPORT_BUDGET_MS); });
     const how = await Promise.race([work.then(() => "done", () => "failed"), late]);
-    if (how === "late") deps.log("superstables budget: the purchase report took too long and was left; the purchase is unaffected.");
+    if (how === "late") deps.log("superstables budget: purchase reporting timed out; the purchase is unaffected.");
   } catch {
     // best effort: nothing here may change the answer
   } finally {
