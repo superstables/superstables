@@ -63,7 +63,7 @@ describe("the refusals", () => {
 
   it("invalid: a mainnet is refused with the error, a testnet is untouched", () => {
     vi.stubEnv(MAINNET_ENV, "yes");
-    expect(chainGate(BASE)).toMatch(/^SUPERSTABLES_ALLOW_MAINNET is "yes", which is not a value/);
+    expect(chainGate(BASE)).toMatch(/^SUPERSTABLES_ALLOW_MAINNET is "yes", a value it does not take, so mainnet stays off; stop and ask the owner/);
     expect(networkRefusal("eip155:8453")).toContain('SUPERSTABLES_ALLOW_MAINNET is "yes"');
     expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true })).toBe("");
   });

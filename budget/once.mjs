@@ -98,7 +98,7 @@ const railMainnet = (rail, chain) => {
 /** The money line for a record: real money on a mainnet, the testnet line elsewhere. */
 export const moneyLineFor = (rec) => {
   const m = recordMainnet(rec);
-  return m ? `This is ${m.label}, a mainnet: the money is real.\nSUPERSTABLES_ALLOW_MAINNET is on. Only the operator sets it; agents never set the variable.` : TESTNET_LINE;
+  return m ? `This is ${m.label}, a mainnet: the money is real.\nOnly the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.` : TESTNET_LINE;
 };
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";

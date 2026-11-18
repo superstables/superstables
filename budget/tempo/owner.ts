@@ -138,6 +138,9 @@ function agentKeyFor(agent: Address, action: string, site: string): Hex | undefi
       process.exit(emit('owner', 3, { state: 'refused_precheck', reason, next: 'unlock the keychain, then run the command again' }))
     }
   }
+  // on a mainnet only the keychain holds an agent key: a plain one in the file is never used (a hosted revoke then says
+  // where to revoke without it)
+  if (!CHAIN.testnet) return undefined
   for (const [k, v] of Object.entries(env)) {
     if (!KEY_LINE.test(k) || !/^0x[0-9a-fA-F]{64}$/.test(v)) continue
     // 32 bytes are not always a key: 0 and anything from the curve order up are not (privateKeyToAddress throws on them),
@@ -159,12 +162,12 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
   hostedSite: approvalSite,
   hosted: (action) => {
     const site = approvalSite()!
-    // the agent key's signature on a request to the site is read against the mainnet boundary too; the owner's revoke is not held back by it
-    if (action !== 'revoke') {
-      try { assertMainnetOpen('nothing was signed or sent') } catch (err) {
-        console.log(`REFUSED: ${(err as Error).message}.`)
-        process.exit(emit('owner', 3, { state: 'refused_precheck', reason: (err as Error).message, next: 'nothing was signed or sent; ask the owner: the refusal says why this mainnet is closed' }))
-      }
+    // the agent key's signature on a request to the site is read against the mainnet boundary now, and again right before
+    // each signature (beforeSign below): a mainnet the switch or a pause closed gets no new request, a revoke included, as on
+    // the owner page; the owner can still revoke from their wallet
+    try { assertMainnetOpen('nothing was signed or sent') } catch (err) {
+      console.log(`REFUSED: ${(err as Error).message}.`)
+      process.exit(emit('owner', 3, { state: 'refused_precheck', reason: (err as Error).message, next: 'nothing was signed or sent; ask the owner: the refusal says why this mainnet is closed' }))
     }
     // the agent key signs each request to the site: the key this command grants or revokes, which must be on this computer
     const agent = (hostedAgent ?? loadPublicEnv().AGENT_ADDRESS) as Address | undefined
@@ -175,7 +178,7 @@ export const { askConnect, askTransaction, endUnapproved } = ownerPageFor({
       console.log(`REFUSED: ${reason}. Nothing was requested.`)
       process.exit(emit('owner', 3, { state: 'refused_precheck', reason, next: 'restore the agent key file, or set this chain up again' }))
     }
-    return { site, rail: 'tempo' as const, chain: CHAIN.key, agentKey }
+    return { site, rail: 'tempo' as const, chain: CHAIN.key, agentKey, beforeSign: () => assertMainnetOpen('nothing was signed or sent') }
   },
 })
 

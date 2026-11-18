@@ -23,9 +23,10 @@ There are two ways:
   Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 
-**Testnet only.** `buy-once` pays on testnets, whatever SUPERSTABLES_ALLOW_MAINNET says.
-Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
-moves. Use the [client install instructions](install.md). A command-capable agent initiates
+**Testnet by default.** With the operator's switch on (`SUPERSTABLES_ALLOW_MAINNET=1`) and mainnet not paused,
+`buy-once` also pays on Base, Arc and Robinhood Chain when superstables.com lists a service there, and mainnet
+payments move real money. On testnets the tokens are test USDC, USDG on Robinhood Chain Testnet, or pathUSD on
+Tempo Moderato, and no real money moves. Use the [client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
 requests on superstables.com, the owner approves and checks activity on the site; linked budget agents are
 managed there too. Local approvals use the local browser and [client records](records.md),

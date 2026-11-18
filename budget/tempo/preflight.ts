@@ -50,17 +50,17 @@ async function main() {
   if (!onChain.length) {
     if (CHAIN.testnet && mainnetEntry('tempo') && offers.some((o) => Number(o?.methodDetails?.chainId) === mainnetEntry('tempo')!.chainId)) {
       const off = mainnetSwitchRefusal()
-      if (off) result('failed', { reason: off, next: 'this seller cannot be paid from a tempo budget' })
+      if (off) result('failed', { reason: off, next: 'this seller is on Tempo mainnet, which is off: ask the owner' })
     }
     const other = /method="tempo"/.test(header) ? `tempo offers only on another chain or another intent (a session or ${CHAIN.testnet ? 'mainnet' : 'testnet'})` : 'no MPP tempo offer at all'
-    result('failed', { reason: `no tempo.charge offer on ${CHAIN.short} (chain ${CHAIN_ID}): ${other}`, next: 'this seller cannot be paid from a tempo budget' })
+    result('failed', { reason: `no tempo.charge offer on ${CHAIN.short} (chain ${CHAIN_ID}): ${other}`, next: `no payable offer on ${CHAIN.label}: a tempo budget on this chain cannot pay this seller` })
   }
   // the buy's own checks, with no ceiling: only the seller's terms are judged here
   const checked = onChain.map((o) => ({ o, c: precheckCharge(o, { maxBase: 2n ** 255n }) }))
   const good = checked.find((x) => x.c.ok)
   if (!good || !good.c.ok) {
     const why = checked.map((x) => (x.c.ok ? '' : x.c.reason)).filter(Boolean).join('; ')
-    result('failed', { reason: `the seller's ${CHAIN.short} offer cannot be paid: ${why}`, next: 'this seller cannot be paid from a tempo budget' })
+    result('failed', { reason: `the seller's ${CHAIN.short} offer cannot be paid: ${why}`, next: `a tempo budget on ${CHAIN.label} cannot pay this seller` })
   }
   const price = fromBaseUnits(good.c.amount)
   const feePayer = good.o.methodDetails?.feePayer === true

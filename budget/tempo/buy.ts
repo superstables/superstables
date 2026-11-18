@@ -209,10 +209,22 @@ async function main() {
   const clientId = tempoClientId(referral?.id)
   const attribution = { referral, clientId }
 
+  /**
+   * The agent account with each of its signing methods reading the mainnet boundary right before it signs. mppx prepares the
+   * transaction (RPC reads) between createCredential and the signature, and a pause set meanwhile must stop the signature itself.
+   */
+  function signingReadsBoundary<T extends object>(account: T): T {
+    const guarded: Record<string, unknown> = { ...account }
+    for (const [name, fn] of Object.entries(account)) {
+      if (typeof fn === 'function' && name.startsWith('sign')) guarded[name] = (...args: unknown[]) => { assertMainnetOpen('nothing was signed or sent'); return (fn as (...a: unknown[]) => unknown).apply(account, args) }
+    }
+    return guarded as T
+  }
+
   // 2. Agent file only.
   let agent: ReturnType<typeof agentAccessKeyAccount>
   try {
-    agent = agentAccessKeyAccount(loadAgentEnv(), agentLabel)
+    agent = signingReadsBoundary(agentAccessKeyAccount(loadAgentEnv(), agentLabel))
   } catch (err) {
     // a keychain that is locked, missing the key or holding another, or a plain key on a mainnet: nothing is signed
     if (!isKeyRefusal(err)) throw err

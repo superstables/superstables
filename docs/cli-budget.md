@@ -28,7 +28,7 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
 Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on,
-every rail's mainnets are open and the money there is real. Agents never set the variable.
+the evm rail's mainnets are open and the money there is real. Agents never set the variable.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
@@ -63,9 +63,8 @@ Rails and chains (--chain; the default is marked):
           polygon-amoy (Polygon Amoy), skale-base-sepolia (SKALE Base Sepolia),
           ethereum-sepolia (Ethereum Sepolia), robinhood-testnet (Robinhood Chain Testnet)
           The budget is USDC (USDG on robinhood-testnet). Sellers: x402.
-  tempo   moderato (Tempo Moderato, default). The budget is pathUSD.
-          Sellers: MPP (tempo.charge).
-  solana  devnet (Solana devnet, default). The budget is USDC. Sellers: x402.
+  tempo   moderato (Tempo Moderato, default; the only chain). The budget is pathUSD. Sellers: MPP (tempo.charge).
+  solana  devnet (Solana devnet, default; the only chain). The budget is USDC. Sellers: x402.
   Chain to rail: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet are evm;
   Tempo Moderato is tempo; Solana devnet is solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.
@@ -193,13 +192,12 @@ only one the owner allows in their settings (superstables owner settings allow-s
 the page on 127.0.0.1, no account. An agent already added to an account is taken only for the owner recorded here, with
 that owner's signed proof; otherwise the owner removes the agent on the site's account page and adds it again.
 setup --new-owner without --hosted moves a chain with approvals on superstables.com back to the page on this machine.
---key-store file|os-keychain (evm and solana; default file; on a mainnet, os-keychain is required): os-keychain keeps the agent key in this computer's keychain
+--key-store file|os-keychain (evm and solana; default file): os-keychain keeps the agent key in this computer's keychain
 (macOS security, Linux secret-tool from libsecret-tools) and only its address in the key file; the key is passed to the
 keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
 bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on
 superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect
-the key from code running as you while the keychain is unlocked. On tempo it is for the mainnet only (--chain tempo), where
-it is required, and Tempo Moderato keys stay in the key file.
+the key from code running as you while the keychain is unlocked. Not for tempo.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -267,7 +265,7 @@ The owner's steps, in order, once per rail and chain:
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. The owner signs a message, not a transaction. With --fund and --grant: the gas to the agent, and an
   allowance of A from the owner's wallet, once the owner approves each in their wallet.
@@ -342,7 +340,7 @@ signed request that no request was given for reads unknown (exit 5, final false)
 signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: yes: the amount of gas token, from the owner's wallet to the agent key, once the owner approves it.
 Run by: the owner. An agent may start it and hand the owner the approval link.
@@ -369,7 +367,7 @@ and a failed balance names the address to top up and how. On evm the gas minimum
 needs twice what one purchase and a failed one's cleanup (pull, cancel, return) cost now, and doctor prints that cost.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. It signs nothing and sends nothing.
 Run by: anyone: the owner before grant, the agent before buying.
@@ -441,7 +439,7 @@ signed request that no request was given for reads unknown (exit 5, final false)
 signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: not at once: it lets the agent spend up to A from the owner's wallet, purchase by purchase, once the owner
   approves it. The owner pays the transaction fee.
@@ -473,7 +471,7 @@ allowance or delegate that reads 0 without that record is remaining 0 and revoke
 final yet is not revoked: lastOwnerAction says which action is waiting and whether it is final.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. It reads files and the chain only; no secret is opened.
 Run by: anyone.
@@ -497,7 +495,7 @@ tempo.charge on Moderato. solana: an x402 exact offer on devnet. Use the --metho
 choosing --max for buy stays with you (or the owner's instructions).
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. It sends one unpaid request, signs nothing, submits no payment and opens no key file.
 Run by: anyone, usually the agent before buy.
@@ -548,7 +546,7 @@ The owner's steps, in order, once per rail and chain:
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: yes: the seller's price, at most --max, from the owner's funds under the budget, without asking anyone.
 Run by: the agent.
@@ -573,7 +571,7 @@ or before reusing an --op. Needs the purchase's journal on this machine. A busy 
 with the holder, lock path and owner recovery guidance in next. Never buy again while the outcome is unknown.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. It never signs or sends.
 Run by: anyone, usually the agent.
@@ -603,7 +601,7 @@ A holder still working or unlock paused before unlinking can remove a new holder
   superstables budget unlock --buy-once --confirm [--unverified]
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no. It never signs or sends.
 Run by: the owner or operator, after stopping the processes.
@@ -669,7 +667,7 @@ signed request that no request was given for reads unknown (exit 5, final false)
 signed approval request, but the tool may have sent it in time. Not with --owner-key-file, --yes, --wait or --detach.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: no funds move. The owner pays the transaction fee.
 Run by: the owner. An agent may start it and hand the owner the approval link.
@@ -722,7 +720,7 @@ they cancelled any open wallet prompt.
 Unattended tests only: --owner-key-file PATH --yes signs with that key file instead of the owner's wallet.
 
 --chain C: evm base-sepolia (default), arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet;
-  tempo moderato (default); solana devnet (default). superstables budget --help maps chain names to rails.
+  tempo moderato; solana devnet. superstables budget --help maps chain names to rails.
 
 Moves money: yes: stranded funds back to the owner, and possibly gas from the owner to the agent, which the owner approves.
 Run by: the owner, with the agent key on this machine. An agent may start it and hand the owner the approval link.

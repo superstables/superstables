@@ -23,7 +23,7 @@ import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
 import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { rpcFacts } from "../page-facts.mjs";
-import { CHAIN_FLAG, AGENT_KEY_PATH, CHAIN, PUBLIC_PATH, mainnetClosed, TESTNET, USDC_MINT, plainKeyProblem, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { CHAIN_FLAG, AGENT_KEY_PATH, CHAIN, PUBLIC_PATH, assertMainnetOpen, mainnetClosed, TESTNET, USDC_MINT, plainKeyProblem, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
@@ -133,7 +133,8 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
       console.log(`REFUSED: ${reason}. Nothing was requested.`);
       process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
     }
-    return { site, rail: "solana" as const, chain: CHAIN.key, agentKey: { ed25519: keypair.secretKey, address: address! } };
+    // and again right before each agent-key signature on a request to the site
+    return { site, rail: "solana" as const, chain: CHAIN.key, agentKey: { ed25519: keypair.secretKey, address: address! }, beforeSign: () => assertMainnetOpen("nothing was signed or sent") };
   },
 });
 
