@@ -1,8 +1,9 @@
-// The budget is testnet only. Robinhood Chain's testnet (robinhood-testnet, 46630) is a budget chain; its mainnet
-// (robinhood, 4663) is refused before anything runs, both by the dispatcher (budget/cli.mjs) and by the guard every EVM
-// script imports first (budget/evm/cli-guard.mjs). No network, no key: the refusals happen before either is touched.
+// The budget is testnet by default. Robinhood Chain's testnet (robinhood-testnet, 46630) is a budget chain; its mainnet
+// (robinhood, 4663) is refused before anything runs while the operator's switch is off, both by the dispatcher
+// (budget/cli.mjs) and by the guard every EVM script imports first (budget/evm/cli-guard.mjs). With the switch on, the
+// EVM mainnets are chains of the table, and the guard checks what each script needs. No network, no funded key.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,15 +61,18 @@ describe("Robinhood Chain in the budget", () => {
     }
   }, 60_000); // one process per EVM script and per mainnet name, twice: every new script adds spawns
 
-  it("with SUPERSTABLES_ALLOW_MAINNET=1 the guard and the dispatcher stop refusing by name; an unknown chain is the answer instead", () => {
+  it("with SUPERSTABLES_ALLOW_MAINNET=1 Robinhood Chain is a chain of the table, the guard stops refusing by name, and an unknown chain is still bad input", () => {
     const on = { SUPERSTABLES_ALLOW_MAINNET: "1" };
     const s = script(["--chain", "robinhood"], on);
-    expect(s.code).toBe(2);
     expect(s.stderr).not.toMatch(/is a mainnet/);
+    expect(s.stderr).not.toMatch(/unknown chain/);
+    expect(script(["--chain", "optimism"], on).code).toBe(2);
     expect(script(["--mainnet"], on).code).toBe(2);
     const d = run(process.execPath, [CLI, "status", "--rail", "evm", "--chain", "robinhood"], on);
-    expect(d.code).toBe(2);
-    expect(d.result?.reason).toMatch(/--chain for evm must be one of/);
+    expect(d.result?.reason ?? "").not.toMatch(/--chain for evm must be one of|is a mainnet/);
+    const unknown = run(process.execPath, [CLI, "status", "--rail", "evm", "--chain", "optimism"], on);
+    expect(unknown.code).toBe(2);
+    expect(unknown.result?.reason).toMatch(/--chain for evm must be one of/);
     const flag = run(process.execPath, [CLI, "status", "--rail", "evm", "--mainnet"], on);
     expect(flag.result?.state).not.toBe("refused_precheck");
   }, 60_000);
@@ -90,4 +94,51 @@ describe("Robinhood Chain in the budget", () => {
     expect(r.stderr).not.toMatch(/REFUSED/);
     expect(script(["--help"]).stdout).toContain("robinhood-testnet");
   }, 60_000);
+});
+
+describe("the EVM mainnets with SUPERSTABLES_ALLOW_MAINNET=1", () => {
+  // A dead RPC on this computer: a script that gets past the gate fails to read the chain, and nothing leaves this machine.
+  const on = { SUPERSTABLES_ALLOW_MAINNET: "1", B4_RPC_BASE: "http://127.0.0.1:9", B4_RPC_SKALE_BASE: "http://127.0.0.1:9" };
+  const evm = (name: string, args: string[], env: Record<string, string> = {}) => run(process.execPath, [resolve(BUNDLE, `evm/${name}.mjs`), ...args], { ...on, ...env });
+  const KEYCHAIN = /the agent key kept in the OS keychain, not as plain text/;
+  const GATE = /not ready for mainnet signing|mainnet is off|is a mainnet|does not sign on/;
+  const plainKey = () => {
+    mkdirSync(join(home, "keys", "budget"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, "keys", "budget", "evm-agent.env"), `B4_AGENT_KEY=0x${"11".repeat(32)}\n`, { mode: 0o600 });
+  };
+
+  it("takes the mainnets as --chain keys", () => {
+    const r = evm("read", ["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/--chain [^\n]*\|base\|/);
+  });
+
+  it("setup refuses a mainnet agent key outside the OS keychain, before it writes one", () => {
+    const r = evm("setup", ["--chain", "base"]);
+    expect(r.code).toBe(3);
+    expect(r.result?.reason).toMatch(KEYCHAIN);
+    expect(existsSync(join(home, "keys", "budget", "evm-agent.env"))).toBe(false);
+  });
+
+  it("grant and buy refuse an agent key kept as plain text", () => {
+    plainKey();
+    for (const name of ["setBudget", "buy"]) {
+      const r = evm(name, ["--chain", "base"]);
+      expect(r.code, name).toBe(3);
+      expect(r.result?.reason, name).toMatch(KEYCHAIN);
+    }
+  });
+
+  it("read and revoke get past the gate, whatever the agent key file holds", () => {
+    plainKey();
+    for (const [name, args] of [["read", ["--chain", "base"]], ["revoke", ["--chain", "base", "--plan"]]] as const) {
+      const r = evm(name, [...args]);
+      expect(`${r.result?.reason ?? ""}\n${r.stderr}`, name).not.toMatch(GATE);
+    }
+  });
+
+  it("refuses SKALE Base until the owner names their own node, and every mainnet during a pause", () => {
+    expect(evm("read", ["--chain", "skale-base"]).result?.reason).toMatch(/not ready for mainnet signing: RPC endpoints that can decide/);
+    expect(evm("read", ["--chain", "base"], { SUPERSTABLES_MAINNET_PAUSE: "1" }).result?.reason).toMatch(/mainnet signing is paused/);
+  });
 });

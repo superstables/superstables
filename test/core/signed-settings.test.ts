@@ -8,7 +8,7 @@ import { join } from "node:path";
 import bs58 from "bs58";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAINNET_PREREQUISITES, chainGateSettings, chainPrerequisitesMissing } from "../../src/core/chain-gate.js";
+import { chainGate } from "../../src/core/chain-gate.js";
 import { DEFAULT_POLICY } from "../../src/core/policy.js";
 import { PaymentEngine } from "../../src/core/pay.js";
 import { quote } from "../../src/core/quote.js";
@@ -214,39 +214,10 @@ describe("what the approval page says about a connecting wallet", () => {
 });
 
 describe("the chain gate", () => {
-  it("reads the enabled chains from a valid signature", async () => {
-    expect(chainGateSettings()).toBeUndefined();
+  it("does not read the owner's signed chain list: only the operator's switch opens a mainnet", async () => {
     await signEvm(owner, ["base", "arbitrum"]);
-    // not checked in this process yet: not enabled
-    expect(chainGateSettings()).toBeUndefined();
     await primeSignedSettings();
-    const gate = chainGateSettings();
-    expect(gate).toEqual({ enabledChains: ["arbitrum", "base"] });
-    expect(chainPrerequisitesMissing({ rail: "evm", key: "base", testnet: false })).toContain(MAINNET_PREREQUISITES[1]);
-  });
-
-  it("a forged chain list with a broken signature is not enabled", async () => {
-    await signEvm(owner, []);
-    const file = join(account, ".superstables", "owner", "settings.json");
-    const good = JSON.parse(readFileSync(file, "utf8"));
-    writeFileSync(file, JSON.stringify({ ...good, signature: { ...good.signature, payload: { ...good.signature.payload, enabledChains: ["base"] } } }), { mode: 0o600 });
-    await primeSignedSettings();
-    expect(chainGateSettings()).toBeUndefined();
-    // an unsigned list is nothing either
-    const { signature: _gone, ...unsigned } = good;
-    writeFileSync(file, JSON.stringify({ ...unsigned, enabledChains: ["base"] }), { mode: 0o600 });
-    expect(chainGateSettings()).toBeUndefined();
-  });
-
-  it("a signature that was valid and then covered a changed file is no longer read", async () => {
-    await signEvm(owner, ["base"]);
-    await primeSignedSettings();
-    expect(chainGateSettings()).toBeDefined();
-    const file = join(account, ".superstables", "owner", "settings.json");
-    const good = JSON.parse(readFileSync(file, "utf8"));
-    writeFileSync(file, JSON.stringify({ ...good, sellers: { allowLoopback: true } }), { mode: 0o600 });
-    expect(chainGateSettings()).toBeUndefined();
-    expect(signedSettingsChecked()?.valid).toBe(false);
+    expect(chainGate({ rail: "evm", key: "base", testnet: false })).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
   });
 });
 

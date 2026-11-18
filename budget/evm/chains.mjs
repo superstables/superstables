@@ -1,5 +1,6 @@
 // The EVM chain table. The only place that names a chain: chains.ts (the rail), doctor.mjs and cli.mjs read it.
-// Plain data, no imports, so the CLI and doctor load it without the rail's dependencies.
+// Plain data, plus the mainnets of the mainnet manifest while the operator's switch is on (src/core/mainnet-policy.js,
+// which loads no file system code), so the CLI and doctor load it without the rail's dependencies.
 // Adding a chain is one entry here, after grant, buy, reconcile and revoke were proven on its testnet
 // against a third-party seller.
 //
@@ -31,6 +32,8 @@
 //   Circle's FiatToken (Base Sepolia, Ethereum Sepolia): pull 68,380 (Base 0x60202bd6, Sepolia 68,368 0x4196419a), cancel 68,301
 //   (Base 0xcc2fe29f; Sepolia 68,281 0x62d3f6cb), return 40,247 (Base 0x37b3520b; Sepolia 40,235 0xa975a022), selfRevoke 40,880
 //   (Base 0x4b5ad344), approve 55,425 (Base 0x5b604be9, Sepolia 0xc7ca0d68), revoke 33,501 (Sepolia 0x025ef842).
+import { mainnetChains } from "../../src/core/mainnet-policy.js";
+
 export const FIAT_TOKEN_GAS = { pull: 85000, cancel: 85000, return: 55000, selfRevoke: 55000, approve: 70000, revoke: 45000 };
 /** Doctor wants the agent to afford this many times one purchase and its cleanup at the current fee (fees jump: Amoy's tip went
  *  from 30 to 348 gwei within one run on 30 Sep 2026). */
@@ -118,6 +121,65 @@ export const EVM_CHAINS = {
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.paxos.com, USDG on Robinhood Chain", gasFaucet: "faucet.testnet.chain.robinhood.com" },
   },
 };
+
+/**
+ * What the budget needs on each EVM mainnet besides the manifest's facts (src/core/mainnet-manifest.js): the viem preset,
+ * the x402 v1 names, and gas. The gas limits are the testnet pair's. On 18 Nov 2026 eth_estimateGas for approve read the
+ * same on Base, Polygon and Robinhood Chain as on their testnets and 0.7% more on Arbitrum One (its L1 part); Arc 56,241,
+ * SKALE Base 55,819 and Ethereum 56,361, each within FiatToken's measured 55,425 plus its 20% margin (Ethereum Sepolia's
+ * estimate, 140,018, was not comparable). Pull, cancel and return were not estimated on any mainnet. The fee floors follow the fees read that day: Polygon 280 gwei and SKALE Base 48 gwei, higher
+ * than their testnets; doctor and buy read the current fee on top. There are no faucets: the owner buys or bridges.
+ */
+const MAINNET_BUDGET = {
+  base: {
+    viem: "base", legacy: ["base"],
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "USDC on Base, from an exchange or a bridge", gasFaucet: "ETH on Base, from an exchange or a bridge" },
+  },
+  arc: {
+    viem: "arc", legacy: [],
+    gas: { symbol: "USDC", decimals: 18, isToken: true, limits: FIAT_TOKEN_GAS, minAgent: "0.01", topUp: "0.1", reserveMax: "2" },
+    doctor: { minOwnerToken: "0.2", minOwnerGas: null, minAgentGas: "0.01", fundAgent: "0.1", tokenFaucet: "USDC on Arc, from an exchange or Circle's bridge (CCTP)", gasFaucet: "USDC on Arc, from an exchange or Circle's bridge (CCTP)" },
+  },
+  arbitrum: {
+    viem: "arbitrum", legacy: [],
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 115000, cancel: 115000, return: 85000, selfRevoke: 85000, approve: 100000, revoke: 75000 }, minAgent: "0.000005", topUp: "0.00003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "USDC on Arbitrum One, from an exchange or a bridge", gasFaucet: "ETH on Arbitrum One, from an exchange or a bridge" },
+  },
+  polygon: {
+    viem: "polygon", legacy: ["polygon"],
+    gas: { symbol: "POL", decimals: 18, isToken: false, limits: { pull: 105000, cancel: 105000, return: 70000, selfRevoke: 75000, approve: 80000, revoke: 55000 }, minAgent: "0.05", topUp: "0.1" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.1", minAgentGas: "0.1", fundAgent: "0.2", tokenFaucet: "USDC on Polygon, from an exchange or a bridge", gasFaucet: "POL on Polygon, from an exchange or a bridge" },
+  },
+  "skale-base": {
+    viem: "skaleBase", legacy: [],
+    gas: { symbol: "CREDIT", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.02", topUp: "0.05" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.05", minAgentGas: "0.05", fundAgent: "0.1", tokenFaucet: "USDC from Base over the SKALE bridge (base.skalenodes.com)", gasFaucet: "CREDIT on SKALE Base (base.skalenodes.com)" },
+  },
+  ethereum: {
+    viem: "mainnet", legacy: ["ethereum"],
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.0005", topUp: "0.001" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.0005", minAgentGas: "0.001", fundAgent: "0.002", tokenFaucet: "USDC on Ethereum, from an exchange", gasFaucet: "ETH on Ethereum, from an exchange" },
+  },
+  robinhood: {
+    viem: "robinhood", legacy: [],
+    gas: { symbol: "ETH", decimals: 18, isToken: false, limits: { pull: 90000, cancel: 85000, return: 80000, selfRevoke: 55000, approve: 70000, revoke: 45000 }, minAgent: "0.000005", topUp: "0.00003" },
+    doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "USDG on Robinhood Chain, from Paxos or a bridge", gasFaucet: "ETH on Robinhood Chain, from a bridge" },
+  },
+};
+
+// The mainnets join the table only while the operator's switch is on (none otherwise), with the manifest's facts.
+for (const [key, c] of mainnetChains("evm")) {
+  const extra = /** @type {Record<string, any>} */ (MAINNET_BUDGET)[key];
+  if (!extra) continue;
+  /** @type {Record<string, any>} */ (EVM_CHAINS)[key] = {
+    label: c.label, chainId: c.chainId, viem: extra.viem, testnet: false,
+    rpc: c.rpc[0].url, explorer: c.explorer,
+    token: { address: c.token.address, symbol: c.token.symbol, decimals: c.token.decimals, domain: { ...c.token.domain }, approveReset: c.token.approveReset },
+    legacy: extra.legacy, logRange: c.logRange, blockSeconds: c.blockSeconds,
+    gas: extra.gas, doctor: extra.doctor,
+  };
+}
 
 export const EVM_CHAIN_KEYS = Object.keys(EVM_CHAINS);
 export const EVM_DEFAULT_CHAIN = "base-sepolia";

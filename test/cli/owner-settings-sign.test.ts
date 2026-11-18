@@ -73,7 +73,7 @@ describe("an EVM wallet", () => {
       expect(f.kind).toBe("settings");
       expect(html).toContain("Sign your settings");
       expect(html).toContain("What your wallet will show");
-      expect(html).toContain("none: this build signs on testnets only");
+      expect(html).toContain("none (not used: SUPERSTABLES_ALLOW_MAINNET decides mainnet)");
       const typed = JSON.parse(f.typedData!) as Typed;
       expect(typed.domain).toEqual({ name: "Superstables owner settings", version: "1" });
       expect(typed.domain).not.toHaveProperty("chainId");

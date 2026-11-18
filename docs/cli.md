@@ -33,9 +33,9 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with test
-stablecoins from a wallet the owner controls. Testnet by default. Mainnet
-requires a release that approves the chain and operator permission. Stop and ask
-the owner.
+stablecoins from a wallet the owner controls. Testnet by default. Mainnet is
+open only when the operator turns it on, and then the money is real. Stop and
+ask the owner.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -162,8 +162,8 @@ Discovery:
   SUPERSTABLES_INDEX_URL points it at another index with the same API (one you run), or
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
-  SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.3.0,
-  even with the switch enabled. Agents never set the variable.
+  SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
+  supported mainnet is open and payments there move real money. Agents never set it.
 
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)

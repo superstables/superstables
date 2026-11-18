@@ -140,7 +140,7 @@ export interface PushRail extends RailCommon {
    * The chain's head block, read right before the owner's wallet is asked to send: the owner's transfer can only be in a
    * later block, so a search for it starts after this one and an older transfer with the same memo is never taken for it.
    */
-  headBlock(options: ChainReadOptions): Promise<string>;
+  headBlock(options: ChainReadOptions, network: string): Promise<string>;
   /** Judge one MPP challenge: terms derived from it alone, or the reason it cannot be paid. */
   judgeChallenge(challenge: MppChallenge, now?: number): Judged;
   /** The headers that carry the credential naming the owner's transaction to the seller. */

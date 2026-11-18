@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { readOwnerSettings, rpcFor, sameRpcUrl } from "./owner-settings.js";
 import { setPrerequisiteCheck } from "./chain-gate.js";
+import { mainnetChains } from "./mainnet-policy.js";
 
 /** @typedef {{ url: string, operator: string, domains?: string[] }} TableEndpoint */
 /** @typedef {{ url: string, operator: string, source: "builtin"|"settings"|"env"|"caller", id: string }} Endpoint */
@@ -46,6 +47,8 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
   "robinhood-testnet": [{ url: "https://rpc.testnet.chain.robinhood.com", operator: "robinhood" }],
   "tempo-moderato": [{ url: "https://rpc.moderato.tempo.xyz", operator: "tempo" }],
   "solana-devnet": [{ url: "https://api.devnet.solana.com", operator: "solana-foundation" }],
+  // The mainnets of ./mainnet-manifest.js, while the operator's switch is on (none otherwise).
+  ...Object.fromEntries(mainnetChains().map(([key, c]) => [key, c.rpc.map((e) => ({ url: e.url, operator: e.operator }))])),
 });
 
 /**
@@ -58,6 +61,7 @@ export const RPC_STATE_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} *
   // The official RPC refuses state reads at `finalized`; dRPC answers them, but eth_getLogs over 100 blocks at most
   // (measured 20 Oct 2026).
   "robinhood-testnet": [{ url: "https://robinhood-testnet.drpc.org", operator: "drpc" }],
+  ...Object.fromEntries(mainnetChains().filter(([, c]) => c.stateRpc).map(([key, c]) => [key, /** @type {any[]} */ (c.stateRpc).map((e) => ({ url: e.url, operator: e.operator }))])),
 });
 
 /**
@@ -205,9 +209,6 @@ export function mainnetRpcReady(chainKey) {
   return !("error" in set) && (set.agreement === "owner-node" || distinct(set.verdict) >= Math.max(2, set.quorum));
 }
 
-// The chain gate's RPC prerequisite (src/core/chain-gate.js): the owner chose RPC endpoints for the chain in their settings
-// (which a valid signature covers), and they can decide a mainnet verdict: their own node, or two operators.
-setPrerequisiteCheck("ownerRpc", (chainKey) => {
-  const settings = readOwnerSettings();
-  return Boolean(settings && Object.hasOwn(settings.rpc, chainKey)) && mainnetRpcReady(chainKey);
-});
+// The chain gate's RPC prerequisite (src/core/chain-gate.js): a mainnet verdict can be decided, by the owner's own node or
+// by two operators, from the owner's settings when they name RPCs for the chain, else from the table above.
+setPrerequisiteCheck("verdictRpc", (chainKey) => mainnetRpcReady(chainKey));

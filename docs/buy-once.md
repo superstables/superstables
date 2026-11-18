@@ -23,8 +23,7 @@ There are two ways:
   Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 
-**Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
-No mainnet chain is payable in 1.3.0, even with the switch enabled.
+**Testnet only.** `buy-once` pays on testnets, whatever SUPERSTABLES_ALLOW_MAINNET says.
 Test tokens: USDC, USDG on Robinhood Chain Testnet, or pathUSD on Tempo Moderato. No real money
 moves. Use the [client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For

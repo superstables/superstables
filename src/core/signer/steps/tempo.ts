@@ -18,7 +18,7 @@
 
 import type { Hex } from "viem";
 import { getAddress } from "viem";
-import { TEMPO_MODERATO, isAddress, isSameAddress } from "../../chain.js";
+import { isAddress, isSameAddress, type TempoNetwork } from "../../chain.js";
 import type { MppChallenge } from "../../mpp.js";
 import { TEMPO_SEND_MARGIN_MS, mppMemo, transferCall } from "../../rails/tempo.js";
 import { tempoClientId } from "../../referral-memo.mjs";
@@ -134,7 +134,7 @@ export const tempoStep: WalletStep = {
     }
     const challenge = challengeOf(record);
     const memo = mppMemo(challenge.id, challenge.realm, tempoClientId(record.referralId));
-    const call = transferCall({ from: account, recipient: record.verified.recipient, amountAtomic: record.verified.amountAtomic, memo });
+    const call = transferCall({ from: account, recipient: record.verified.recipient, amountAtomic: record.verified.amountAtomic, memo, network: record.network as TempoNetwork });
     record.prepared = { call, memo } satisfies Prepared;
     return {
       http: 200,
@@ -183,13 +183,14 @@ export const tempoStep: WalletStep = {
 
   deadline: sendDeadline,
 
-  pageFacts() {
+  pageFacts(record: StepRecord) {
+    const network = record.network;
     return {
-      chainIdHex: `0x${TEMPO_MODERATO.chainId.toString(16)}`,
-      chainName: TEMPO_MODERATO.wallet.chainName,
-      rpcUrl: TEMPO_MODERATO.defaultRpc,
-      explorer: TEMPO_MODERATO.explorer,
-      nativeCurrency: TEMPO_MODERATO.wallet.nativeCurrency,
+      chainIdHex: `0x${network.chainId.toString(16)}`,
+      chainName: network.wallet.chainName,
+      rpcUrl: network.defaultRpc,
+      explorer: network.explorer,
+      nativeCurrency: network.wallet.nativeCurrency,
       validity: { kind: "sent-now" as const },
     };
   },

@@ -47,6 +47,11 @@ import { resumeKeychainMove } from "../keychain-move.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
 
+/** "test " on a testnet; "" on a mainnet, where the token is real. */
+const TEST = (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true ? "test " : "";
+/** The chain as the owner signs and reads it: "Base Sepolia (testnet)", or "Base (mainnet)". */
+const CHAIN_WORDS = `${CFG.label} (${TEST ? "testnet" : "mainnet"})`;
+
 const d = (EVM_CHAINS as Record<string, any>)[CFG.key].doctor;
 const same = (x?: string, y?: string) => !!x && !!y && x.toLowerCase() === y.toLowerCase();
 
@@ -327,14 +332,14 @@ if (OWNER_KEY_FILE) {
     console.log(`REFUSED: ${PUBLIC_ENV} records owner ${recorded}, not ${ownerAddr}. Nothing was changed.`);
     process.exit(emit("setup", 3, { state: "refused_precheck", reason: `another owner (${recorded}) is recorded`, owner: recorded, next: `${newOwnerCmd(recordedSite)} replaces it (refused while a budget is live)` }));
   }
-  binding = await signLocalBinding("evm", ownerKey, agentAddr, `${CFG.label} (testnet)`);
+  binding = await signLocalBinding("evm", ownerKey, agentAddr, `${CHAIN_WORDS}`);
 } else if (reuse) {
   ownerAddr = recorded;
   console.log(`${PUBLIC_ENV} already records owner ${ownerAddr} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
   if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agentAddr} is recorded yet: superstables budget setup --rail evm${chainFlag} --hosted --site ${recordedSite} records it from the site's owner proof`);
 } else if (HOSTED && then) {
   // one link: the owner links this agent, then the same page asks their wallet for the gas and the grant, in that order
-  const what = [FUND_AMT ? "send it gas" : "", CAP !== undefined ? `approve a budget of ${usdc(CAP)} test ${SYM}` : ""].filter(Boolean);
+  const what = [FUND_AMT ? "send it gas" : "", CAP !== undefined ? `approve a budget of ${usdc(CAP)} ${TEST}${SYM}` : ""].filter(Boolean);
   const r = await askConnect("setup", {
     title: `Add this agent${what.length === 2 ? `, ${what[0]} and ${what[1]}` : ` and ${what[0]}`}`,
     amount: CAP !== undefined ? usdc(CAP) : FUND_AMT,
@@ -347,7 +352,7 @@ if (OWNER_KEY_FILE) {
     ].filter(Boolean).join(" "),
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
-      { label: "Chain", value: `${CFG.label} (testnet)` },
+      { label: "Chain", value: `${CHAIN_WORDS}` },
       ...(fundTx ? [{ label: "Gas for the agent", value: fundTx.words || `a plain transfer of ${FUND_AMT} ${GAS.symbol}`, mono: !!fundTx.words }] : []),
       ...(CAP !== undefined ? [approveRow(agentAddr, CAP)] : []),
     ],
@@ -382,7 +387,7 @@ if (OWNER_KEY_FILE) {
     summary: `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
     rows: [
       { label: "Your agent", value: agentAddr, mono: true },
-      { label: "Chain", value: `${CFG.label} (testnet)` },
+      { label: "Chain", value: `${CHAIN_WORDS}` },
       { label: "Agent key", value: `on the agent's machine only, ${keyWhere}` },
     ],
     enforced: [],
@@ -421,7 +426,7 @@ if (OWNER_KEY_FILE) {
       "You will review and approve any later budget grant separately.",
       ...(recorded && !NEW_OWNER ? ["Connect this wallet. Any other wallet is refused, and nothing changes."] : []),
     ],
-  }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CFG.label} (testnet).`, NEW_OWNER ? recorded : undefined);
+  }, `Superstables budget: record this wallet as the owner of agent ${agentAddr} on ${CHAIN_WORDS}.`, NEW_OWNER ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent: agentAddr });
   if (outcome.status !== "connected") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   ownerAddr = outcome.address as Address;
@@ -482,14 +487,14 @@ if (BUNDLE) await finishBundle();
 
 const where = HOSTED || (recorded && !NEW_OWNER && publicEnv().APPROVALS === "hosted") ? `on ${HOST || "the site"}, in your wallet` : "in your wallet";
 const steps = [
-  `Fund your wallet ${ownerAddr} with test ${SYM} (${d.tokenFaucet}; at least ${d.minOwnerToken})${GAS.isUsdc ? "" : ` and ${GAS.symbol} for fees (${d.gasFaucet}; at least ${d.minOwnerGas})`}.`,
+  `Fund your wallet ${ownerAddr} with ${TEST}${SYM} (${d.tokenFaucet}; at least ${d.minOwnerToken})${GAS.isUsdc ? "" : ` and ${GAS.symbol} for fees (${d.gasFaucet}; at least ${d.minOwnerGas})`}.`,
   `Give the agent gas: superstables budget fund-agent --rail evm${chainFlag} sends ${d.fundAgent} ${GAS.symbol} from your wallet (you approve it ${where}). Or send ${d.fundAgent} ${GAS.symbol} to ${agentAddr} from any wallet.`,
   `Check everything: superstables budget doctor --rail evm${chainFlag}`,
   `Grant a budget: superstables budget grant --rail evm${chainFlag} --amount 0.01 (you approve it ${where}).`,
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${ownerAddr}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agentAddr}. You can close this page. Next: fund your wallet with test ${SYM}, give the agent gas, then grant a budget (the terminal lists the commands).` });
+finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${ownerAddr}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agentAddr}. You can close this page. Next: fund your wallet with ${TEST}${SYM}, give the agent gas, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
 process.exit(emit("setup", 0, { state: "ok", owner: ownerAddr, ...(replaced ? { replacedOwner: replaced } : {}), agent: agentAddr, publicFile: PUBLIC_ENV, agentKeyFile: AGENT_ENV, steps, next: `superstables budget fund-agent --rail evm${chainFlag} (gas for the agent key), then superstables budget doctor --rail evm${chainFlag} (it says what the owner still needs), then superstables budget grant --rail evm${chainFlag} --amount A` }));
 

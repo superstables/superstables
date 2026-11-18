@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.3.0 makes testnet payments by default and refuses mainnet: this build ships the mainnet manifest off, so no mainnet chain is signable, whatever `SUPERSTABLES_ALLOW_MAINNET` says. This page says what each way to pay protects
+Superstables client 1.3.0 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once; payments there move real money. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -250,8 +250,8 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
 authorization — and the balance of the account. Testnet by default.
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.3.0,
-even with the switch enabled.
+SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
+supported mainnet is open and payments there move real money.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -290,8 +290,8 @@ matters is the one a wallet you keep apart from the agent makes.
 
 ## Testnet by default
 
-SUPERSTABLES_ALLOW_MAINNET is off by default. No mainnet chain is payable in 1.3.0,
-even with the switch enabled.
+SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
+supported mainnet is open and payments there move real money.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -311,13 +311,12 @@ Mainnet is off in this build, and the operator's switch does not turn it on by i
 read in one place. `1` or `true` turns it on. Unset, empty, `0` or `false` leave it off. Any other value, such as `yes`,
 `TRUE` or ` 1`, is an error that names the variable and refuses every mainnet: a guess would turn a typo into a silent no or
 an unintended yes, on a switch that guards money. Only the operator sets it, in their own environment. An agent never does,
-and a skill tells it so. The switch is not enough on its own. A chain table entry that is not marked as a testnet is still
-refused by a separate check unless the mainnet manifest says signing is live and approves the chain, mainnet is not paused, your signed settings enable that chain and it meets the prerequisites in
-[What mainnet still needs](#what-mainnet-still-needs). This build's manifest says signing is off and lists Base as a candidate. Before anything is signed, offered to a wallet or sent, `quote`,
-`pay`, the approval page, the local wallet and every `superstables budget` command ask that check. While the switch is off,
-`quote` and `pay` refuse the offer and a budget command exits 3 before it reads a key file or the chain, and each
-refusal names `SUPERSTABLES_ALLOW_MAINNET`. This release's chain tables list no mainnet and the manifest is off, so turning the switch on makes no
-chain payable.
+and a skill tells it so. With the switch on, the chain tables also list every mainnet in the mainnet manifest, and a
+mainnet passes when it meets the checks in [Mainnet](#mainnet): there is no per-chain approval and no cap beyond your own
+spend policy and budgets. Before anything is signed, offered to a wallet or sent, `quote`, `pay`, the approval page, the
+local wallet and every `superstables budget` command ask that check. While the switch is off, the chain tables list no
+mainnet, `quote` and `pay` refuse the offer, a budget command exits 3 before it reads a key file or the chain, and each
+refusal names `SUPERSTABLES_ALLOW_MAINNET`.
 
 On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
 split a price between recipients, set a memo of their own, accept only payments they submit
@@ -906,37 +905,43 @@ says "not supported", there is no command for it yet; do not move key files by h
   and start it again: it creates a new one. The client reads the agent token from its file on
   each request; `SUPERSTABLES_WALLET_AGENT_TOKEN`, if you set it, needs the new value.
 
-## What mainnet still needs
+## Mainnet
 
 This client signs on testnets by default. This section lists what has to be true before a chain that is not a testnet is
-signed on, so that what the code enforces today stays separate from what it does not.
+signed on, so that what the code enforces stays separate from what it does not.
 
 **What the code requires.** Every signature, wallet request and broadcast, in `pay` and in every `superstables budget` rail,
 passes one chain gate first. A chain whose table entry is not marked as a testnet is refused unless all of these hold:
 
 - **The operator allows mainnet.** `SUPERSTABLES_ALLOW_MAINNET` is `1` or `true` in the environment (see
-  [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it.
-- **The mainnet manifest approves the chain.** The shipped manifest (`src/core/mainnet-manifest.js`) says signing is `live` and marks the chain `approved`, with the chain id and token facts the chain table states. This build ships it with signing `off` and Base as a `candidate`, so no chain passes this check, whatever else is set. An approved chain also has a cap for one payment or grant and a cap for any 24 hours; a request above either is refused.
-- **Mainnet is not paused.** `SUPERSTABLES_MAINNET_PAUSE` is unset or blank, and the file `mainnet-paused` is not in the client's home folder. A pause stops every new signature, reservation and send at once; it cannot undo what was already signed.
-- **Your signed settings enable the chain.** `superstables owner settings sign` has your wallet sign the list of chains
-  enabled for signing, and the gate reads that list only from a valid signature. The list that command offers is empty in this
-  build, so this command enables none.
-- **The chain has everything mainnet needs.** The gate checks four things for the chain and names each one that fails:
-  - RPC endpoints your signed settings choose for it that can decide a verdict on their own: your own node, or as many operators as your quorum needs (at least two);
+  [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it. It opens every mainnet in the
+  manifest at once; payments there move real money.
+- **The mainnet manifest states the chain.** The manifest (`src/core/mainnet-manifest.js`) lists each mainnet with its chain
+  id, its token's address, decimals and signing domain, its public RPCs and its finality, each fact with its source. The chain
+  table entry must state the same facts, and a manifest with one malformed fact closes every mainnet. It lists Base, Arc,
+  Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain, Tempo and Solana.
+- **Mainnet is not paused.** `SUPERSTABLES_MAINNET_PAUSE` is unset or blank, and the file `mainnet-paused` is not in the client's home folder. A pause stops every new signature and send at once; it cannot undo what was already signed.
+- **The chain has what signing on it correctly needs.** The gate checks these and names each one that fails:
+  - RPC endpoints that can decide a payment was never made: two operators from the built-in table, or the RPCs your
+    settings name for the chain (your own node, or as many operators as your quorum needs, at least two). SKALE Base has one
+    public operator, and on Robinhood Chain only one public operator answers state reads at the finalized block, so on those
+    two chains you name your own node (`superstables owner settings rpc`) before anything is signed;
   - complete token facts for the token the signing code uses;
   - a measured time to finality for the chain;
-  - for the chain's budget rail, an agent key file that names the OS keychain and holds no key.
+  - where an agent key signs (the budget rails), an agent key file that names the OS keychain and holds no key. `setup`
+    stores a mainnet agent key there with `--key-store os-keychain`. `pay` holds no agent key, so this does not apply to it.
 
-  A check that cannot run counts as missing. No chain table names a mainnet, so these
-  checks decide nothing yet. `pay` does not load the keychain check, so for `pay` the fourth always reads as missing;
-  `tempo` agent keys stay in files, so that rail always misses the fourth; only two chains have a measured finality time; and
-  the local wallet's key is not part of the fourth check yet.
+  A check that cannot run counts as missing. Budgets on mainnet work on the `evm` rail; the `tempo` and `solana` budget rails
+  and `buy-once` pay on their testnets only.
+
+While the switch is off, every budget command refuses a mainnet chain, `revoke` included. To revoke a mainnet budget then,
+turn the switch on for that command, or set the allowance to 0 from your wallet on the chain itself.
 
 **What is still outside the code.**
 
-- **Evidence from real runs.** What the client assumes about a chain, such as when its blocks are final, which network fees
-  count against an access key's limit and what the token's signing domain is, was checked on the testnets it supports. It has
-  not been checked on any mainnet chain, and each one needs the same checks before it is added.
+- **Evidence from real runs.** The mainnet facts were read on chain with read-only calls and measured from one computer on one
+  day; no payment has been made on a mainnet by this client's tests. Finality times and RPC limits change, so the manifest
+  says when each was measured.
 - **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
   rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
 - **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.

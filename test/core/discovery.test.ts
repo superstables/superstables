@@ -227,7 +227,7 @@ describe("findServices", () => {
 
     expect(filings).toMatchObject({
       actionable: false,
-      notActionableReason: "mainnet only (x402 on base); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator and a release that approves the chain",
+      notActionableReason: "mainnet only (x402 on base); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator",
       testnet: false,
     });
     expect(filings?.payment.networkLabel).toBe("Base (mainnet)");
@@ -238,9 +238,9 @@ describe("findServices", () => {
     stubIndex({ services: [{ ...INDEX_FIXTURE.services[0], id: "mainnet-row", rails: ["x402", injected], chains: ["base", injected] }] });
     const { services } = await findServices({ query: "example" });
     const row = services.find((s) => s.id === "mainnet-row");
-    expect(row?.notActionableReason).toBe("mainnet only (x402, 1 other protocol on base, 1 other chain); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator and a release that approves the chain");
+    expect(row?.notActionableReason).toBe("mainnet only (x402, 1 other protocol on base, 1 other chain); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator");
     const printed = formatListingCommands(row!).join("\n");
-    expect(printed).toBe("not payable by this client: mainnet only (x402, 1 other protocol on base, 1 other chain); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator and a release that approves the chain");
+    expect(printed).toBe("not payable by this client: mainnet only (x402, 1 other protocol on base, 1 other chain); mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator");
     expect(printed).not.toContain("OWNER APPROVED");
   });
 

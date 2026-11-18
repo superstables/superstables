@@ -11,6 +11,7 @@ import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { APPROVAL_PAGE_SCRIPT } from "../../src/core/signer/approval-page.js";
+import { TEMPO_MODERATO } from "../../src/core/chain.js";
 import { TEMPO_STEP_SCRIPT, tempoStep } from "../../src/core/signer/steps/tempo.js";
 
 const OWNER = "0x1111111111111111111111111111111111111111";
@@ -117,7 +118,7 @@ const tempoFacts = {
   networkLabel: "Tempo Moderato (testnet)",
   assetAddress: "0x20C0000000000000000000000000000000000000",
   expiresAt: Date.now() + 60_000,
-  ...tempoStep.pageFacts({} as never),
+  ...tempoStep.pageFacts({ network: TEMPO_MODERATO } as never),
 };
 const call = { from: OWNER, to: "0x20C0000000000000000000000000000000000000", data: "0x95777d59", value: "0x0" };
 

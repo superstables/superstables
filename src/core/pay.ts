@@ -499,7 +499,7 @@ export class PaymentEngine {
             // never takes an older transfer for it. Without it the wallet is not asked: the payment could not be found.
             let head: string;
             try {
-              head = await rail.headBlock(this.chainRead);
+              head = await rail.headBlock(this.chainRead, offer.terms.network);
             } catch (err) {
               throw new SignRefused("chain", `the ${shortLabel({ label: offer.terms.networkLabel })} RPC could not be read (${message(err)}), so your wallet was not asked to send this payment; nothing was sent`);
             }

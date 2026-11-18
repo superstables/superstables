@@ -422,6 +422,7 @@ export class ApprovalServer {
       recipient: record.verified.recipient,
       network: record.verified.network,
       networkLabel: record.verified.networkLabel,
+      testnet: record.network.testnet === true,
       assetAddress: record.verified.assetAddress,
       expiresAt: record.expiresAt,
       ...record.step.pageFacts(record),

@@ -18,7 +18,7 @@ import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
 import { markSend } from '../../proof.mjs'
 import { agentBinding, hostedFlags, legacyWarning } from '../../owner-binding.mjs'
 import { noteBinding } from '../../page-facts.mjs'
-import { chainGate, chainGateSettings } from '../../../src/core/chain-gate.js'
+import { chainGate } from '../../../src/core/chain-gate.js'
 
 export const RPC_URL: string = RPC_URL_
 export const EXPLORER_BASE = 'https://explore.testnet.tempo.xyz'
@@ -215,7 +215,7 @@ export function accessKeyAccountForOwner(ownerAddress: Address, privateKey: Hex)
 
 /** The chain gate for this rail's one chain: '' when this build may sign, ask the owner's wallet or send on it, else why not. */
 export function tempoGate(): string {
-  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET, token: { symbol: TOKEN_LABEL, address: TOKEN_ADDRESS, decimals: TOKEN_DECIMALS } }, chainGateSettings())
+  return chainGate({ rail: 'tempo', key: 'tempo-moderato', testnet: TESTNET, token: { symbol: TOKEN_LABEL, address: TOKEN_ADDRESS, decimals: TOKEN_DECIMALS }, agentKey: true })
 }
 // No Tempo budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a key
 // file or asks an RPC anything.

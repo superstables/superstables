@@ -97,7 +97,7 @@ const RAILS = {
 // A chain name that is a mainnet's, or a chain id, in a --chain value. While the mainnet switch is off it is refused as a mainnet.
 const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find covers every network: the testnet line names the tokens without naming one. */
-const TESTNET_TOKENS_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nNo mainnet chain is payable in 1.3.0, even with the switch enabled.\nAgents never set the variable. Test tokens, no real money.";
+const TESTNET_TOKENS_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Test tokens, no real money.";
 /** Every chain key the budget commands take, and its rail. */
 const RAIL_OF_CHAIN = Object.fromEntries(Object.entries(RAILS).flatMap(([rail, r]) => r.chains.map((c) => [c, rail])));
 /** The chain keys in words, each with its rail: the list find names when it refuses a chain. */
@@ -615,8 +615,8 @@ ${SIGN_ONLY_HELP}`,
 };
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
-Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
-No mainnet chain is payable in 1.3.0, even with the switch enabled. Agents never set the variable.
+Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on,
+the evm rail's mainnets are open and the money there is real. Agents never set the variable.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
@@ -734,7 +734,7 @@ Where state lives: SUPERSTABLES_HOME, default ~/.superstables.
                                              and LINK_CODE)
   budget/ops/<rail>-<chain>/<op>.json        one journal per purchase, and <op>.response, the seller's answer when saved
   budget/approvals/                          owner approvals started in the background, and buy-once purchases
---mainnet, or a mainnet chain, requires a release that approves the chain and operator permission. Stop and ask the owner.`;
+--mainnet, or a mainnet chain, is refused unless the operator has turned mainnet on (SUPERSTABLES_ALLOW_MAINNET); then the money is real. Stop and ask the owner.`;
 
 // ---- output -----------------------------------------------------------------------------------------
 // control characters (C0, DEL, C1) and the Unicode line and paragraph separators become spaces: one line, always
@@ -1546,12 +1546,14 @@ function normalize(cmd, f, rail, code) {
 function budgetSpent(f, rail) {
   const why = `${rail.reason ?? ""}`;
   const net = f.rail === "tempo" ? "Tempo testnet (Moderato)" : f.rail === "solana" ? "Solana devnet" : EVM_CHAINS[f.chain]?.label ?? f.chain;
-  const unit = f.rail === "tempo" ? "pathUSD" : "test USDC";
+  const mainnet = f.rail === "evm" && EVM_CHAINS[f.chain]?.testnet === false;
+  const unit = f.rail === "tempo" ? "pathUSD" : mainnet ? EVM_CHAINS[f.chain].token.symbol : "test USDC";
+  const line = mainnet ? `This is ${net}, a mainnet: the money is real.` : TESTNET_LINE;
   const m = /price ([0-9.]+)(?: [A-Za-z]+)?(?: plus up to ([0-9.]+)(?: [A-Za-z]+)? for the network fee)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
   if (m) return { budget_spent: true, message_for_owner: m[2]
-    ? `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}) and its network fee (up to ${m[2]} ${unit}), which counts against the budget. Nothing was paid. ${TESTNET_LINE}`
-    : `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${TESTNET_LINE}` };
-  if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${TESTNET_LINE}` };
+    ? `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}) and its network fee (up to ${m[2]} ${unit}), which counts against the budget. Nothing was paid. ${line}`
+    : `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${line}` };
+  if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${line}` };
   return {};
 }
 

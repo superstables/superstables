@@ -24,7 +24,7 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { ensurePrivateDir, privateDirProblem, syncDirectory } from "./private-dir.mjs";
 import { isSolanaAddress, verifyEd25519 } from "./ed25519-verify.mjs";
-import { setChainGateSource } from "./chain-gate.js";
+import { mainnetChains, shippedManifest } from "./mainnet-policy.js";
 
 export const OWNER_SETTINGS_VERSION = 1;
 /** Production: the only approval site with no setting. superstables.com (the apex) is the same site. */
@@ -39,7 +39,14 @@ export const OWNER_SETTINGS_UNREADABLE = "OWNER_SETTINGS_UNREADABLE";
 export const RPC_CHAIN_KEYS = Object.freeze([
   "base-sepolia", "arc-testnet", "arbitrum-sepolia", "polygon-amoy", "skale-base-sepolia", "ethereum-sepolia", "robinhood-testnet",
   "tempo-moderato", "solana-devnet",
+  // The mainnets, while the operator's switch is on: an owner's own node is how SKALE Base, with one public operator, decides a verdict.
+  ...mainnetChains().map(([key]) => key),
 ]);
+/**
+ * The chain keys a settings file may name an RPC for: RPC_CHAIN_KEYS and every mainnet of the manifest, whatever the
+ * operator's switch says now. A file the owner wrote while mainnet was on stays readable after it is turned off.
+ */
+const RPC_FILE_KEYS = Object.freeze([...new Set([...RPC_CHAIN_KEYS, ...Object.keys(shippedManifest().chains)])]);
 export const MAX_RPC_URLS = 5;
 /** The fields a signature covers, in this order; `signature`, `present` and `path` are not among them. */
 export const SETTINGS_FIELDS = Object.freeze(["version", "site", "rpc", "rpcEnv", "sellers"]);
@@ -190,7 +197,7 @@ export function parseOwnerSettings(text) {
   if (j.rpc !== undefined) {
     if (!isObject(j.rpc)) throw unreadable("rpc must be an object of chains");
     for (const [chain, v] of Object.entries(j.rpc)) {
-      if (!RPC_CHAIN_KEYS.includes(chain)) throw unreadable(`rpc has a chain that is not one of ${RPC_CHAIN_KEYS.join(", ")} ("${chain.slice(0, 40)}")`);
+      if (!RPC_FILE_KEYS.includes(chain)) throw unreadable(`rpc has a chain that is not one of ${RPC_FILE_KEYS.join(", ")} ("${chain.slice(0, 40)}")`);
       if (!isObject(v)) throw unreadable(`rpc.${chain} must be an object`);
       onlyKeys(v, ["urls", "ownNode", "quorum"], `rpc.${chain}`);
       if (!Array.isArray(v.urls) || v.urls.length < 1 || v.urls.length > MAX_RPC_URLS) throw unreadable(`rpc.${chain}.urls must list 1 to ${MAX_RPC_URLS} URLs`);
@@ -711,9 +718,3 @@ export async function signedPolicyCheck(wallet, options = {}) {
   if (s.policyMatches) return {};
   return { refuse: `The spend policy changed after the owner signed their settings, so nothing was signed. The owner runs ${SIGN_COMMAND} to sign the policy in use.` };
 }
-
-setChainGateSource(() => {
-  const s = signedSettingsChecked();
-  if (!s?.valid) return undefined;
-  return { enabledChains: [...s.payload.enabledChains] };
-});

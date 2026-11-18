@@ -181,7 +181,7 @@ const tempoFacts = (over: Partial<ApprovalPageFacts> = {}): ApprovalPageFacts =>
     networkLabel: "Tempo Moderato (testnet)",
     assetAddress: TEMPO_MODERATO.token.address,
     expiresAt: Date.now() + 60_000,
-    ...tempoStep.pageFacts({} as never),
+    ...tempoStep.pageFacts({ network: TEMPO_MODERATO } as never),
     ...over,
   }) as ApprovalPageFacts;
 

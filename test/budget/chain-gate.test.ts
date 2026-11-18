@@ -18,7 +18,7 @@ import { tokenFactsProblem } from "../../src/core/token-facts.js";
 const gate = vi.hoisted(() => ({ refuse: false }));
 vi.mock("../../src/core/chain-gate.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../src/core/chain-gate.js")>();
-  return { ...real, chainGate: vi.fn((chain: Parameters<typeof real.chainGate>[0], settings: Parameters<typeof real.chainGate>[1]) => (gate.refuse ? "the test's gate refuses" : real.chainGate(chain, settings))) };
+  return { ...real, chainGate: vi.fn((chain: Parameters<typeof real.chainGate>[0]) => (gate.refuse ? "the test's gate refuses" : real.chainGate(chain))) };
 });
 import { chainGate } from "../../src/core/chain-gate.js";
 
@@ -103,7 +103,7 @@ describe("each rail's chokepoint asks the gate first", () => {
       gate.refuse = false;
       await evm.assertRpcChain();
       expect(rpc.methods).toContain("eth_chainId");
-      expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "evm", key: "base-sepolia", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }), undefined);
+      expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "evm", key: "base-sepolia", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }));
       expect(tokenFactsProblem(lastGateToken(), "evm")).toBe("");
     } finally {
       exit.mockRestore();
@@ -119,7 +119,7 @@ describe("each rail's chokepoint asks the gate first", () => {
     expect(conn.getGenesisHash).not.toHaveBeenCalled();
     gate.refuse = false;
     expect(await sol.clusterProblem(conn)).toBe("");
-    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "solana", key: "solana-devnet", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }), undefined);
+    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "solana", key: "solana-devnet", testnet: true, token: expect.objectContaining({ symbol: "USDC", decimals: 6 }) }));
     expect(tokenFactsProblem(lastGateToken(), "solana")).toBe("");
   });
 
@@ -129,7 +129,7 @@ describe("each rail's chokepoint asks the gate first", () => {
     expect(() => tempo.makeClient()).toThrow("the test's gate refuses; nothing was signed or sent");
     gate.refuse = false;
     expect(tempo.makeClient()).toBeTruthy();
-    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "tempo", key: "tempo-moderato", testnet: true, token: expect.objectContaining({ symbol: "pathUSD", decimals: 6 }) }), undefined);
+    expect(chainGate).toHaveBeenCalledWith(expect.objectContaining({ rail: "tempo", key: "tempo-moderato", testnet: true, token: expect.objectContaining({ symbol: "pathUSD", decimals: 6 }) }));
     expect(tokenFactsProblem(lastGateToken(), "tempo")).toBe("");
   });
 });
@@ -168,7 +168,7 @@ describe("a copy of the client whose chain tables name chains that are not testn
     for (const file of ["package.json", "tsconfig.json"]) cpSync(join(ROOT, file), join(tree, file));
     symlinkSync(join(ROOT, "node_modules"), join(tree, "node_modules"), "dir");
     // A copy of Base Sepolia's entry under Base's chain id (viem's preset "base"), not marked as a testnet.
-    edit("budget/evm/chains.mjs", "};\n\nexport const EVM_CHAIN_KEYS", `  "gated-base": {
+    edit("budget/evm/chains.mjs", "};\n\n/**\n * What the budget needs on each EVM mainnet", `  "gated-base": {
     label: "Gated Base", chainId: 8453, viem: "base", testnet: false,
     rpc: "https://mainnet.base.org", explorer: "https://basescan.org",
     token: { address: "${BASE_SEPOLIA_USDC}", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
@@ -178,7 +178,8 @@ describe("a copy of the client whose chain tables name chains that are not testn
   },
 };
 
-export const EVM_CHAIN_KEYS`);
+/**
+ * What the budget needs on each EVM mainnet`);
     // the owner settings name the chains an RPC can be set for: the copy names this one too
     edit("src/core/owner-settings.js", '"robinhood-testnet",', '"robinhood-testnet", "gated-base",');
     edit("budget/solana/lib.mjs", "export const TESTNET = true;", "export const TESTNET = false;");

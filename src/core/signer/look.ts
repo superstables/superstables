@@ -149,6 +149,7 @@ const LAYOUT = `
   .logo.local { font-family: var(--body); font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--ink); }
   .logo.local svg { width: 20px; height: 20px; fill: none; stroke: var(--ink-2); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .pill { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); border: 1px solid var(--line-2); border-radius: 3px; padding: 4px 8px; white-space: nowrap; }
+  .pill.real { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); }
   main.wrap { flex: 1 0 auto; padding-top: 32px; padding-bottom: 48px; }
   .foot { border-top: 1px solid var(--line); flex: none; }
   .foot .wrap { padding-top: 20px; padding-bottom: 28px; font-size: 13px; color: var(--ink-2); }
@@ -233,6 +234,8 @@ export interface FrameParts {
   lede?: string;
   /** Shows a Testnet pill in the bar. */
   testnet?: boolean;
+  /** Shows a Mainnet pill in the bar: the money is real. */
+  mainnet?: boolean;
   /** A wider page (the wallet's history table). */
   wide?: boolean;
   /** The page's own CSS, after the shared layout. */
@@ -270,7 +273,7 @@ export function framePage(parts: FrameParts): string {
 <body${parts.wide ? ' class="wide"' : ""}>
 <header class="top"><div class="wrap">
   ${brand}
-  ${parts.testnet ? '<span class="pill">Testnet</span>' : ""}
+  ${parts.testnet ? '<span class="pill">Testnet</span>' : ""}${parts.mainnet ? '<span class="pill real">Mainnet: real money</span>' : ""}
 </div></header>
 <main class="wrap">
   <p class="eyebrow">${esc(parts.eyebrow)}</p>

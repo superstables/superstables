@@ -6,7 +6,7 @@ description: Finds services that charge per request, requests a single purchase 
 # Superstables
 
 Use the connected Superstables tools to find a service and request a purchase.
-Testnet-first: test tokens, no real money. Mainnet is refused. No mainnet chain is payable in 1.3.0. Stop and ask the owner.
+Testnet-first: test tokens, no real money. Mainnet is refused unless the operator has turned it on; then a payment on a mainnet moves real money. Agents never turn it on. Stop and ask the owner.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 

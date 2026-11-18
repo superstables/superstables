@@ -2,7 +2,7 @@
 // step for the approval page (../signer/steps/), and one line in each list. A chain no registered rail names is
 // refused before the owner is asked.
 
-import { chainGate, chainGateSettings } from "../chain-gate.js";
+import { chainGate } from "../chain-gate.js";
 import { describeNetwork, mainnetName, mainnetUnsupported, networkFor, shortLabel, type NetworkInfo } from "../chain.js";
 import type { MppChallenge } from "../mpp.js";
 import type { SignRequest } from "../signer/types.js";
@@ -59,7 +59,7 @@ export function networkRefusal(named: string): string {
  * far as the owner.
  */
 function gateRefusal(network: NetworkInfo): Judged | undefined {
-  const reason = chainGate({ rail: network.rail, key: network.key, chainId: network.chainId, testnet: network.testnet, token: network.token }, chainGateSettings());
+  const reason = chainGate({ rail: network.rail, key: network.key, chainId: network.chainId, testnet: network.testnet, token: network.token });
   return reason ? { supported: false, reason } : undefined;
 }
 

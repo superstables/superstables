@@ -8,6 +8,7 @@ import * as Attribution from "../../node_modules/mppx/dist/tempo/Attribution.js"
 import { Credential } from "mppx";
 import { parseMppChallenges, type MppChallenge } from "../../src/core/mpp.js";
 import { judgeMppChallenge, judgeOffers } from "../../src/core/rails/index.js";
+import { TEMPO_MODERATO } from "../../src/core/chain.js";
 import { judgeTempoCharge, mppMemo, tempoRail, transferCall } from "../../src/core/rails/tempo.js";
 import type { PaymentFacts } from "../../src/core/rails/types.js";
 import { PATH_USD, startFakeTempoPay, type FakeTempoPay } from "../helpers/fake-tempo-pay.js";
@@ -120,7 +121,7 @@ describe("the wallet's call and the seller's credential", () => {
 
   it("asks the wallet for one pathUSD transferWithMemo to the recipient, for the amount, with the memo, and no value", () => {
     const memo = mppMemo("challenge-1", "seller.example");
-    const call = transferCall({ from: PAYER, recipient: RECIPIENT, amountAtomic: "10000", memo });
+    const call = transferCall({ from: PAYER, recipient: RECIPIENT, amountAtomic: "10000", memo, network: TEMPO_MODERATO });
     expect(call.to).toBe(PATH_USD);
     expect(call.value).toBe("0x0");
     expect(call.data.slice(0, 10)).toBe("0x95777d59");
@@ -215,7 +216,7 @@ describe("reading the chain for the owner's transfer", () => {
     chain.down = false;
     chain.headless = true;
     expect(await tempoRail.findPayment!(facts(), options())).toMatchObject({ found: false, unreadable: true, reason: expect.stringMatching(/could not be read/) });
-    await expect(tempoRail.headBlock(options())).rejects.toThrow();
+    await expect(tempoRail.headBlock(options(), TEMPO_MODERATO.caip2)).rejects.toThrow();
   });
 
   it("never takes a transfer mined before the wallet was asked, however alike, nor one another attempt was paid with", async () => {
@@ -223,7 +224,7 @@ describe("reading the chain for the owner's transfer", () => {
     // An earlier transfer with this memo (a seller that handed out the same challenge twice): the same facts exactly.
     const older = chain.mine({ from: PAYER, to: RECIPIENT, amount: 10000n, memo, token: PATH_USD });
     // The wallet is asked after it: the head the client read then is the boundary.
-    const boundary = String(await tempoRail.headBlock(options()));
+    const boundary = String(await tempoRail.headBlock(options(), TEMPO_MODERATO.caip2));
     expect(boundary).toBe(String(chain.head.number));
     expect(await tempoRail.findPayment!(facts({ searchFromBlock: boundary }), options())).toEqual({ found: false, reason: "the chain shows no transfer with this payment's memo" });
     expect(await tempoRail.findPayment!(facts({ searchFromBlock: boundary, transaction: older }), options())).toMatchObject({ found: false });

@@ -69,7 +69,7 @@ function termsFor(rail: SignRail, payload: ReturnType<typeof settingsPayload>, p
     summary: "Your wallet signs the approval site, your RPC settings, your spend policy, your retired agent keys and the chains enabled for signing. Signed settings apply only to payments and approvals made with this wallet.",
     rows: [
       { label: "Site", value: payload.site, mono: true },
-      { label: "Enabled chains", value: payload.enabledChains.length ? payload.enabledChains.join(", ") : "none: this build signs on testnets only" },
+      { label: "Enabled chains", value: payload.enabledChains.length ? payload.enabledChains.join(", ") : "none (not used: SUPERSTABLES_ALLOW_MAINNET decides mainnet)" },
       { label: "Policy", value: `${policyPath}\n${shortHash(payload.policyHash)}`, mono: true },
       { label: "Retired agents", value: `${retiredCount(retiredPath)}\n${shortHash(payload.retiredHash)}`, mono: true },
       { label: "Settings", value: `${shortHash(payload.settingsHash)}\nCovers your approval site, RPC endpoints and development switches.`, mono: true },

@@ -8,8 +8,8 @@
 // facilitator signs as fee payer and sends it.
 
 import type { PaymentRequirements } from "@x402/core/types";
-import { SOLANA_DEVNET, shortLabel } from "../../chain.js";
-import { NotDevnetError, devnetBlockHeight, devnetBlockhash } from "../../rails/solana.js";
+import { SOLANA_DEVNET, shortLabel, type SolanaNetwork } from "../../chain.js";
+import { WrongClusterError, solanaBlockHeight, solanaBlockhash } from "../../rails/solana.js";
 import { buildPayment, checkSigned, type BuiltPayment } from "../../rails/solana-transaction.js";
 import { isSolanaAddress } from "../owner-approval-server.js";
 import type { StepAnswer, StepRecord, WalletStep } from "./types.js";
@@ -341,7 +341,9 @@ export const solanaStep: WalletStep = {
     lede: "Check the amount and the recipient, then sign with your Solana wallet, or reject. Your wallet keeps its key.",
     fineprint: (facts) =>
       `Signing approves this one transfer of ${facts.amountDecimal} ${facts.asset} and nothing else; the seller pays the network fee and sends it. ` +
-      "Before you sign, switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet.",
+      (facts.testnet !== false
+        ? "Before you sign, switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet."
+        : `Before you sign, check that your wallet is on ${facts.networkLabel ?? "Solana"}, not a test network: the money is real.`),
     walletShows: (f) => [
       "A transaction to sign, not to send: the seller's fee payer signs it after you and sends it.",
       `A transfer of ${f.amountDecimal} ${f.asset} to ${f.recipient}. Wallets that simulate show it as −${f.amountDecimal} ${f.asset}.`,
@@ -352,7 +354,7 @@ export const solanaStep: WalletStep = {
   script: SOLANA_STEP_SCRIPT,
 };
 
-/** POST /prepare: a fresh transaction for the connected account, on a blockhash from an RPC that is Solana devnet. */
+/** POST /prepare: a fresh transaction for the connected account, on a blockhash from an RPC on the payment's cluster. */
 async function build(record: StepRecord, owner: string): Promise<StepAnswer> {
   const feePayer = feePayerOf(record);
   if (!feePayer || feePayer === owner) return { http: 409, body: { error: "the seller's fee payer cannot pay for this account, so nothing was built" } };
@@ -360,16 +362,16 @@ async function build(record: StepRecord, owner: string): Promise<StepAnswer> {
   let built: BuiltPayment;
   for (let attempt = 0; ; attempt += 1) {
     try {
-      latest = await devnetBlockhash();
+      latest = await solanaBlockhash(record.network as SolanaNetwork);
     } catch (err) {
-      if (err instanceof NotDevnetError) return { http: 409, body: { error: `${err.message}; nothing was signed` } };
-      return { http: 503, body: { error: "Solana devnet did not answer, so the payment could not be built; nothing was signed. Try again" } };
+      if (err instanceof WrongClusterError) return { http: 409, body: { error: `${err.message}; nothing was signed` } };
+      return { http: 503, body: { error: `${record.network.label} did not answer, so the payment could not be built; nothing was signed. Try again` } };
     }
     built = buildPayment({
       owner,
       recipient: record.verified.recipient,
-      mint: SOLANA_DEVNET.token.address,
-      decimals: SOLANA_DEVNET.token.decimals,
+      mint: record.network.token.address,
+      decimals: record.network.token.decimals,
       amountAtomic: record.verified.amountAtomic,
       feePayer,
       blockhash: latest.blockhash,
@@ -391,7 +393,7 @@ async function build(record: StepRecord, owner: string): Promise<StepAnswer> {
   if (issued.size > ISSUED_KEPT) issued.delete(issued.keys().next().value!);
   const prepared: SolanaPrepared = { ...built, owner, lastValidBlockHeight: latest.lastValidBlockHeight, ...(latest.slot !== undefined ? { slot: latest.slot } : {}), builtAt: Date.now() };
   record.prepared = prepared;
-  return { http: 200, body: { transaction: built.transaction, chain: SOLANA_DEVNET.wallet.walletChain } };
+  return { http: 200, body: { transaction: built.transaction, chain: record.network.wallet.walletChain ?? SOLANA_DEVNET.wallet.walletChain } };
 }
 
 /** POST /signed: what the wallet signed, checked against what was built, and handed on as the signed result. */
@@ -409,7 +411,7 @@ async function signed(record: StepRecord, owner: string, value: unknown): Promis
   // A transaction that can no longer land in time is not passed on: the owner signs a fresh one instead.
   let late: boolean;
   try {
-    late = (await devnetBlockHeight()) > prepared.lastValidBlockHeight - BLOCKS_TO_SPARE;
+    late = (await solanaBlockHeight(record.network as SolanaNetwork)) > prepared.lastValidBlockHeight - BLOCKS_TO_SPARE;
   } catch {
     late = Date.now() - prepared.builtAt > SIGNED_WITHIN_MS;
   }

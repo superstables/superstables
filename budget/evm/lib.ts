@@ -22,7 +22,8 @@ import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { noteBinding } from "../page-facts.mjs";
-import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { chainGate } from "../../src/core/chain-gate.js";
+import "../../src/core/mainnet-spend.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
@@ -395,7 +396,7 @@ let rpcChecked = false;
 /** An RPC URL as an agent may see it: the host only. The path, query and credentials of a URL can hold an access key. */
 export const rpcHost = (url: string): string => { try { return new URL(url).host; } catch { return "(unreadable URL)"; } };
 export async function assertRpcChain() {
-  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token }, chainGateSettings());
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token });
   if (gate) {
     console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
     process.exit(3);
