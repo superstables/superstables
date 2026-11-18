@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.0] - Mainnet behind the operator switch, purchase reports
+
 Testnet by default. `SUPERSTABLES_ALLOW_MAINNET=1`, set by the operator, opens mainnet, and payments there move real money.
 
 ### Added
@@ -379,7 +381,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/superstables/superstables/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/superstables/superstables/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/superstables/superstables/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/superstables/superstables/compare/v1.1.2...v1.1.3
