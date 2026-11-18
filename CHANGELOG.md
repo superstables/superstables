@@ -7,6 +7,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Mainnet quotes:** With the switch on, `quote` names a mainnet's network with "(mainnet)", as it names a testnet's with "(testnet)". For example: `Base (mainnet)`.
+- **Hidden listings in `find`:** The note under `find` says why listings are not shown. When the index does not record the request parameters that `pay` needs (`pay: with params`), the note says so. It no longer blames the switch while the switch is on. A listing on a mainnet is shown or hidden by the same rule as a listing on a testnet. `find --all` lists every listing.
+
 ## [1.4.0] - Mainnet behind the operator switch, purchase reports
 
 Testnet by default. Only the operator opens mainnet, with `SUPERSTABLES_ALLOW_MAINNET=1`; agents never set it. Payments there move real money, and this client's tests have made none on a mainnet yet.
