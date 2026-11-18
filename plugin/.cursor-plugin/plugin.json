@@ -1,7 +1,7 @@
 {
   "name": "superstables",
   "version": "1.4.0",
-  "description": "Find paid services, use budgets, and request single purchases you approve. Testnets in this release.",
+  "description": "Find paid services, use budgets, and request single purchases you approve. Testnet by default.",
   "author": {
     "name": "Superstables"
   },
