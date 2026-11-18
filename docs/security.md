@@ -930,8 +930,14 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   - where an agent key signs (the budget rails), an agent key file that names the OS keychain and holds no key. `setup`
     stores a mainnet agent key there with `--key-store os-keychain`. `pay` holds no agent key, so this does not apply to it.
 
-  A check that cannot run counts as missing. Budgets on mainnet work on the `evm` rail; the `tempo` and `solana` budget rails
-  and `buy-once` pay on their testnets only.
+  A check that cannot run counts as missing. Budgets on mainnet work on every rail: `evm`, `tempo` (`--chain tempo`) and
+  `solana` (`--chain solana`). On `tempo` the mainnet agent keys have their own key file, which names the OS keychain and
+  holds no key; `setup --key-store os-keychain` creates each key in the keychain before it writes the file.
+
+`buy-once` pays on Base, Arc and Robinhood Chain while the switch is on and mainnet is not paused, when superstables.com
+lists a service there. The owner signs on superstables.com and this client signs nothing, so the agent key and verdict RPC
+checks above do not apply to it. A mainnet purchase read after the switch is off keeps its chain: it is reported paid only
+when this client reads the payment on that chain, and it is never read as a testnet purchase.
 
 While the switch is off, every budget command refuses a mainnet chain, `revoke` included. To revoke a mainnet budget then,
 turn the switch on for that command, or set the allowance to 0 from your wallet on the chain itself.

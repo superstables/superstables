@@ -636,7 +636,7 @@ ${SIGN_ONLY_HELP}`,
 const TOP_HELP = `superstables budget: on-chain budgets for an agent. The owner grants a budget once, from their own wallet; the
 agent then buys on its own, purchase by purchase, until the budget is spent or revoked. The chain enforces the limit.
 Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on,
-the evm rail's mainnets are open and the money there is real. Agents never set the variable.
+every rail's mainnets are open and the money there is real. Agents never set the variable.
 
 Start here, the owner (once per rail and chain; each step prints an approval link that opens on a page on this
 computer, no account needed (the default); the owner approves in their own wallet):
