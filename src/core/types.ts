@@ -117,9 +117,9 @@ export interface BudgetRoute {
  * (that is `actionable`).
  */
 export interface PayRoutes {
-  /** `superstables pay`: on a chain `pay` supports (x402 on the EVM testnets and Solana devnet, MPP on Tempo Moderato); the owner approves each payment. */
+  /** `superstables pay`: on a chain `pay` supports (x402 on the EVM testnets and Solana devnet, MPP on Tempo Moderato, and their mainnets while the operator's switch is on); the owner approves each payment. */
   pay: boolean;
-  /** `superstables budget` rails with a chain this listing accepts. Testnets only. */
+  /** `superstables budget` rails with a chain this listing accepts: testnets, and mainnets while the operator's switch is on. */
   budget: BudgetRoute[];
 }
 

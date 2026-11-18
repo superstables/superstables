@@ -1,12 +1,12 @@
 ---
 name: superstables
-description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a testnet budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked about x402, pay per call, a paid API, finding a service, quoting or paying for one, or setting up, granting, checking, revoking or recovering a testnet budget. Testnet-first.
+description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked about x402, pay per call, a paid API, finding a service, quoting or paying for one, or setting up, granting, checking, revoking or recovering a budget, on a testnet or, once the operator has turned mainnet on, on a mainnet. Testnet-first.
 ---
 
 # Superstables
 
 Use the connected Superstables tools to find a service and request a purchase.
-Testnet-first: test tokens, no real money. Mainnet is refused unless the operator has turned it on; then a payment on a mainnet moves real money. Agents never turn it on. Stop and ask the owner.
+Testnet-first. On a testnet: test tokens, no real money. Mainnet is refused unless the operator has turned it on; then a payment on a mainnet moves real money. Agents never turn it on. Use a mainnet only when the owner asks for it, and say the money is real; if the CLI refuses it, report the refusal and offer a testnet. A connector listing on a mainnet follows the same rule.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 

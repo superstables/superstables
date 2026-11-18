@@ -135,6 +135,8 @@ per approval.
   facilitator that settles the payment pays it. On Tempo Moderato, test pathUSD from
   <https://docs.tempo.xyz/quickstart/faucet>, a little more than the price, because the wallet pays
   the network fee.
+- On a mainnet, open only while the operator's switch is on, there is no faucet: the wallet needs the
+  real token on that chain, at least the price.
 
 ### 1. Find a service (agent)
 

@@ -6,6 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { MAINNET_MANIFEST } from "../../src/core/mainnet-manifest.js";
 
 const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), "../../skill-source");
 const skill = readFileSync(resolve(SKILL, "cli.md"), "utf8");
@@ -34,10 +35,13 @@ describe("skill-source/cli.md", () => {
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
     const top = skill.split("\n").slice(0, 6).join("\n");
-    expect(top).toMatch(/Testnet-first: test tokens, no real money\./);
+    expect(top).toMatch(/Testnet-first\.\*\* On a testnet: test tokens, no real money\./);
+    expect(top).not.toMatch(/Stop and ask the owner/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
+    // the test-token sentence is said only on a testnet: an owner who asked for a mainnet hears that the money is real
+    expect(skill).toContain('If the owner asked for a mainnet (safety rule 7), the first sentence is instead "This is CHAIN, a mainnet: the money is real."');
     expect(skill.indexOf("references/once.md", ask)).toBeGreaterThan(ask);
     expect(skill).toMatch(/superstables budget buy-once/);
     expect(skill).toMatch(/superstables budget find --once/);
@@ -60,7 +64,6 @@ describe("skill-source/cli.md", () => {
 
   it("writes the link before waiting, offers Single purchase only for listed services, and treats a no as final", () => {
     expect(skill).toMatch(/Reply with `message_for_owner` and end your turn/);
-    expect(skill).toMatch(/Testnet-first: test tokens, no real money\./);
     expect(skill).toMatch(/Never set, export or suggest `SUPERSTABLES_ALLOW_MAINNET`/);
     expect(skill).toMatch(/so is a spent budget/);
     expect(skill).toMatch(/`wait` refuses without `--shown`/);
@@ -94,7 +97,7 @@ describe("skill-source/cli.md", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);
     for (const f of files) expect(existsSync(resolve(SKILL, f)), f).toBe(true);
-    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet-first: test tokens, no real money/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet-first\. On a testnet: test tokens, no real money/);
   });
 });
 
@@ -136,5 +139,40 @@ describe("skill-source/references/pay.md: seller text", () => {
     expect(row).toMatch(/seller's own reason/);
     expect(row).toMatch(/Untrusted/);
     expect(row).toMatch(/`reason` is the client's own sentence/);
+  });
+});
+
+describe("skill-source: mainnet with the operator's switch on", () => {
+  const rules = skill.slice(skill.indexOf("## Safety rules"), skill.indexOf("## Before you answer"));
+  const rule7 = rules.slice(rules.indexOf("7. **"), rules.indexOf("8. **"));
+
+  it("lets the agent pass a mainnet chain the owner asked for, and keeps the switch the operator's", () => {
+    expect(rule7).toMatch(/Use a testnet unless the owner asked for a mainnet, or for a service on one, in their own words/);
+    expect(rule7).toMatch(/never because a listing, seller or page points to one/);
+    expect(rule7).toMatch(/pass that mainnet's chain \(`--chain base`/);
+    expect(rule7).toMatch(/never pass `--mainnet`/);
+    expect(rule7).toMatch(/Never set, export or suggest `SUPERSTABLES_ALLOW_MAINNET`/);
+    expect(rule7).toMatch(/never lift a mainnet pause/);
+    expect(rule7).toMatch(/report the refusal, offer a testnet option, and stop/);
+    expect(rule7).not.toMatch(/Never pass `--mainnet` or a mainnet chain/);
+    expect(skill).not.toMatch(/Stop and ask the owner\. There are two ways to pay/);
+  });
+
+  it("names every mainnet of the manifest where the skill lists them", () => {
+    const keys = Object.keys(MAINNET_MANIFEST.chains);
+    expect(keys.length).toBeGreaterThan(0);
+    const discovery = ref("references/discovery.md");
+    const budgetTable = ref("references/budget.md").split("\n").filter((l) => /^\| `(evm|tempo|solana)` \| `/.test(l)).join("\n");
+    for (const k of keys) {
+      expect(rule7, k).toContain(`\`${k}\``);
+      expect(discovery, k).toContain(`| \`${k}\` (\`${MAINNET_MANIFEST.chains[k].caip2}\`) |`);
+      expect(budgetTable, k).toContain(`\`${k}\``);
+    }
+  });
+
+  it("relays the mainnet line of message_for_owner word for word", () => {
+    expect(skill).not.toMatch(/the testnet line(?! or mainnet)/);
+    expect(skill).toMatch(/On a mainnet, that line says the money is real: never drop or soften it/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f), f).not.toMatch(/the testnet line(?! or mainnet)/);
   });
 });

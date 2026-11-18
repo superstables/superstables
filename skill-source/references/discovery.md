@@ -40,7 +40,7 @@ Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when
 - `with a budget, evm on CHAIN`: `superstables budget preflight --rail evm --chain CHAIN --url URL`, then `superstables budget buy --rail evm --chain CHAIN --url URL --max <ceiling> --pay-to <payTo> --op <new id>`.
 - `with a budget, tempo on moderato` or `solana on devnet`: the same two commands with `--rail tempo` or `--rail solana`; a seller that takes POST needs the same `--method` and `--body` on both.
 
-A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. While the operator's switch is off, a mainnet listing gets no command. Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
+A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. While the operator's switch is off, a mainnet listing gets no command; while it is on, it gets the same commands with its mainnet chain, and you run them only when the owner asked for that mainnet (SKILL.md's safety rule 7). Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
 
 Each `services[]` entry in `--json`:
 
@@ -77,6 +77,8 @@ When several listings can answer the request:
 | `routes.budget: [{rail, chain}]` | `superstables budget buy --rail RAIL --chain CHAIN --url URL --max CEILING`, when a budget is live there |
 | Neither | This client cannot pay it (a mainnet while the operator's switch is off, or a protocol it does not speak). Say so |
 
+With the switch on, a mainnet listing has `routes` like a testnet one, and `testnet: false`. Pay it only when the owner asked for that mainnet: the money is real.
+
 `routes` is a judgement from the listing's rails and chains. The seller still has to answer with an offer the payer accepts: `quote` or `preflight` confirms it.
 
 `find` prints these commands for each listing (`commands` in `--json`), with the URL built from `endpoint` and the required `params`, for example `https://www.superstables.com/api/demo/market?asset=BTC`. Change a parameter value to the one you need. `budget buy` does not use quote records: a quote is for `pay` only.
@@ -85,19 +87,33 @@ When several listings can answer the request:
 
 Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
 When the operator turns it on, every supported mainnet is open and payments there move real money.
-Agents never set the variable. In the index, `base`, `ethereum` and `solana` are mainnets.
+Agents never set the variable. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`, `tempo` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |
 | --- | --- | --- |
 | `base-sepolia` (`eip155:84532`) | yes (x402) | `evm`, `base-sepolia` |
-| `arc-testnet` (`eip155:5042002`) | no | `evm`, `arc-testnet` |
-| `arbitrum-sepolia` (`eip155:421614`) | no | `evm`, `arbitrum-sepolia` |
-| `polygon-amoy` (`eip155:80002`) | no | `evm`, `polygon-amoy` |
-| `skale-base-sepolia` (`eip155:324705682`) | no | `evm`, `skale-base-sepolia` |
-| `ethereum-sepolia`, `sepolia` (`eip155:11155111`) | no | `evm`, `ethereum-sepolia` |
+| `arc-testnet` (`eip155:5042002`) | yes (x402) | `evm`, `arc-testnet` |
+| `arbitrum-sepolia` (`eip155:421614`) | yes (x402) | `evm`, `arbitrum-sepolia` |
+| `polygon-amoy` (`eip155:80002`) | yes (x402) | `evm`, `polygon-amoy` |
+| `skale-base-sepolia` (`eip155:324705682`) | yes (x402) | `evm`, `skale-base-sepolia` |
+| `ethereum-sepolia`, `sepolia` (`eip155:11155111`) | yes (x402) | `evm`, `ethereum-sepolia` |
 | `robinhood-testnet` (`eip155:46630`) | yes (x402, USDG) | `evm`, `robinhood-testnet` |
-| `solana-devnet` | no | `solana`, `devnet` (x402) |
-| `tempo-moderato`, `moderato` (`eip155:42431`) | no | `tempo`, `moderato` (MPP only) |
+| `solana-devnet` | yes (x402) | `solana`, `devnet` (x402) |
+| `tempo-moderato`, `moderato` (`eip155:42431`) | yes (MPP) | `tempo`, `moderato` (MPP only) |
+
+While the operator's switch is on, the mainnets route too, each by its key or its CAIP-2 id, and `pay` pays each of them:
+
+| Listing chain | Budget `--rail` and `--chain` |
+| --- | --- |
+| `base` (`eip155:8453`) | `evm`, `base` |
+| `arc` (`eip155:5042`) | `evm`, `arc` |
+| `arbitrum` (`eip155:42161`) | `evm`, `arbitrum` |
+| `polygon` (`eip155:137`) | `evm`, `polygon` |
+| `skale-base` (`eip155:1187947933`) | `evm`, `skale-base` |
+| `ethereum` (`eip155:1`) | `evm`, `ethereum` |
+| `robinhood` (`eip155:4663`) | `evm`, `robinhood` (USDG) |
+| `tempo` (`eip155:4217`) | `tempo`, `tempo` (MPP only) |
+| `solana` (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) | `solana`, `solana` |
 
 The `evm` and `solana` rails pay x402 sellers; `tempo` pays MPP sellers.
 

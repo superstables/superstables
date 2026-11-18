@@ -949,7 +949,8 @@ the operator turns the switch on for that command, or the owner sets the allowan
   says when each was measured.
 - **Package provenance.** The npm package is published without npm provenance, so nothing on the registry ties it to a commit;
   rebuilding it is the check ([checking a build](install.md#checking-a-build-against-its-commit)).
-- **The site.** This page covers the client. What superstables.com would need before it supports mainnet is separate work.
+- **The site.** This page covers the client. superstables.com has its own mainnet setting: which mainnets it lists and approves
+  purchases on is the site's choice, and this client's switch does not change it.
 - **A signing surface that reads like money.** Browser wallets such as MetaMask show an EIP-712 authorization in atomic
   units; a person should see "0.01 USDC to this seller" in the wallet, not only on our page. The approval page shows raw and
   readable values side by side, but the wallet's own prompt is not something this client controls.

@@ -933,7 +933,7 @@ describe("find against a local index", () => {
 
   it("says how many matching listings the default filter hides, in the table and in --json, and not with --all", async () => {
     // Index rows do not list their parameters, so pay cannot call any of the four: all are hidden by default.
-    const hidden = /4 matching listings are not shown because `superstables pay` cannot call them \(for example on a mainnet, or not https\); `find --all` lists them with the reason\./;
+    const hidden = /4 matching listings are not shown because `superstables pay` cannot call them \(for example on a mainnet while the operator's switch is off, or not https\); `find --all` lists them with the reason\./;
     const table = await find();
     expect(table.code).toBe(0);
     expect(table.stdout).toMatch(hidden);
@@ -945,7 +945,7 @@ describe("find against a local index", () => {
     // --budget words it by the budget rail: only the mainnet row is dropped
     const budgetTable = await find("--budget");
     expect(budgetTable.stdout).toContain(
-      "note: 1 matching listing is not shown because no `superstables budget` rail could pay it (for example on a mainnet, or not https); `find --all` lists it with the reason.",
+      "note: 1 matching listing is not shown because no `superstables budget` rail could pay it (for example on a mainnet while the operator's switch is off, or not https); `find --all` lists it with the reason.",
     );
     const budget = JSON.parse((await find("--budget", "--json")).stdout) as { warnings: string[] };
     expect(budget.warnings.some((w) => /^1 matching listing is not shown because no `superstables budget` rail could pay it/.test(w))).toBe(true);

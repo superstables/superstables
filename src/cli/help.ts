@@ -79,8 +79,9 @@ export const EXIT_CODE_TABLE = `Exit codes (the same numbers as \`superstables b
 
 export const MAIN_HELP = `
 What this is:
-  A client for paying per request with test stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain
-  Testnet): find a paid service, quote it, and pay it.
+  A client for paying per request with stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain):
+  find a paid service, quote it, and pay it. Testnet by default, with test tokens. Mainnets are open
+  only while the operator's switch is on, and the money there is real.
   The agent can ask for a payment but cannot approve one.
 
 Two ways to pay: Budgets or Single purchase
@@ -88,12 +89,13 @@ Two ways to pay: Budgets or Single purchase
            buys on its own until the budget is spent, expires or is revoked. The chain enforces
            the limit. Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
            Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
-           (Solana devnet). Use it when the agent should buy without asking each time.
+           (Solana devnet), and their mainnets while the operator's switch is on. Use it when the
+           agent should buy without asking each time.
   pay      Single purchase on your machine. The owner approves each payment in their own wallet:
            a browser wallet such as MetaMask (Phantom on Solana) on a page \`pay\` serves on
            127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
-           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato. Use it when the
-           owner is there to approve.
+           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato, and their mainnets
+           while the operator's switch is on. Use it when the owner is there to approve.
            Or \`budget buy-once\`: Single purchase on superstables.com, approved from any
            device (needs an account there), for the services \`superstables budget find --once\` lists.
 
