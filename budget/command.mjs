@@ -3038,7 +3038,7 @@ async function wait({ f }) {
   const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : recordMayHaveSent(once));
   if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted && !adoptedNow) {
     log(`superstables budget: wait refused without reading the approval: reply to the owner with message_for_owner first (word for word), then run: superstables budget wait --id ${f.id} --shown`);
-    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", final: false, ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode)), reason: "wait was run without --shown: nothing was polled" });
+    return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", final: false, ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode), once), reason: "wait was run without --shown: nothing was polled" });
   }
   // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow is not read
   const madeOnAllowed = once?.command === "buy-once" && once.hosted?.site && !once.final ? siteOrigin(once.hosted.site, "verdict") : null;

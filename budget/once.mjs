@@ -575,12 +575,14 @@ function termsOf(service, created, net) {
  * The `next` of every command that returns waiting_owner: the link is written for the owner first, and `wait` refuses
  * without --shown (cli.mjs), so an agent cannot poll before the owner can read it.
  */
-export const showFirst = (id, withCode = true, rec = undefined) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Do not approve for the owner. ${moneyLineFor(rec)}`;
+/** @param {string} id @param {boolean} [withCode] @param {{ rail?: string, chain?: string, command?: string }} [rec] the approval record, for its chain */
+export const showFirst = (id, withCode = true, rec) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Do not approve for the owner. ${moneyLineFor(rec)}`;
 /**
  * The `next` of a wait run without --shown: it read nothing (the owner may have acted since this machine last looked), so
  * it says nothing about whether the approval was approved or paid.
  */
-export const unshownNext = (id, withCode = true) => `this wait did not read the approval, so whether the owner approved or paid is not known. If you have not written the approval link for the owner yet, ${showFirst(id, withCode)}`;
+/** @param {string} id @param {boolean} [withCode] @param {{ rail?: string, chain?: string, command?: string }} [rec] the approval record, for its chain */
+export const unshownNext = (id, withCode = true, rec) => `this wait did not read the approval, so whether the owner approved or paid is not known. If you have not written the approval link for the owner yet, ${showFirst(id, withCode, rec)}`;
 
 const OTHER_NETWORKS = { moderato: "Tempo Moderato", devnet: "Solana devnet" };
 /**

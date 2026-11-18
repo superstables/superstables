@@ -657,7 +657,9 @@ export class ApprovalServer {
 
     // Every other route of a mainnet page reads the boundary again: before the step runs, before the wallet is told to
     // send, and once more before the step's answer is handed out (a pause set while it waited stops it there).
-    const closedBefore = this.mainnetClosed(record, "nothing was handed to your wallet");
+    // Once the wallet may have sent, its report (the transaction's hash) is always taken: money may have moved.
+    const mayHaveSent = record.step.mayHaveSent?.(record) === true;
+    const closedBefore = mayHaveSent ? undefined : this.mainnetClosed(record, "nothing was handed to your wallet");
     if (closedBefore) {
       this.sendJson(res, 409, closedBefore);
       return;
@@ -693,7 +695,7 @@ export class ApprovalServer {
       this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
       return;
     }
-    if (!answer.signed) {
+    if (!answer.signed && record.step.mayHaveSent?.(record) !== true) {
       const closedAfter = this.mainnetClosed(record, "nothing was handed to your wallet");
       if (closedAfter) {
         this.sendJson(res, 409, closedAfter);

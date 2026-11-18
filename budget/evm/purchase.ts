@@ -685,7 +685,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   const timedFetch: typeof fetch = o.termsReads
     ? withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, firstRead: o.termsReads.first, maxReads: o.termsReads.last, ...o.retry })
     : capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
-  const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j), () => assertMainnetOpen("the signed payment was kept on this computer and not sent to the seller")), http);
+  const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j), () => assertMainnetOpen("the signed payment was kept on this computer and not sent to the seller", true)), http);
   let r: Response;
   try {
     r = await pay(url);

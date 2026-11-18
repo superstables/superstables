@@ -340,11 +340,12 @@ export class ChainRefused extends Error {
  * On a mainnet, throws ChainRefused when the operator's switch, the manifest or the pause has closed it since the command
  * started; read right before each signature, broadcast and paid request. A testnet always passes.
  */
-export function assertMainnetOpen(what: string): void {
+export function assertMainnetOpen(what: string, signed = false): void {
   const entry = (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key];
   if (entry?.testnet === true) return;
   const closed = mainnetSendRefusal({ rail: "evm", key: CFG.key, chainId: CFG.chainId, testnet: entry?.testnet, token: entry?.token });
-  if (closed) throw new ChainRefused(`${closed}; ${what}`);
+  // ChainRefused says nothing was signed; once a signature exists the refusal is a plain error that says it was kept
+  if (closed) throw signed ? new Error(`${closed}; ${what}`) : new ChainRefused(`${closed}; ${what}`);
 }
 
 /** Revert data in a viem error chain (the JSON-RPC error's `data`), if there is any. */
@@ -560,11 +561,22 @@ export async function receiptOf(hash: Hex, timeoutMs = 90_000) {
     await sleep(1200);
   }
 }
+/**
+ * Prepare, sign and broadcast as three steps, reading the mainnet boundary right before signing and right before the
+ * broadcast: a pause or a switch turned off while the nonce, gas or fee was read stops it before a signature exists, and
+ * one in the moment after signing keeps the transaction here. Retries of the broadcast send the same signed bytes.
+ */
+async function signAndSend(w: Wallet, request: Record<string, unknown>): Promise<Hex> {
+  const req: any = await w.client.prepareTransactionRequest({ ...request, chain, account: w.account } as any);
+  assertMainnetOpen("nothing was signed or sent");
+  const serializedTransaction = await w.client.signTransaction(req);
+  assertMainnetOpen(`the transaction was signed and kept on this computer, not sent (${keccak256(serializedTransaction)})`, true);
+  return publicClient.sendRawTransaction({ serializedTransaction });
+}
 /** Send native gas token (Base: ETH; Arc: USDC in 18-decimal units). */
 export async function sendNative(w: Wallet, to: Address, value: bigint, label: string) {
   await assertRpcChain();
-  assertMainnetOpen("nothing was signed or sent");
-  const hash = await w.client.sendTransaction({ to, value, chain, account: w.account });
+  const hash = await signAndSend(w, { to, value });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
@@ -574,8 +586,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
 export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
   await assertRpcChain();
   const pre = agent ? await agentGasFor(w.account.address, to, data, agent.op, agent.then) : null;
-  assertMainnetOpen("nothing was signed or sent");
-  const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
+  const hash = await signAndSend(w, { to, data, value: 0n, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   await rpcPause(3500);
@@ -604,8 +615,7 @@ export async function sendJournaled(
   const hash = keccak256(serializedTransaction);
   await onHash({ hash, nonce: Number(req.nonce) });
   // signed and journaled: a mainnet closed in this moment keeps the transaction here, never sent
-  const closed = (() => { try { assertMainnetOpen(""); return ""; } catch (e) { return (e as Error).message.replace(/; $/, ""); } })();
-  if (closed) throw new Error(`${closed}; ${label} was signed and kept on this computer, not sent (${hash})`);
+  assertMainnetOpen(`${label} was signed and kept on this computer, not sent (${hash})`, true);
   await publicClient.sendRawTransaction({ serializedTransaction });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
