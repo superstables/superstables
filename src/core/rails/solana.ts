@@ -306,11 +306,15 @@ export const solanaRail: X402Rail = {
       // Past the blockhash: read the blocks it could have landed in, on from where an earlier search stopped. How far
       // they are read with no payment in them: that mark, then each block read whole whose transactions carrying the
       // owner's signature, each read and judged, are not this payment (another's, or failed on chain).
-      // The progress an earlier search recorded names no endpoint. On a mainnet the primary may be another one now, so it
-      // reads the whole window itself rather than count blocks that another endpoint read.
-      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, cluster.testnet ? facts.searchedToSlot : undefined, options);
+      // `searchedToSlot` names no endpoint. On a mainnet the primary may be another one now, so it reads on only from the
+      // mark kept under its own endpoint id (confirmSearchedTo, the same map the other endpoints keep theirs in), and
+      // records its progress there too: no endpoint counts blocks another one read.
+      const primaryId = endpointId(rpc.url);
+      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, cluster.testnet ? facts.searchedToSlot : facts.confirmSearchedTo?.[primaryId], options);
       let searchedTo = window.readTo;
-      const progress = () => (searchedTo !== undefined ? { searchedToSlot: searchedTo } : {});
+      const progress = () => (searchedTo === undefined ? {} : cluster.testnet
+        ? { searchedToSlot: searchedTo }
+        : { searchedToSlot: searchedTo, confirmSearchedTo: { ...facts.confirmSearchedTo, [primaryId]: searchedTo } });
       for (const block of window.blocks) {
         for (const signature of block.carrying) {
           if (attributed.has(signature)) continue;
@@ -340,7 +344,8 @@ export const solanaRail: X402Rail = {
           continue;
         }
         const id = endpointId(member.url);
-        const behind = { found: false as const, unreadable: true as const, ...progress(), ...(Object.keys(confirmed).length ? { confirmSearchedTo: confirmed } : {}) };
+        const mine = cluster.testnet || searchedTo === undefined ? {} : { [primaryId]: searchedTo };
+        const behind = { found: false as const, unreadable: true as const, ...progress(), ...(Object.keys(confirmed).length || Object.keys(mine).length ? { confirmSearchedTo: { ...confirmed, ...mine } } : {}) };
         let theirs: WindowRead;
         try {
           const there = await rpcCall<{ blockHeight?: unknown } | null>(member.url, "getEpochInfo", [{ commitment: "finalized" }], options);
@@ -370,7 +375,7 @@ export const solanaRail: X402Rail = {
             unreadable: true,
             reason: "no transaction carrying the owner's signature was found in the blocks it could land in on one RPC, but a second RPC endpoint has not finished reading them; the next status reads on",
             ...progress(),
-            confirmSearchedTo: confirmed,
+            confirmSearchedTo: cluster.testnet || searchedTo === undefined ? confirmed : { ...confirmed, [primaryId]: searchedTo },
           };
         }
         if (member.source !== "env") agreeing.add(member.operator);

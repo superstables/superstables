@@ -566,10 +566,17 @@ export async function receiptOf(hash: Hex, timeoutMs = 90_000) {
  * broadcast: a pause or a switch turned off while the nonce, gas or fee was read stops it before a signature exists, and
  * one in the moment after signing keeps the transaction here. Retries of the broadcast send the same signed bytes.
  */
+/** The prepared request signed by the wallet's own key, with the chain's serializer and no RPC read in between. */
+async function signLocally(w: Wallet, req: any): Promise<Hex> {
+  if (req.chainId !== CHAIN_ID) throw new Error(`the prepared transaction names chain ${String(req.chainId)}, not ${CHAIN_ID}; nothing was signed`);
+  const { account: _account, chain: _chain, ...tx } = req;
+  return (w.account as any).signTransaction(tx, { serializer: chain.serializers?.transaction });
+}
 async function signAndSend(w: Wallet, request: Record<string, unknown>): Promise<Hex> {
   const req: any = await w.client.prepareTransactionRequest({ ...request, chain, account: w.account } as any);
+  // the local key signs directly: the client's signTransaction would read the chain id first, a wait after this check
   assertMainnetOpen("nothing was signed or sent");
-  const serializedTransaction = await w.client.signTransaction(req);
+  const serializedTransaction = await signLocally(w, req);
   assertMainnetOpen(`the transaction was signed and kept on this computer, not sent (${keccak256(serializedTransaction)})`, true);
   return publicClient.sendRawTransaction({ serializedTransaction });
 }
@@ -611,7 +618,7 @@ export async function sendJournaled(
   const nonce = nm ? await nm.consume({ address: w.account.address, chainId: CHAIN_ID, client: publicClient }) : undefined;
   const req: any = await w.client.prepareTransactionRequest({ to, data, value: 0n, chain, account: w.account, gas: pre.gas, ...pre.fees, ...(nonce !== undefined ? { nonce } : {}) } as any);
   assertMainnetOpen("nothing was signed or sent");
-  const serializedTransaction = await w.client.signTransaction(req);
+  const serializedTransaction = await signLocally(w, req);
   const hash = keccak256(serializedTransaction);
   await onHash({ hash, nonce: Number(req.nonce) });
   // signed and journaled: a mainnet closed in this moment keeps the transaction here, never sent
