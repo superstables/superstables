@@ -30,7 +30,7 @@ vi.mock("../../src/core/chain.js", async (importOriginal) => {
   };
 });
 
-import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { chainGate } from "../../src/core/chain-gate.js";
 import { BASE_SEPOLIA, KNOWN_NETWORKS, networkFor, usdcRequirement, type EvmNetwork } from "../../src/core/chain.js";
 import { parseMppChallenges, type MppChallenge } from "../../src/core/mpp.js";
 import { DEFAULT_POLICY } from "../../src/core/policy.js";
@@ -61,18 +61,16 @@ function tempoCharge(): MppChallenge {
 }
 
 describe("chainGate", () => {
-  it("lets a testnet through and refuses anything else, whatever the settings say, while SUPERSTABLES_ALLOW_MAINNET is not set", () => {
+  it("lets a testnet through and refuses anything else while SUPERSTABLES_ALLOW_MAINNET is not set", () => {
     vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", undefined as unknown as string);
-    expect(chainGateSettings()).toBeUndefined();
-    expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true }, undefined)).toBe("");
+    expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true })).toBe("");
     for (const testnet of [false, undefined, "true", 1, null]) {
-      expect(chainGate({ rail: "evm", key: "base", testnet }, undefined), String(testnet)).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
+      expect(chainGate({ rail: "evm", key: "base", testnet }), String(testnet)).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
     }
-    expect(chainGate({ rail: "evm", key: "base", testnet: false }, { enabledChains: ["base"] })).toMatch(/^mainnet is off: /);
   });
 
   it("passes every chain the client ships", () => {
-    for (const n of KNOWN_NETWORKS.filter((k) => k.key !== "gated-base")) expect(chainGate({ rail: n.rail, key: n.key, testnet: n.testnet }, undefined), n.key).toBe("");
+    for (const n of KNOWN_NETWORKS.filter((k) => k.key !== "gated-base")) expect(chainGate({ rail: n.rail, key: n.key, testnet: n.testnet }), n.key).toBe("");
   });
 });
 

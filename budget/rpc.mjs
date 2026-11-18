@@ -13,7 +13,7 @@
 import { SETTINGS_COMMAND, budgetChainKey, rpcFor, shownUrl } from "../src/core/owner-settings.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { readCapped } from "./response.mjs";
-import { endpointSet } from "../src/core/rpc-endpoints.mjs";
+import { RPC_TESTNETS, endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { siteText } from "./site.mjs";
 
 /** The most read of one answer by jsonRpc and the Tempo rail: far more than a receipt, a block without its transactions or a filtered log search returns. */
@@ -144,11 +144,12 @@ export function customRpc(rail, chain) {
 
 /**
  * The endpoints that decide a budget EVM verdict (allowance 0, a pull that reverted, nothing found, an authorization
- * that can no longer settle). Every budget chain is a testnet in this build, and the chain gate refuses any other.
- * The environment URL is the primary only: it joins the confirming set when it is one of the built-in endpoints.
+ * that can no longer settle). A mainnet (one the operator's switch put in the table) never takes the single-operator
+ * branch: it needs two operators or the owner's own node. The environment URL is the primary only: it joins the
+ * confirming set when it is one of the built-in endpoints.
  */
 export function budgetVerdictSet(chainKey, envUrl) {
-  return endpointSet(chainKey, "verdict", { envUrl, envName: evmEnvNameSet(chainKey) ?? RPC_ENV.evm, testnet: true });
+  return endpointSet(chainKey, "verdict", { envUrl, envName: evmEnvNameSet(chainKey) ?? RPC_ENV.evm, testnet: RPC_TESTNETS.has(chainKey) });
 }
 
 /** The reader the agreement engine calls: one JSON-RPC call, answers capped (jsonRpc). Every rail's verdict reads use it. */

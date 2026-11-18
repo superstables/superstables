@@ -67,7 +67,7 @@ export interface StepPageFacts {
 }
 
 /** The verified terms a step words its small print and its account of the wallet's prompt with. */
-export type WordsFacts = { amountAtomic: string; amountDecimal: number; asset: string; assetAddress: string; recipient: string; signingName?: string };
+export type WordsFacts = { amountAtomic: string; amountDecimal: number; asset: string; assetAddress: string; recipient: string; signingName?: string; testnet?: boolean; networkLabel?: string };
 
 export interface WalletStep {
   readonly kind: SignKind;

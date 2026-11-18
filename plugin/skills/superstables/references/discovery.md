@@ -84,7 +84,7 @@ When several listings can answer the request:
 ## Chain names
 
 Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
-No mainnet chain is payable in 1.3.0, even with the switch enabled.
+When the operator turns it on, every supported mainnet is open and payments there move real money.
 Agents never set the variable. In the index, `base`, `ethereum` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |

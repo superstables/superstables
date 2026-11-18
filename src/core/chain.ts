@@ -1,7 +1,8 @@
-// The one place that knows chains: every testnet `pay` can pay on, with the token it pays in there and what a browser
+// The one place that knows chains: every chain `pay` can pay on, with the token it pays in there and what a browser
 // wallet needs to add the chain. Each chain belongs to one rail (src/core/rails/): x402 exact on the EVM chains, MPP
-// tempo.charge on Tempo Moderato, x402 exact on Solana devnet. A chain this table does not name is refused before
-// anything is signed, and so is every mainnet unless the operator turns mainnet on (SUPERSTABLES_ALLOW_MAINNET, chain-gate.js).
+// tempo.charge on Tempo, x402 exact on Solana. The testnets are always here; the mainnets of the mainnet manifest
+// (./mainnet-manifest.js) are here only while the operator turns mainnet on (SUPERSTABLES_ALLOW_MAINNET, chain-gate.js).
+// A chain this table does not name is refused before anything is signed.
 //
 // The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
@@ -12,7 +13,7 @@ import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
 import { mainnetSwitchRefusal } from "./chain-gate.js";
 import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
-import { approvedMainnetChains, registerTestnetFacts } from "./mainnet-policy.js";
+import { mainnetChains, type MainnetChain } from "./mainnet-policy.js";
 
 export type Rail = "evm" | "tempo" | "solana";
 
@@ -88,7 +89,7 @@ function evm(input: {
   key: string;
   chainId: number;
   label: string;
-  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on testnets only. */
+  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on a mainnet only while the operator has turned mainnet on. */
   testnet: boolean;
   v1Name?: string;
   rpc: string;
@@ -232,28 +233,28 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
 });
 
 const EVM_TESTNETS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
-registerTestnetFacts(EVM_TESTNETS.map((n) => ({ chainId: n.chainId, tokenAddress: n.token.address })));
 
 /**
- * The mainnets the mainnet manifest approves (./mainnet-manifest.js, checked by ./mainnet-policy.js), built like every
- * other entry. None while the manifest says signing is off, so this table holds testnets only in this build. A chain
- * listed here is still signed on only when the chain gate allows it.
+ * The EVM mainnets of the mainnet manifest (./mainnet-manifest.js), built like every other entry, while the operator's
+ * switch is on (SUPERSTABLES_ALLOW_MAINNET); none while it is off, so the table then holds testnets only. A chain listed
+ * here is still signed on only when the chain gate allows it, on every signature.
  */
-const EVM_MAINNETS: readonly EvmNetwork[] = approvedMainnetChains().map(([key, c]) => evm({
+const EVM_MAINNETS: readonly EvmNetwork[] = mainnetChains("evm").map(([key, c]) => evm({
   key,
   chainId: c.chainId,
   label: c.label,
   testnet: false,
   ...(c.v1Name ? { v1Name: c.v1Name } : {}),
-  rpc: c.rpc.url,
+  rpc: c.rpc[0].url,
   explorer: c.explorer,
-  token: { symbol: c.token.symbol, address: c.token.address as `0x${string}`, decimals: c.token.decimals, domain: { ...c.token.domain }, approveReset: c.token.approveReset },
+  token: { symbol: c.token.symbol, address: c.token.address as `0x${string}`, decimals: c.token.decimals, domain: { ...c.token.domain! }, approveReset: c.token.approveReset! },
   chainName: c.label,
   nativeCurrency: { ...c.nativeCurrency },
-  blockSeconds: c.blockSeconds,
+  blockSeconds: c.blockSeconds!,
+  logRange: c.logRange,
 }));
 
-/** The seven x402 EVM testnets, in the budget's order, then any mainnet the manifest approves (none in this build). */
+/** The seven x402 EVM testnets, in the budget's order, then the mainnets while the operator's switch is on. */
 export const EVM_NETWORKS: readonly EvmNetwork[] = [...EVM_TESTNETS, ...EVM_MAINNETS];
 
 /** How each EVM entry above is built (it refuses an entry with a fact missing); for tests. Not part of the SDK. */
@@ -300,23 +301,62 @@ export const SOLANA_DEVNET: SolanaNetwork = {
   wallet: { chainName: "Solana devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, walletChain: "solana:devnet" },
 };
 
+/** Tempo mainnet from the mainnet manifest, while the operator's switch is on. */
+const TEMPO_MAINNETS: readonly TempoNetwork[] = mainnetChains("tempo").map(([key, c]): TempoNetwork => ({
+  rail: "tempo",
+  key,
+  caip2: c.caip2,
+  v1Name: "",
+  chainId: c.chainId,
+  label: c.label,
+  testnet: false,
+  explorer: c.explorer,
+  rpc: c.rpc[0].url,
+  defaultRpc: c.rpc[0].url,
+  rpcEnv: "SUPERSTABLES_TEMPO_RPC",
+  token: { symbol: c.token.symbol, address: c.token.address, decimals: c.token.decimals },
+  wallet: { chainName: c.label, nativeCurrency: { ...c.nativeCurrency } },
+}));
+
+/** Solana mainnet from the mainnet manifest, while the operator's switch is on. */
+const SOLANA_MAINNETS: readonly SolanaNetwork[] = mainnetChains("solana").map(([key, c]: [string, MainnetChain]): SolanaNetwork => ({
+  rail: "solana",
+  key,
+  caip2: c.caip2,
+  v1Name: c.v1Name,
+  chainId: 0,
+  label: c.label,
+  testnet: false,
+  explorer: c.explorer,
+  rpc: c.rpc[0].url,
+  defaultRpc: c.rpc[0].url,
+  rpcEnv: "SUPERSTABLES_SOLANA_RPC",
+  genesisHash: c.genesisHash!,
+  token: { symbol: c.token.symbol, address: c.token.address, decimals: c.token.decimals },
+  wallet: { chainName: c.label, nativeCurrency: { ...c.nativeCurrency }, walletChain: c.walletChain },
+}));
+
+/** Tempo Moderato, then Tempo mainnet while the operator's switch is on. */
+export const TEMPO_NETWORKS: readonly TempoNetwork[] = [TEMPO_MODERATO, ...TEMPO_MAINNETS];
+/** Solana devnet, then Solana mainnet while the operator's switch is on. */
+export const SOLANA_NETWORKS: readonly SolanaNetwork[] = [SOLANA_DEVNET, ...SOLANA_MAINNETS];
+
 /**
  * Every chain this client knows. Whether `pay` pays on one is up to the rails that are registered (src/core/rails/):
  * SUPPORTED_NETWORKS there is the list it pays on.
  */
-export const KNOWN_NETWORKS: readonly NetworkInfo[] = [...EVM_NETWORKS, TEMPO_MODERATO, SOLANA_DEVNET];
+export const KNOWN_NETWORKS: readonly NetworkInfo[] = [...EVM_NETWORKS, ...TEMPO_NETWORKS, ...SOLANA_NETWORKS];
 
-for (const n of [TEMPO_MODERATO, SOLANA_DEVNET]) {
+for (const n of [...TEMPO_NETWORKS, ...SOLANA_NETWORKS]) {
   const problem = tokenFactsProblem(n.token, n.rail);
   if (problem) throw new Error(`chain table: ${n.key}: ${problem}`);
 }
-registerTestnetFacts([TEMPO_MODERATO, SOLANA_DEVNET].map((n) => ({ chainId: n.chainId, tokenAddress: n.token.address })));
 
 export const DEFAULT_NETWORK = BASE_SEPOLIA;
 
 /**
- * Mainnets a seller may name, so a refusal says what it is. None of them is ever paid on: the table above is the only
- * list of chains `pay` signs for, and it holds testnets only.
+ * Mainnets a seller may name, so a refusal says what it is while the operator's switch is off (the table above then holds
+ * testnets only). With the switch on, the ones the mainnet manifest lists are in the table, and resolve there first.
  */
 const MAINNETS: Record<string, string> = {
   "eip155:8453": "Base (mainnet)",
@@ -349,7 +389,7 @@ export function mainnetName(name: string): string | undefined {
   return MAINNETS[name] ?? MAINNETS[name.toLowerCase()];
 }
 
-/** Resolves a CAIP-2 id or a v1 vernacular name to a known testnet, or undefined. */
+/** Resolves a CAIP-2 id or a v1 vernacular name to a known chain (a mainnet only while the switch is on), or undefined. */
 export function networkFor(name: string): NetworkInfo | undefined {
   if (!name) return undefined;
   return KNOWN_NETWORKS.find((n) => n.caip2 === name || (n.v1Name !== "" && n.v1Name === name));

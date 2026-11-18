@@ -31,6 +31,7 @@ import { referralFor, type ActiveReferral } from "../../src/core/referrals.ts";
 import { authorizationTypedData } from "../../src/core/signer/steps/eip3009.ts";
 import { PURCHASE_REF_HEADER, REFERRAL_HEADER } from "../../src/seller/referral.ts";
 import {
+  assertMainnetOpen,
   OPS_DIR, SYM, oneLine,
   sendJournaled, NETWORK, USDC, USDC_DECIMALS, CFG, GAS, cmd, erc20Abi, usdc, usdcBalance, allowanceOf, chainReason, publicClient, rpcPause,
   agentGas, gasWords, fundAgentNext, GasShort, ChainRefused, assertRpcChain,
@@ -206,10 +207,12 @@ export function referralHeaders(j: Pick<Journal, "op" | "referral" | "authorizat
 }
 
 /** A fetch that adds `headers` to the paid request only, the one carrying the payment, never to the unpaid one. */
-export function onPaidRequest(base: typeof fetch, headers: Record<string, string>): typeof fetch {
+export function onPaidRequest(base: typeof fetch, headers: Record<string, string>, beforePaid: () => void = () => {}): typeof fetch {
   return (input: any, init?: any) => {
     const request = new Request(input, init);
     if (request.headers.has("PAYMENT-SIGNATURE") || request.headers.has("X-PAYMENT")) {
+      // the last moment before a payment credential leaves this computer: a mainnet closed since it was signed keeps it here
+      beforePaid();
       for (const [name, value] of Object.entries(headers)) request.headers.set(name, value);
     }
     return base(request);
@@ -477,6 +480,11 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
         stop = new Stop("precheck", bad ? `signer refused: ${bad}` : "signer refused: this purchase's own pull has not landed");
         throw stop;
       }
+      // the mainnet boundary, read again right before the payment signature exists
+      try { assertMainnetOpen("the payment was not signed"); } catch (e) {
+        stop = new Stop("precheck", `signer refused: ${(e as Error).message}`);
+        throw stop;
+      }
       signatures++;
       const msg = m.message;
       // journal the authorization BEFORE the signature exists outside this process
@@ -677,7 +685,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   const timedFetch: typeof fetch = o.termsReads
     ? withTermsRetry(capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: init?.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(httpTimeoutMs)]) : AbortSignal.timeout(httpTimeoutMs) })), terms, { timeoutMs: httpTimeoutMs, firstRead: o.termsReads.first, maxReads: o.termsReads.last, ...o.retry })
     : capChallengeBody((input: any, init?: any) => fetch(input, { ...init, redirect: "error", signal: AbortSignal.timeout(httpTimeoutMs) }));
-  const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j)), http);
+  const pay = wrapFetchWithPayment(onPaidRequest(timedFetch, referralHeaders(j), () => assertMainnetOpen("the signed payment was kept on this computer and not sent to the seller", true)), http);
   let r: Response;
   try {
     r = await pay(url);

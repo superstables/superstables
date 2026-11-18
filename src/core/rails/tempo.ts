@@ -1,8 +1,8 @@
 import { finalityFor } from "../finality-policy.js";
 import { inclusion } from "../finality.js";
-// The MPP tempo.charge rail on Tempo Moderato, push mode: the owner's own wallet sends one pathUSD transferWithMemo,
-// with the memo bound to the seller's challenge, and the seller is then shown the transaction's hash. Pinned in code:
-// Tempo Moderato and its pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
+// The MPP tempo.charge rail on Tempo (Moderato, and Tempo mainnet while the operator's switch is on), push mode: the
+// owner's own wallet sends one pathUSD transferWithMemo, with the memo bound to the seller's challenge, and the seller is
+// then shown the transaction's hash. Pinned in code: the Tempo chains of the chain table and their pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
 // chain or token, a split between several recipients, the zero address or the token as recipient, the machine-token route, a memo of the seller's own, a seller that will not take a payment
 // the owner's wallet sends (pull only), a credential in a header of the seller's choosing, or an expiry that leaves no
 // time to approve.
@@ -13,7 +13,7 @@ import { inclusion } from "../finality.js";
 // a payment whose hash never reached this machine is then found on chain (findPayment) in a later block only.
 
 import { encodeFunctionData, getAddress, keccak256, toBytes, toHex, type Hex } from "viem";
-import { TEMPO_MODERATO, fromAtomic, isAddress, isTransactionId, mainnetName, mainnetUnsupported } from "../chain.js";
+import { TEMPO_MODERATO, TEMPO_NETWORKS, fromAtomic, isAddress, isTransactionId, mainnetName, mainnetUnsupported, type TempoNetwork } from "../chain.js";
 import { hashCredential, type MppChallenge } from "../mpp.js";
 import { tempoChallengeKey, tempoClientId } from "../referral-memo.mjs";
 import { rpcCall, verifiedRpc } from "../rpc.js";
@@ -65,11 +65,16 @@ export function mppMemo(challengeId: string, realm: string, clientId?: string): 
   return toHex(buf);
 }
 
+/** The Tempo chain of the table with this chain id (CAIP-2 id), or undefined. */
+export function tempoNetworkFor(chain: number | string): TempoNetwork | undefined {
+  return TEMPO_NETWORKS.find((n) => (typeof chain === "number" ? n.chainId === chain : n.caip2 === chain));
+}
+
 /** The one call the owner's wallet sends: pathUSD.transferWithMemo(recipient, amount, memo), no value. */
-export function transferCall(input: { from: string; recipient: string; amountAtomic: string; memo: Hex }): { from: string; to: string; data: Hex; value: "0x0" } {
+export function transferCall(input: { from: string; recipient: string; amountAtomic: string; memo: Hex; network: TempoNetwork }): { from: string; to: string; data: Hex; value: "0x0" } {
   return {
     from: getAddress(input.from),
-    to: getAddress(TEMPO_MODERATO.token.address),
+    to: getAddress(input.network.token.address),
     data: encodeFunctionData({ abi: TRANSFER_WITH_MEMO_ABI, functionName: "transferWithMemo", args: [getAddress(input.recipient), BigInt(input.amountAtomic), input.memo] }),
     value: "0x0",
   };
@@ -87,27 +92,28 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
   const request = challenge.request ?? {};
   const details = (request.methodDetails && typeof request.methodDetails === "object" ? request.methodDetails : {}) as Record<string, unknown>;
   if (typeof details.chainId !== "number") return { supported: false, reason: "the challenge's chain id is missing or malformed" };
-  if (details.chainId !== TEMPO_MODERATO.chainId) {
+  const network = tempoNetworkFor(details.chainId);
+  if (!network) {
     const named = `eip155:${details.chainId}`;
     const mainnet = mainnetName(named);
     return {
       supported: false,
       reason: mainnet
         ? mainnetUnsupported(mainnet)
-        : `chain ${untrustedText(named, 40)} is not supported for MPP (only ${TEMPO_MODERATO.label}, chain ${TEMPO_MODERATO.chainId})`,
+        : `chain ${untrustedText(named, 40)} is not supported for MPP (only ${TEMPO_NETWORKS.map((n) => `${n.label}, chain ${n.chainId}`).join("; ")})`,
     };
   }
-  if (typeof request.currency !== "string" || request.currency.toLowerCase() !== TEMPO_MODERATO.token.address.toLowerCase()) {
-    return { supported: false, reason: `the currency is not pathUSD on ${TEMPO_MODERATO.label}` };
+  if (typeof request.currency !== "string" || request.currency.toLowerCase() !== network.token.address.toLowerCase()) {
+    return { supported: false, reason: `the currency is not pathUSD on ${network.label}` };
   }
-  if (request.decimals !== undefined && request.decimals !== TEMPO_MODERATO.token.decimals) {
-    return { supported: false, reason: `the challenge quotes ${untrustedText(request.decimals, 10)} decimals; pathUSD has ${TEMPO_MODERATO.token.decimals}` };
+  if (request.decimals !== undefined && request.decimals !== network.token.decimals) {
+    return { supported: false, reason: `the challenge quotes ${untrustedText(request.decimals, 10)} decimals; pathUSD has ${network.token.decimals}` };
   }
   const amount = typeof request.amount === "string" ? request.amount : "";
   if (!/^[1-9]\d{0,17}$/.test(amount)) return { supported: false, reason: "the amount is missing or malformed" };
   if (typeof request.recipient !== "string" || !isAddress(request.recipient)) return { supported: false, reason: "the recipient is missing or malformed" };
   if (/^0x0{40}$/i.test(request.recipient)) return { supported: false, reason: "the recipient is the zero address" };
-  if (request.recipient.toLowerCase() === TEMPO_MODERATO.token.address.toLowerCase()) return { supported: false, reason: `the recipient is the ${TEMPO_MODERATO.token.symbol} contract itself` };
+  if (request.recipient.toLowerCase() === network.token.address.toLowerCase()) return { supported: false, reason: `the recipient is the ${network.token.symbol} contract itself` };
   if (details.splits !== undefined && !(Array.isArray(details.splits) && details.splits.length === 0)) {
     return { supported: false, reason: "a payment split between several recipients is not supported" };
   }
@@ -129,12 +135,12 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
   if (left < MIN_CHALLENGE_SECONDS) return { supported: false, reason: `the challenge expires in ${left} seconds, too soon to approve` };
   if (left > MAX_CHALLENGE_SECONDS) return { supported: false, reason: `the challenge stays open for ${left} seconds, longer than this client approves (at most ${MAX_CHALLENGE_SECONDS})` };
   const terms: PaymentTerms = {
-    amountDecimal: fromAtomic(amount, TEMPO_MODERATO.token.decimals),
+    amountDecimal: fromAtomic(amount, network.token.decimals),
     amountAtomic: amount,
-    asset: TEMPO_MODERATO.token.symbol,
-    assetAddress: TEMPO_MODERATO.token.address,
-    network: TEMPO_MODERATO.caip2,
-    networkLabel: TEMPO_MODERATO.label,
+    asset: network.token.symbol,
+    assetAddress: network.token.address,
+    network: network.caip2,
+    networkLabel: network.label,
     recipient: request.recipient,
     scheme: "charge",
   };
@@ -154,12 +160,20 @@ interface RpcLog {
   blockNumber?: string;
 }
 
-/** The RPC Tempo Moderato is read through, after it has said it is that chain. */
-const primaryRpc = (options: ChainReadOptions) => verifiedRpc(TEMPO_MODERATO, options);
+/**
+ * The Tempo chain a payment is on: the one its facts name, or undefined when this process's table does not hold it (a
+ * mainnet payment read while the operator's switch is off). Never another chain in its place.
+ */
+const networkOf = (facts: Pick<PaymentFacts, "network">): TempoNetwork | undefined => tempoNetworkFor(facts.network);
+const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only while the operator's switch is on), so it was not read`;
+
+/** The RPC a Tempo chain is read through, after it has said it is that chain. */
+const primaryRpc = (network: TempoNetwork, options: ChainReadOptions) => verifiedRpc(network, options);
 
 /** Does this TransferWithMemo log show exactly this payment? */
 function showsPayment(log: RpcLog, facts: PaymentFacts): boolean {
-  if (!same(log.address, TEMPO_MODERATO.token.address) || !Array.isArray(log.topics) || log.topics.length !== 4) return false;
+  const network = networkOf(facts);
+  if (!network || !same(log.address, network.token.address) || !Array.isArray(log.topics) || log.topics.length !== 4) return false;
   const [topic0, from, to, memo] = log.topics;
   if (!same(topic0, TRANSFER_WITH_MEMO_TOPIC) || !same(from, topicOf(facts.payer)) || !same(to, topicOf(facts.recipient)) || !same(memo, facts.memo ?? "")) return false;
   try {
@@ -179,7 +193,9 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   if (!facts.memo || !isHash(facts.memo) || !isAddress(facts.payer) || !isAddress(facts.recipient)) {
     return { chain: "unchecked", reason: "this payment's memo was not recorded, so it cannot be matched" };
   }
-  const rpc = await primaryRpc(options);
+  const network = networkOf(facts);
+  if (!network) return { chain: "unchecked", reason: notInTable(facts) };
+  const rpc = await primaryRpc(network, options);
   if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
   let receipt: { status?: string; transactionHash?: string; blockNumber?: string; blockHash?: string; logs?: RpcLog[] } | null;
   try {
@@ -191,8 +207,8 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   if (!isHash(receipt.transactionHash) || receipt.transactionHash.toLowerCase() !== facts.transaction.toLowerCase()) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with a receipt for another transaction" };
   }
-  // Tempo Moderato uses committed BFT blocks with instant finality, but still requires canonical inclusion.
-  const proof = await inclusion(rpc.url, receipt, finalityFor("tempo", "moderato"), options);
+  // Tempo uses committed BFT blocks with fast finality, but still requires canonical inclusion.
+  const proof = await inclusion(rpc.url, receipt, finalityFor("tempo", network.key === TEMPO_MODERATO.key ? "moderato" : network.key), options);
   if (proof === "removed") return { chain: "unchecked", missing: true, removed: true, reason: "The earlier payment inclusion was removed; outcome unknown. Do not pay again." };
   if (proof === "unread") return { chain: "unchecked", reason: "the transaction has not reached a final block on chain" };
   if (receipt.status !== "0x1") return { chain: "mismatch", mismatchKind: proof === "final" ? "final_execution" : "provisional_execution", reason: "the transaction failed on chain" };
@@ -211,9 +227,9 @@ async function checkTempoPayment(facts: PaymentFacts, options: ChainReadOptions)
   return proof === "final" ? { chain: "verified" } : { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" };
 }
 
-/** Tempo Moderato's blocks are well under a second apart; the search errs on the side of more blocks. */
+/** Tempo's blocks are well under a second apart; the search errs on the side of more blocks. */
 const BLOCKS_PER_SECOND = 4;
-/** The public Moderato RPC answers log searches of up to 100,000 blocks. */
+/** The public Moderato and mainnet RPCs answer log searches of up to 100,000 blocks (mainnet measured 18 Nov 2026). */
 const LOG_RANGE = 100_000n;
 
 /**
@@ -231,7 +247,9 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
   const attributed = new Set((facts.attributed ?? []).map((tx) => tx.toLowerCase()));
   const boundary = /^\d+$/.test(facts.searchFromBlock ?? "") ? BigInt(facts.searchFromBlock!) : undefined;
   const since = facts.since ? Date.parse(facts.since) / 1000 : NaN;
-  const rpc = await primaryRpc(options);
+  const network = networkOf(facts);
+  if (!network) return { found: false, unreadable: true, reason: notInTable(facts) };
+  const rpc = await primaryRpc(network, options);
   if ("error" in rpc) return { found: false, unreadable: true, reason: rpc.error };
   try {
     /** Is this transaction, mined in this block, after the wallet was asked? */
@@ -270,7 +288,7 @@ async function findTempoPayment(facts: PaymentFacts, options: ChainReadOptions):
         const logs = await rpcCall<RpcLog[]>(
           rpc.url,
           "eth_getLogs",
-          [{ address: TEMPO_MODERATO.token.address, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}`, topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(facts.payer), topicOf(facts.recipient), facts.memo] }],
+          [{ address: network.token.address, fromBlock: `0x${fromBlock.toString(16)}`, toBlock: `0x${toBlock.toString(16)}`, topics: [TRANSFER_WITH_MEMO_TOPIC, topicOf(facts.payer), topicOf(facts.recipient), facts.memo] }],
           options,
         );
         return Array.isArray(logs) ? logs : [];
@@ -306,8 +324,10 @@ function blockOf(value: unknown): bigint | undefined {
 }
 
 /** The head block's number, read right before the owner's wallet is asked to send. Throws when it cannot be read. */
-async function tempoHeadBlock(options: ChainReadOptions): Promise<string> {
-  const rpc = await primaryRpc(options);
+async function tempoHeadBlock(options: ChainReadOptions, network: string): Promise<string> {
+  const chain = tempoNetworkFor(network);
+  if (!chain) throw new Error(notInTable({ network }));
+  const rpc = await primaryRpc(chain, options);
   if ("error" in rpc) throw new Error(rpc.error);
   const latest = await rpcCall<{ number?: string } | null>(rpc.url, "eth_getBlockByNumber", ["latest", false], options);
   const head = blockOf(latest?.number);
@@ -319,7 +339,7 @@ export const tempoRail: PushRail = {
   rail: "tempo",
   flow: "push",
   signKind: "tempo-transfer",
-  networks: [TEMPO_MODERATO],
+  networks: TEMPO_NETWORKS,
   confirmWaitMs: CONFIRM_WAIT_MS,
 
   judgeChallenge: judgeTempoCharge,
@@ -334,7 +354,7 @@ export const tempoRail: PushRail = {
 
   credentialHeaders(offer: Offer, signed: SignResult): Record<string, string> {
     if (signed.kind !== "tempo-transfer") throw new Error("a Tempo payment carries the hash of the owner's transfer");
-    return { Authorization: hashCredential(offer.requirement as MppChallenge, signed.hash, { address: getAddress(signed.signer), chainId: TEMPO_MODERATO.chainId }) };
+    return { Authorization: hashCredential(offer.requirement as MppChallenge, signed.hash, { address: getAddress(signed.signer), chainId: tempoNetworkFor(offer.terms.network)!.chainId }) };
   },
 
   paymentMemo(offer: Offer, referralId?: string): string {

@@ -422,6 +422,7 @@ export class ApprovalServer {
       recipient: record.verified.recipient,
       network: record.verified.network,
       networkLabel: record.verified.networkLabel,
+      testnet: record.network.testnet === true,
       assetAddress: record.verified.assetAddress,
       expiresAt: record.expiresAt,
       ...record.step.pageFacts(record),
@@ -654,12 +655,25 @@ export class ApprovalServer {
       return;
     }
 
+    // Every other route of a mainnet page reads the boundary again: before the step runs, before the wallet is told to
+    // send, and once more before the step's answer is handed out (a pause set while it waited stops it there).
+    // Once the wallet may have sent, its report (the transaction's hash) is always taken: money may have moved.
+    const mayHaveSent = record.step.mayHaveSent?.(record) === true;
+    const closedBefore = mayHaveSent ? undefined : this.mainnetClosed(record, "nothing was handed to your wallet");
+    if (closedBefore) {
+      this.sendJson(res, 409, closedBefore);
+      return;
+    }
     let answer;
     try {
       answer = await record.step.answer(record, leaf, body, {
         beforeWalletSends: async (intent) => {
           if (!record.beforeWalletSends) throw new SignRefused("invalid", "nobody is recording this payment, so the wallet is not asked to send it");
+          const closed = record.network.testnet === true ? "" : mainnetSendRefusal(record.network);
+          if (closed) throw new SignRefused("policy", `${closed}; your wallet was not asked to send this payment`);
           await record.beforeWalletSends(intent);
+          const after = record.network.testnet === true ? "" : mainnetSendRefusal(record.network);
+          if (after) throw new SignRefused("policy", `${after}; your wallet was not asked to send this payment`);
         },
       });
     } catch (err) {
@@ -681,6 +695,13 @@ export class ApprovalServer {
       this.sendJson(res, 409, { error: `this payment is already ${record.status}`, status: record.status, reason: record.reason });
       return;
     }
+    if (!answer.signed && record.step.mayHaveSent?.(record) !== true) {
+      const closedAfter = this.mainnetClosed(record, "nothing was handed to your wallet");
+      if (closedAfter) {
+        this.sendJson(res, 409, closedAfter);
+        return;
+      }
+    }
     if (answer.signed) {
       record.status = "signed";
       record.reason = undefined;
@@ -699,6 +720,22 @@ export class ApprovalServer {
    * person may switch accounts and each switch is prepared anew. What a wallet was already handed before a pause can't
    * be taken back; the payment core keeps any signature it returns and never sends it (pay.ts).
    */
+  /**
+   * On a mainnet page, the refusal body when signing has closed since the page opened (the operator's switch is off, the
+   * manifest changed or mainnet is paused): the approval ends as refused. Undefined while it is open, and on a testnet.
+   */
+  private mainnetClosed(record: ApprovalRecord, what: string): { error: string; status: string; reason: string } | undefined {
+    if (record.network.testnet === true) return undefined;
+    const closed = mainnetSendRefusal(record.network);
+    if (!closed) return undefined;
+    const reason = `${closed}; ${what}`;
+    record.status = "refused";
+    record.reason = reason;
+    this.audit(record);
+    record.finish({ status: "refused", code: "policy", reason });
+    return { error: reason, status: record.status, reason };
+  }
+
   private mainnetAccountAnswer(record: ApprovalRecord, address: string): { http: number; body: unknown } | undefined {
     if (record.network.testnet === true) return undefined;
     const closed = record.status !== "pending" || Date.now() >= record.expiresAt

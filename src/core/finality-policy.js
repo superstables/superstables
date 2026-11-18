@@ -1,5 +1,15 @@
+import { MAINNET_MANIFEST } from "./mainnet-manifest.js";
+
+/** A mainnet's finality from the manifest, by the name this file uses (its key, without a leading "<rail>-"). */
+const mainnetFinality = (rail, chain) => {
+  const entry = Object.hasOwn(MAINNET_MANIFEST.chains, chain) ? MAINNET_MANIFEST.chains[chain] : undefined;
+  return entry && entry.rail === rail ? entry.finality : undefined;
+};
+
 /** The finality rule for every client reader. Only these pinned BFT networks use latest. */
 export function finalityFor(rail, chain) {
+  const mainnet = mainnetFinality(rail, chain);
+  if (mainnet) return mainnet.kind;
   return (rail === "tempo" && chain === "moderato") || (rail === "evm" && chain === "skale-base-sepolia")
     ? "instant" : "finalized";
 }
@@ -10,7 +20,11 @@ export function finalityFor(rail, chain) {
  * Filled from measured runs in the same sitting as the website's table; a chain left out has no number. The two
  * instant-finality chains are final the moment a block is canonical.
  */
-export const TYPICAL_FINAL_SECONDS = { "evm:skale-base-sepolia": 0, "tempo:moderato": 0, "evm:base-sepolia": 1200 };
+export const TYPICAL_FINAL_SECONDS = {
+  "evm:skale-base-sepolia": 0, "tempo:moderato": 0, "evm:base-sepolia": 1200,
+  // The mainnets: measured, as the manifest records (./mainnet-manifest.js).
+  ...Object.fromEntries(Object.entries(MAINNET_MANIFEST.chains).map(([key, c]) => [`${c.rail}:${key}`, c.finality.typicalSeconds])),
+};
 
 /** { kind, typicalSeconds }: typicalSeconds is undefined when it has not been measured yet. */
 export function finalityProfile(rail, chain) {
@@ -41,5 +55,8 @@ export const SOLANA_DEVNET_GENESIS = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZ
 export function maxFinalizedSpread(chainId) {
   if (chainId === 84532) return 5000n;
   if (chainId === 421614) return 5000n;
+  // A mainnet's own measured bound (./mainnet-manifest.js: Base and Arbitrum One 5,000, Robinhood Chain 10,000).
+  const mainnet = Object.values(MAINNET_MANIFEST.chains).find((c) => c.rail !== "solana" && c.chainId === chainId);
+  if (mainnet && mainnet.finality.maxSpread > 0) return BigInt(mainnet.finality.maxSpread);
   return 1000n;
 }

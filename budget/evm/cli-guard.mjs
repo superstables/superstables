@@ -17,10 +17,14 @@
 //   unknown chain name   exit 2 (chains.ts, also before any secret is read)
 //
 // The table is the single list of runnable scripts. A script that is not in it exits 2 (fail closed).
-// Only Node built-ins, the plain chain table (chains.mjs, no imports) and the chain gate (no imports) are used here.
+// Only Node built-ins, the plain chain table (chains.mjs), the chain gate and the modules that register the gate's checks
+// (the RPC table, the keychain, the pause file) are used here. None of them opens a key file.
 import { dirname, basename, resolve } from "node:path";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
-import { chainGate, chainGateSettings, mainnetSwitchRefusal } from "../../src/core/chain-gate.js";
+import { chainGate, mainnetSwitchRefusal } from "../../src/core/chain-gate.js";
+import "../../src/core/rpc-endpoints.mjs";
+import "../../src/core/mainnet-spend.js";
+import "../os-keychain.mjs";
 
 // v = flags that take a value, b = boolean flags, r = required flags (value or boolean), pos = positional arguments
 // (name list; all required), keys = which secret files the script may open (documentation, printed in --help).
@@ -90,10 +94,15 @@ if (mainnetOff && (argv.includes("--mainnet") || (chainValue && !String(chainVal
 // before a key file, an RPC or a seller is touched.
 const gateKey = chainValue && !String(chainValue).startsWith("--") ? String(chainValue) : EVM_DEFAULT_CHAIN;
 const gateEntry = Object.hasOwn(EVM_CHAINS, gateKey) ? EVM_CHAINS[gateKey] : undefined;
-const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token }, chainGateSettings()) : "";
+// On a mainnet the agent key must be in the OS keychain wherever it signs, or is granted a budget: setup stores it there
+// with --key-store os-keychain, and recover signs with it too. revoke, the owner's own transaction, never waits on it.
+const AGENT_KEY_SCRIPTS = new Set(["setBudget", "buy", "siteCall", "setup", "recover"]);
+const scriptName = basename(rel, ".ts");
+const movingToKeychain = scriptName === "setup" && argv.includes("--key-store") && argv[argv.indexOf("--key-store") + 1] === "os-keychain";
+const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token, agentKey: AGENT_KEY_SCRIPTS.has(scriptName) && !movingToKeychain }) : "";
 if (gate) {
   process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
-  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: "nothing was signed or sent; use a testnet chain" })}\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: gateEntry?.testnet === true ? "nothing was signed or sent; use a testnet chain" : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}\n`);
   process.exit(3);
 }
 

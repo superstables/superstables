@@ -22,7 +22,8 @@ import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { noteBinding } from "../page-facts.mjs";
-import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { chainGate } from "../../src/core/chain-gate.js";
+import { mainnetSendRefusal } from "../../src/core/mainnet-spend.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
@@ -335,6 +336,18 @@ export class ChainRefused extends Error {
   constructor(public reason: string) { super(reason); }
 }
 
+/**
+ * On a mainnet, throws ChainRefused when the operator's switch, the manifest or the pause has closed it since the command
+ * started; read right before each signature, broadcast and paid request. A testnet always passes.
+ */
+export function assertMainnetOpen(what: string, signed = false): void {
+  const entry = (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key];
+  if (entry?.testnet === true) return;
+  const closed = mainnetSendRefusal({ rail: "evm", key: CFG.key, chainId: CFG.chainId, testnet: entry?.testnet, token: entry?.token });
+  // ChainRefused says nothing was signed; once a signature exists the refusal is a plain error that says it was kept
+  if (closed) throw signed ? new Error(`${closed}; ${what}`) : new ChainRefused(`${closed}; ${what}`);
+}
+
 /** Revert data in a viem error chain (the JSON-RPC error's `data`), if there is any. */
 export function revertData(e: any): Hex | undefined {
   for (let c = e, i = 0; c && i < 10; c = c.cause, i++) {
@@ -395,7 +408,7 @@ let rpcChecked = false;
 /** An RPC URL as an agent may see it: the host only. The path, query and credentials of a URL can hold an access key. */
 export const rpcHost = (url: string): string => { try { return new URL(url).host; } catch { return "(unreadable URL)"; } };
 export async function assertRpcChain() {
-  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token }, chainGateSettings());
+  const gate = chainGate({ rail: "evm", key: CFG.key, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.testnet, token: (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key]?.token });
   if (gate) {
     console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
     process.exit(3);
@@ -548,10 +561,29 @@ export async function receiptOf(hash: Hex, timeoutMs = 90_000) {
     await sleep(1200);
   }
 }
+/**
+ * Prepare, sign and broadcast as three steps, reading the mainnet boundary right before signing and right before the
+ * broadcast: a pause or a switch turned off while the nonce, gas or fee was read stops it before a signature exists, and
+ * one in the moment after signing keeps the transaction here. Retries of the broadcast send the same signed bytes.
+ */
+/** The prepared request signed by the wallet's own key, with the chain's serializer and no RPC read in between. */
+async function signLocally(w: Wallet, req: any): Promise<Hex> {
+  if (req.chainId !== CHAIN_ID) throw new Error(`the prepared transaction names chain ${String(req.chainId)}, not ${CHAIN_ID}; nothing was signed`);
+  const { account: _account, chain: _chain, ...tx } = req;
+  return (w.account as any).signTransaction(tx, { serializer: chain.serializers?.transaction });
+}
+async function signAndSend(w: Wallet, request: Record<string, unknown>): Promise<Hex> {
+  const req: any = await w.client.prepareTransactionRequest({ ...request, chain, account: w.account } as any);
+  // the local key signs directly: the client's signTransaction would read the chain id first, a wait after this check
+  assertMainnetOpen("nothing was signed or sent");
+  const serializedTransaction = await signLocally(w, req);
+  assertMainnetOpen(`the transaction was signed and kept on this computer, not sent (${keccak256(serializedTransaction)})`, true);
+  return publicClient.sendRawTransaction({ serializedTransaction });
+}
 /** Send native gas token (Base: ETH; Arc: USDC in 18-decimal units). */
 export async function sendNative(w: Wallet, to: Address, value: bigint, label: string) {
   await assertRpcChain();
-  const hash = await w.client.sendTransaction({ to, value, chain, account: w.account });
+  const hash = await signAndSend(w, { to, value });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   if (r.status !== "success") throw Object.assign(new Error(`${label} reverted on chain: ${hash}`), { txHash: hash, blockNumber: r.blockNumber });
@@ -561,7 +593,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
 export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
   await assertRpcChain();
   const pre = agent ? await agentGasFor(w.account.address, to, data, agent.op, agent.then) : null;
-  const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
+  const hash = await signAndSend(w, { to, data, value: 0n, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
   await rpcPause(3500);
@@ -585,9 +617,12 @@ export async function sendJournaled(
   const nm = (w.account as any).nonceManager;
   const nonce = nm ? await nm.consume({ address: w.account.address, chainId: CHAIN_ID, client: publicClient }) : undefined;
   const req: any = await w.client.prepareTransactionRequest({ to, data, value: 0n, chain, account: w.account, gas: pre.gas, ...pre.fees, ...(nonce !== undefined ? { nonce } : {}) } as any);
-  const serializedTransaction = await w.client.signTransaction(req);
+  assertMainnetOpen("nothing was signed or sent");
+  const serializedTransaction = await signLocally(w, req);
   const hash = keccak256(serializedTransaction);
   await onHash({ hash, nonce: Number(req.nonce) });
+  // signed and journaled: a mainnet closed in this moment keeps the transaction here, never sent
+  assertMainnetOpen(`${label} was signed and kept on this computer, not sent (${hash})`, true);
   await publicClient.sendRawTransaction({ serializedTransaction });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);

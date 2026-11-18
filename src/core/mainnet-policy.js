@@ -1,13 +1,15 @@
-// What the mainnet manifest (./mainnet-manifest.js) allows, checked. The manifest is read once, frozen, and checked
-// whole: one malformed fact closes every mainnet, so a half-written activation never signs. On top of the manifest sits
-// the pause, read on every call: SUPERSTABLES_MAINNET_PAUSE in the environment, or the pause file that
-// ./mainnet-spend.ts registers when it loads. Either stops every new mainnet signature, reservation and send at once.
-// A pause can only stop: nothing here turns signing on, and a pause check no loaded module registered reads as paused.
+// What the mainnet manifest (./mainnet-manifest.js) says, checked, and the operator's switch that decides whether any of
+// it is used. The switch is SUPERSTABLES_ALLOW_MAINNET: off unless the operator sets it, and it opens every mainnet in
+// the manifest together. The manifest is read once, frozen and checked whole: one malformed fact closes every mainnet,
+// so a half-written entry never signs. On top of both sits the pause, read on every call: SUPERSTABLES_MAINNET_PAUSE in
+// the environment, or the pause file that ./mainnet-spend.ts registers when it loads. Either stops every new mainnet
+// signature and send at once. A pause can only stop: nothing here turns signing on, and a pause check no loaded module
+// registered reads as paused.
 //
 // What a pause cannot do: take back what was already signed. An EIP-3009 authorization signed before the pause stays
 // valid on chain until its validBefore time (ten minutes at most here), and anyone who holds it can still submit it; an
 // allowance granted before the pause stays live until the owner revokes it on chain. The pause only makes sure this
-// client signs, reserves and sends nothing new.
+// client signs and sends nothing new.
 //
 // Plain JavaScript with JSDoc types, like ./chain-gate.js, and like it free of file system code: it imports only the
 // manifest and ./token-facts.js.
@@ -16,34 +18,75 @@ import { MAINNET_MANIFEST } from "./mainnet-manifest.js";
 import { tokenFactsProblem } from "./token-facts.js";
 
 /**
+ * @typedef {object} ManifestRpc
+ * @property {string} url
+ * @property {string} operator
+ * @property {string} source
+ */
+/**
  * @typedef {object} MainnetChain
- * @property {"candidate" | "approved"} status
- * @property {"evm"} rail
- * @property {number} chainId
+ * @property {"evm" | "tempo" | "solana"} rail
+ * @property {number} chainId           0 on Solana
+ * @property {string} caip2
+ * @property {string} [genesisHash]     Solana only
+ * @property {string} [walletChain]     Solana only: the Wallet Standard chain
  * @property {string} label
- * @property {string} [v1Name]
+ * @property {string} v1Name
  * @property {string} explorer
- * @property {number} blockSeconds
+ * @property {number} [blockSeconds]    EVM and Tempo
+ * @property {number} [logRange]        EVM and Tempo
  * @property {{ name: string, symbol: string, decimals: number }} nativeCurrency
- * @property {{ url: string, source: string }} rpc
- * @property {{ symbol: string, address: string, decimals: number, domain: { name: string, version: string }, approveReset: boolean, source: string[] }} token
- * @property {{ address: string, use: "refused", source: string }} permit2
- * @property {{ address: string, source: string }[]} allowanceSpenders
- * @property {{ perGrantAtomic: string, perDayAtomic: string }} caps
+ * @property {ManifestRpc[]} rpc
+ * @property {ManifestRpc[]} [stateRpc]
+ * @property {{ symbol: string, address: string, decimals: number, domain?: { name: string, version: string }, approveReset?: boolean, source: string[] }} token
+ * @property {{ kind: "finalized" | "instant", typicalSeconds: number, maxSpread: number, measured: string }} finality
  * @property {Record<string, string>} sources
- * @property {{ by: string, date: string, evidence: string }} [approval]
  */
 /**
  * @typedef {object} MainnetManifest
- * @property {1} schema
- * @property {"off" | "paused" | "live"} signing
+ * @property {2} schema
  * @property {Record<string, MainnetChain>} chains
  */
-/** @typedef {{ chainId: number, tokenAddress: string }} TestnetFact */
 
-const SIGNING = ["off", "paused", "live"];
-const STATUS = ["candidate", "approved"];
+/** The environment variable that lets this client sign on a chain that is not a testnet. Only the operator sets it. */
+export const MAINNET_ENV = "SUPERSTABLES_ALLOW_MAINNET";
 const PAUSE_ENV = "SUPERSTABLES_MAINNET_PAUSE";
+const RAILS = ["evm", "tempo", "solana"];
+
+/**
+ * The one reading of MAINNET_ENV. Exact strings, no trimming and no case folding: "1" or "true" allow mainnet; unset, "",
+ * "0" or "false" keep it off; any other value is an error that names the variable. A guess ("yes", "TRUE", " 1") would turn
+ * a typo into either a silent no or an unintended yes, and this switch guards money.
+ * @param {string | undefined} raw
+ * @returns {{ enabled: boolean } | { error: string }}
+ */
+export function parseMainnetSwitch(raw) {
+  if (raw === undefined || raw === "" || raw === "0" || raw === "false") return { enabled: false };
+  if (raw === "1" || raw === "true") return { enabled: true };
+  const shown = JSON.stringify(raw.length > 24 ? `${raw.slice(0, 24)}...` : raw);
+  return { error: `${MAINNET_ENV} is ${shown}, which is not a value: use 1 or true to allow mainnet, or 0, false or unset to keep it off` };
+}
+
+/**
+ * MAINNET_ENV as the process has it now.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {{ enabled: boolean } | { error: string }}
+ */
+export function mainnetSwitch(env = globalThis.process?.env ?? {}) {
+  return parseMainnetSwitch(env[MAINNET_ENV]);
+}
+
+/**
+ * Why mainnet is refused whatever the chain, in words, or "" when the operator has allowed it. Every refusal of a mainnet
+ * asks this, so each one names MAINNET_ENV. An invalid value refuses like an off switch.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string}
+ */
+export function mainnetSwitchRefusal(env) {
+  const s = mainnetSwitch(env);
+  if ("error" in s) return s.error;
+  return s.enabled ? "" : `mainnet is off: it needs ${MAINNET_ENV}=1 from the operator`;
+}
 
 const isObject = (/** @type {unknown} */ v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
 const isHttps = (/** @type {unknown} */ v) => {
@@ -55,9 +98,9 @@ const isHttps = (/** @type {unknown} */ v) => {
     return false;
   }
 };
-const isEvmAddress = (/** @type {unknown} */ v) => typeof v === "string" && /^0x[0-9a-fA-F]{40}$/.test(v);
-const isAtomic = (/** @type {unknown} */ v) => typeof v === "string" && /^[1-9][0-9]{0,40}$/.test(v);
+const isWord = (/** @type {unknown} */ v) => typeof v === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(v);
 const sameAddress = (/** @type {string} */ a, /** @type {string} */ b) => a.toLowerCase() === b.toLowerCase();
+const rpcList = (/** @type {unknown} */ v) => Array.isArray(v) && v.length > 0 && v.every((e) => isObject(e) && isHttps(e.url) && isWord(e.operator) && isHttps(e.source));
 
 /** @param {unknown} v */
 function deepFreeze(v) {
@@ -68,107 +111,117 @@ function deepFreeze(v) {
   return v;
 }
 
-/** @type {TestnetFact[]} */
-const testnetFacts = [];
-
-/**
- * Chain tables register the chain id and token of each of their testnets as they load (src/core/chain.ts,
- * budget/evm/chains.ts), so the manifest can be checked against them: a mainnet entry never carries a testnet's chain
- * id or token address.
- * @param {readonly TestnetFact[]} facts
- */
-export function registerTestnetFacts(facts) {
-  for (const f of facts) testnetFacts.push({ chainId: f.chainId, tokenAddress: f.tokenAddress });
-}
-
 /**
  * Why `chain` (one manifest entry, under `key`) cannot be used, one entry per problem; [] when it can.
  * @param {string} key
  * @param {unknown} chain
- * @param {readonly TestnetFact[]} testnets
  * @returns {string[]}
  */
-export function chainProblems(key, chain, testnets = testnetFacts) {
+export function chainProblems(key, chain) {
   const out = [];
   const at = (/** @type {string} */ what) => out.push(`${key}: ${what}`);
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(key)) at("the key is not lower-case letters, digits and dashes");
+  if (!isWord(key)) at("the key is not lower-case letters, digits and dashes");
   if (!isObject(chain)) {
     at("the entry is not an object");
     return out;
   }
   const c = /** @type {Record<string, any>} */ (chain);
-  if (!STATUS.includes(c.status)) at(`status must be one of ${STATUS.join(", ")}`);
-  if (c.rail !== "evm") at("rail must be evm: this manifest version opens EIP-3009 payments on EVM chains only");
-  if (!Number.isInteger(c.chainId) || c.chainId <= 0) at("chainId is not a positive whole number");
-  if (typeof c.label !== "string" || !c.label.trim() || /test|sepolia|devnet/i.test(c.label)) at("label is missing or names a testnet");
-  if (c.v1Name !== undefined && (typeof c.v1Name !== "string" || !/^[a-z0-9-]{1,40}$/.test(c.v1Name))) at("v1Name is malformed");
+  if (!RAILS.includes(c.rail)) at(`rail must be one of ${RAILS.join(", ")}`);
+  if (c.rail === "solana") {
+    if (c.chainId !== 0) at("chainId must be 0 on Solana");
+    if (typeof c.genesisHash !== "string" || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(c.genesisHash)) at("genesisHash is missing or malformed");
+    else if (c.caip2 !== `solana:${c.genesisHash.slice(0, 32)}`) at("caip2 is not solana: and the first 32 characters of the genesis hash");
+    if (typeof c.walletChain !== "string" || !/^solana:[a-z]+$/.test(c.walletChain)) at("walletChain is missing or malformed");
+  } else {
+    if (!Number.isInteger(c.chainId) || c.chainId <= 0) at("chainId is not a positive whole number");
+    else if (c.caip2 !== `eip155:${c.chainId}`) at("caip2 is not eip155:<chainId>");
+    if (typeof c.blockSeconds !== "number" || !(c.blockSeconds > 0)) at("blockSeconds is not a positive number");
+    if (!Number.isInteger(c.logRange) || c.logRange <= 0) at("logRange is not a positive whole number");
+  }
+  if (typeof c.label !== "string" || !c.label.trim() || /test|sepolia|devnet|amoy|moderato/i.test(c.label)) at("label is missing or names a testnet");
+  if (typeof c.v1Name !== "string" || !/^[a-z0-9-]{0,40}$/.test(c.v1Name)) at("v1Name is malformed");
   if (!isHttps(c.explorer)) at("explorer is not an https URL");
-  if (typeof c.blockSeconds !== "number" || !(c.blockSeconds > 0)) at("blockSeconds is not a positive number");
   const n = c.nativeCurrency;
   if (!isObject(n) || typeof n.name !== "string" || !n.name || typeof n.symbol !== "string" || !n.symbol || !Number.isInteger(n.decimals) || n.decimals < 0 || n.decimals > 36) at("nativeCurrency needs a name, a symbol and whole-number decimals");
-  if (!isObject(c.rpc) || !isHttps(c.rpc.url) || !isHttps(c.rpc.source)) at("rpc needs an https url and an https source");
+  if (!rpcList(c.rpc)) at("rpc needs at least one { url (https), operator, source (https) }");
+  if (c.stateRpc !== undefined && !rpcList(c.stateRpc)) at("stateRpc, when given, needs { url (https), operator, source (https) } entries");
   const token = c.token;
-  const tokenProblem = tokenFactsProblem(token, "evm");
+  const tokenProblem = RAILS.includes(c.rail) ? tokenFactsProblem(token, c.rail) : "";
   if (tokenProblem) at(tokenProblem);
   if (!isObject(token) || !Array.isArray(token.source) || token.source.length === 0 || !token.source.every(isHttps)) at("token needs at least one https source");
-  if (!isObject(c.permit2) || !isEvmAddress(c.permit2.address) || c.permit2.use !== "refused" || !isHttps(c.permit2.source)) {
-    at("permit2 needs an address, use \"refused\" and an https source");
-  }
-  if (!Array.isArray(c.allowanceSpenders) || !c.allowanceSpenders.every((/** @type {any} */ s) => isObject(s) && isEvmAddress(s.address) && isHttps(s.source))) {
-    at("allowanceSpenders must list { address, source } entries (empty when none may hold an allowance)");
-  }
-  if (!isObject(c.caps) || !isAtomic(c.caps.perGrantAtomic) || !isAtomic(c.caps.perDayAtomic)) {
-    at("caps need perGrantAtomic and perDayAtomic as whole numbers above 0, in the token's smallest unit");
-  } else if (BigInt(c.caps.perGrantAtomic) > BigInt(c.caps.perDayAtomic)) {
-    at("caps.perGrantAtomic is above caps.perDayAtomic");
+  const f = c.finality;
+  if (!isObject(f) || !["finalized", "instant"].includes(f.kind) || typeof f.typicalSeconds !== "number" || !Number.isFinite(f.typicalSeconds) || f.typicalSeconds < 0
+    || !Number.isInteger(f.maxSpread) || f.maxSpread < 0 || typeof f.measured !== "string" || !f.measured.trim()) {
+    at("finality needs kind (finalized or instant), typicalSeconds, maxSpread and what it was measured from");
   }
   if (!isObject(c.sources) || !isHttps(c.sources.chainId) || !isHttps(c.sources.explorer) || !Object.values(c.sources).every(isHttps)) {
     at("sources need https links for chainId and explorer, and every source must be an https link");
-  }
-  if (c.status === "approved") {
-    const a = c.approval;
-    if (!isObject(a) || typeof a.by !== "string" || !a.by.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(String(a.date)) || typeof a.evidence !== "string" || !a.evidence.trim()) {
-      at("an approved chain needs approval { by, date (YYYY-MM-DD), evidence }");
-    }
-  }
-  for (const t of testnets) {
-    if (Number.isInteger(c.chainId) && t.chainId === c.chainId) at(`chainId ${c.chainId} is a testnet's: testnet facts are never reused for a mainnet`);
-    if (isObject(token) && typeof token.address === "string" && sameAddress(t.tokenAddress, token.address)) at("the token address is a testnet's: testnet facts are never reused for a mainnet");
   }
   return out;
 }
 
 /**
- * Why `manifest` cannot be used, one entry per problem; [] when it can. Every chain is checked, approved or not: a
- * manifest is used whole or not at all.
+ * Why `manifest` cannot be used, one entry per problem; [] when it can. A manifest is used whole or not at all.
  * @param {unknown} manifest
- * @param {readonly TestnetFact[]} testnets
  * @returns {string[]}
  */
-export function manifestProblems(manifest, testnets = testnetFacts) {
+export function manifestProblems(manifest) {
   if (!isObject(manifest)) return ["the manifest is not an object"];
   const m = /** @type {Record<string, any>} */ (manifest);
   const out = [];
-  if (m.schema !== 1) out.push("schema must be 1");
-  if (!SIGNING.includes(m.signing)) out.push(`signing must be one of ${SIGNING.join(", ")}`);
+  if (m.schema !== 2) out.push("schema must be 2");
   if (!isObject(m.chains)) return [...out, "chains is not an object"];
   const ids = new Set();
   for (const [key, chain] of Object.entries(m.chains)) {
-    out.push(...chainProblems(key, chain, testnets));
-    const id = /** @type {any} */ (chain)?.chainId;
-    if (ids.has(id)) out.push(`${key}: chainId ${id} appears twice`);
+    out.push(...chainProblems(key, chain));
+    const id = /** @type {any} */ (chain)?.caip2;
+    if (ids.has(id)) out.push(`${key}: ${id} appears twice`);
     ids.add(id);
   }
-  if (m.signing === "live" && testnets.length === 0) out.push("no chain table registered its testnets, so the manifest cannot be checked against them");
   return out;
 }
 
 /** The shipped manifest, frozen: nothing in this process can change it after it loads. */
 const SHIPPED = /** @type {MainnetManifest} */ (deepFreeze(MAINNET_MANIFEST));
+const SHIPPED_PROBLEMS = manifestProblems(SHIPPED);
 
 /** The manifest this build ships, frozen. */
 export function shippedManifest() {
   return SHIPPED;
+}
+
+/**
+ * Why the manifest cannot be used, in words, or "" when it can.
+ * @param {MainnetManifest} [manifest]
+ * @returns {string}
+ */
+export function manifestRefusal(manifest = SHIPPED) {
+  const problems = manifest === SHIPPED ? SHIPPED_PROBLEMS : manifestProblems(manifest);
+  return problems.length ? `the mainnet manifest is not valid (${problems.join("; ")})` : "";
+}
+
+/**
+ * The mainnets the chain tables hold right now: every manifest entry while the operator's switch is on and the manifest
+ * is valid, none otherwise. Chain tables read it once, as they load, so a process started with the switch off never
+ * names a mainnet as one it pays on. The gate (./chain-gate.js) still checks the switch on every signature.
+ * @param {"evm" | "tempo" | "solana"} [rail]  only that rail's
+ * @param {Record<string, string | undefined>} [env]
+ * @param {MainnetManifest} [manifest]
+ * @returns {[string, MainnetChain][]}
+ */
+export function mainnetChains(rail, env, manifest = SHIPPED) {
+  if (mainnetSwitchRefusal(env) || manifestRefusal(manifest)) return [];
+  return Object.entries(manifest.chains).filter(([, c]) => rail === undefined || c.rail === rail);
+}
+
+/**
+ * The manifest entry for `key`, or undefined.
+ * @param {string} key
+ * @param {MainnetManifest} [manifest]
+ * @returns {MainnetChain | undefined}
+ */
+export function mainnetEntry(key, manifest = SHIPPED) {
+  return typeof key === "string" && Object.hasOwn(manifest.chains, key) ? manifest.chains[key] : undefined;
 }
 
 /** @type {(() => unknown) | undefined} */
@@ -203,66 +256,31 @@ export function mainnetPauseReason(env = globalThis.process?.env ?? {}) {
 }
 
 /**
- * The manifest's state for signing: "off", "paused", "live", or "invalid" when the manifest has a problem.
- * @param {MainnetManifest} [manifest]
- * @returns {{ state: "off" | "paused" | "live" | "invalid", reason: string }}
- */
-export function manifestState(manifest = SHIPPED) {
-  const problems = manifestProblems(manifest);
-  if (problems.length) return { state: "invalid", reason: `the mainnet manifest is not valid (${problems.join("; ")})` };
-  if (manifest.signing === "off") return { state: "off", reason: "this build signs on testnets only (the mainnet manifest says signing is off)" };
-  if (manifest.signing === "paused") return { state: "paused", reason: "mainnet signing is paused in the mainnet manifest" };
-  return { state: "live", reason: "" };
-}
-
-/**
- * The approved chains of a manifest that is valid and not off, as chain tables add them; [] otherwise. A paused
- * manifest still lists them, so reads, status and revokes keep working on chains that were live.
- * @param {MainnetManifest} [manifest]
- * @returns {[string, MainnetChain][]}
- */
-export function approvedMainnetChains(manifest = SHIPPED) {
-  const { state } = manifestState(manifest);
-  if (state !== "live" && state !== "paused") return [];
-  return Object.entries(manifest.chains).filter(([, c]) => c.status === "approved");
-}
-
-/**
- * The caps of an approved chain, as whole numbers in the token's smallest unit, or undefined.
- * @param {string} key
- * @param {MainnetManifest} [manifest]
- * @returns {{ perGrant: bigint, perDay: bigint } | undefined}
- */
-export function mainnetCaps(key, manifest = SHIPPED) {
-  const found = approvedMainnetChains(manifest).find(([k]) => k === key);
-  if (!found) return undefined;
-  return { perGrant: BigInt(found[1].caps.perGrantAtomic), perDay: BigInt(found[1].caps.perDayAtomic) };
-}
-
-/**
- * Why nothing new may be signed, reserved or sent on the mainnet `chain` (a chain table's entry), or "" when the
- * manifest and the pause allow it. The owner's signed settings and the prerequisites are chain-gate.js's to check.
- * The chain table's chain id and token must be the manifest's own, fact for fact.
+ * Why nothing new may be signed or sent on the mainnet `chain` (a chain table's entry), or "" when the operator's switch,
+ * the manifest and the pause allow it. The prerequisites are chain-gate.js's to check. The chain table's rail, chain id
+ * and token must be the manifest's own, fact for fact.
  * @param {{ rail?: unknown, key?: unknown, chainId?: unknown, token?: unknown }} chain
  * @param {MainnetManifest} [manifest]
  * @param {Record<string, string | undefined>} [env]
  * @returns {string}
  */
 export function mainnetRefusal(chain, manifest = SHIPPED, env) {
-  const { state, reason } = manifestState(manifest);
-  if (state !== "live") return reason;
+  const off = mainnetSwitchRefusal(env);
+  if (off) return off;
+  const invalid = manifestRefusal(manifest);
+  if (invalid) return invalid;
   const paused = mainnetPauseReason(env);
   if (paused) return `mainnet signing is paused: ${paused}`;
   const key = typeof chain?.key === "string" ? chain.key : "";
-  const entry = key && Object.hasOwn(manifest.chains, key) ? manifest.chains[key] : undefined;
+  const entry = mainnetEntry(key, manifest);
   if (!entry) return `the mainnet manifest does not list ${key || "this chain"}`;
-  if (entry.status !== "approved") return `${key} is a candidate in the mainnet manifest, not approved`;
   if (chain.rail !== entry.rail) return `${key} is on the ${String(chain.rail)} rail here, and on ${entry.rail} in the mainnet manifest`;
   if (chain.chainId !== undefined && chain.chainId !== entry.chainId) return `${key} has chain id ${String(chain.chainId)} here, and ${entry.chainId} in the mainnet manifest`;
   const t = /** @type {Record<string, any> | undefined} */ (isObject(chain.token) ? chain.token : undefined);
   const m = entry.token;
-  if (!t || typeof t.address !== "string" || !sameAddress(t.address, m.address) || t.decimals !== m.decimals || t.symbol !== m.symbol
-    || t.domain?.name !== m.domain.name || t.domain?.version !== m.domain.version || t.approveReset !== m.approveReset) {
+  const evmSame = entry.rail !== "evm" || (t?.domain?.name === m.domain?.name && t?.domain?.version === m.domain?.version && t?.approveReset === m.approveReset);
+  const addressSame = t && typeof t.address === "string" && (entry.rail === "solana" ? t.address === m.address : sameAddress(t.address, m.address));
+  if (!t || !addressSame || t.decimals !== m.decimals || t.symbol !== m.symbol || !evmSame) {
     return `${key}'s token here is not the one the mainnet manifest states`;
   }
   return "";

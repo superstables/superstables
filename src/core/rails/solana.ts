@@ -1,10 +1,10 @@
-// The x402 exact rail on Solana devnet. The owner's Solana wallet partially signs one USDC transfer whose fee payer is the
+// The x402 exact rail on Solana (devnet, and mainnet while the operator's switch is on). The owner's Solana wallet partially signs one USDC transfer whose fee payer is the
 // seller's facilitator (the offer's extra.feePayer); the facilitator adds its signature and sends it. The transaction is
 // built and checked by the approval page's wallet step (../signer/steps/solana.ts, with ./solana-transaction.ts); this file
 // judges the offer, carries the signed transaction to the seller, and reads the chain for it.
 //
-// Pinned in code (src/core/chain.ts): Solana devnet (its CAIP-2 id, and the RPC's genesis hash before anything is built)
-// and Circle's devnet USDC mint. Refused before the owner is asked: another cluster or a mainnet, another token, an x402
+// Pinned in code (src/core/chain.ts): the Solana clusters of the chain table (each one's CAIP-2 id, and the RPC's genesis
+// hash before anything is built) and Circle's USDC mint on each. Refused before the owner is asked: another cluster, another token, an x402
 // version other than 2, an offer whose seller does not pay the network fee, a malformed amount, recipient or fee payer, the all-zero address or the mint as recipient.
 //
 // What ties a transaction on chain to this payment is the owner's signature: it is over the exact message that was built,
@@ -14,7 +14,7 @@
 
 import { encodePaymentSignatureHeader } from "@x402/core/http";
 import type { PaymentPayload, PaymentRequirements } from "@x402/core/types";
-import { SOLANA_DEVNET, fromAtomic, isTransactionId, type NetworkInfo } from "../chain.js";
+import { SOLANA_DEVNET, SOLANA_NETWORKS, fromAtomic, isTransactionId, type NetworkInfo, type SolanaNetwork } from "../chain.js";
 import { identityOf, rateLimited, rpcCall, rpcCaller, verdictSet, verifiedRpc, type RpcOptions } from "../rpc.js";
 import { endpointId } from "../rpc-endpoints.mjs";
 import { sameRpcUrl } from "../owner-settings.js";
@@ -28,9 +28,15 @@ import type { Challenge, RawAccept } from "../x402.js";
 import { TOKEN_PROGRAM, tokenAccountOf } from "./solana-transaction.js";
 import type { ChainReadOptions, FoundPayment, Judged, Offer, PaymentFacts, SignedFacts, X402Rail } from "./types.js";
 
-const NETWORKS = [SOLANA_DEVNET] as const;
-const MINT = SOLANA_DEVNET.token.address;
-const DECIMALS = SOLANA_DEVNET.token.decimals;
+const NETWORKS = SOLANA_NETWORKS;
+
+/** The Solana cluster of the table with this CAIP-2 id, or undefined. */
+export function solanaNetworkFor(caip2: string): SolanaNetwork | undefined {
+  return SOLANA_NETWORKS.find((n) => n.caip2 === caip2);
+}
+/** The cluster a payment is on, or undefined when this process's table does not hold it (a mainnet while the switch is off). */
+const clusterOf = (facts: Pick<PaymentFacts, "network">): SolanaNetwork | undefined => solanaNetworkFor(facts.network);
+const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only while the operator's switch is on), so it was not read`;
 const MAX_MEMO_BYTES = 256;
 /** The all-zero public key (the system program's id): nobody holds its key, so a transfer to it is burnt. */
 const ALL_ZERO = "11111111111111111111111111111111";
@@ -81,22 +87,23 @@ export const solanaRail: X402Rail = {
   networks: NETWORKS,
 
   judgeAccept(accept: RawAccept, version: 1 | 2, network: NetworkInfo): Judged {
-    if (network.rail !== "solana" || network.caip2 !== SOLANA_DEVNET.caip2) {
-      return refuse(`${network.label} is not a Solana chain this client signs on`);
-    }
+    const cluster = network.rail === "solana" ? solanaNetworkFor(network.caip2) : undefined;
+    if (!cluster) return refuse(`${network.label} is not a Solana chain this client signs on`);
+    const mint = cluster.token.address;
+    const decimals = cluster.token.decimals;
     if (version !== 2) return refuse(`x402 version ${version} is not supported on ${network.label} (only 2)`);
-    if (accept.asset !== MINT) {
-      return refuse(`asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not USDC on ${network.label} (mint ${MINT})`);
+    if (accept.asset !== mint) {
+      return refuse(`asset ${untrustedText(accept.extra?.name ?? accept.asset ?? "unknown", 60)} is not USDC on ${network.label} (mint ${mint})`);
     }
-    if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== DECIMALS) {
-      return refuse(`the offer's token decimals are not USDC's (${DECIMALS})`);
+    if (accept.extra?.decimals !== undefined && Number(accept.extra.decimals) !== decimals) {
+      return refuse(`the offer's token decimals are not USDC's (${decimals})`);
     }
     // A string, as x402 v2 writes it (and as superstables.com takes it): a number is not converted.
     const amountAtomic = typeof accept.amount === "string" ? accept.amount : "";
     if (!/^[1-9]\d{0,17}$/.test(amountAtomic)) return refuse("the offered amount is missing or malformed");
     if (!isSolanaAddress(accept.payTo)) return refuse("the recipient (payTo) is missing or malformed");
     if (accept.payTo === ALL_ZERO) return refuse("the recipient is the all-zero address");
-    if (accept.payTo === MINT) return refuse("the recipient is the USDC mint itself");
+    if (accept.payTo === mint) return refuse("the recipient is the USDC mint itself");
     const timeout = accept.maxTimeoutSeconds ?? 300;
     if (!Number.isInteger(timeout) || timeout <= 0 || timeout > MAX_TIMEOUT_SECONDS) {
       return refuse(`the offer's payment window is outside what is signed (at most ${MAX_TIMEOUT_SECONDS} seconds)`);
@@ -112,10 +119,10 @@ export const solanaRail: X402Rail = {
     if (JSON.stringify(accept).length > MAX_OFFER_CHARS) return refuse("the offer is too large");
 
     const terms: PaymentTerms = {
-      amountDecimal: fromAtomic(amountAtomic, DECIMALS),
+      amountDecimal: fromAtomic(amountAtomic, decimals),
       amountAtomic,
       asset: "USDC",
-      assetAddress: MINT,
+      assetAddress: mint,
       network: network.caip2,
       networkLabel: network.label,
       recipient: accept.payTo,
@@ -161,7 +168,9 @@ export const solanaRail: X402Rail = {
   async checkPayment(facts: PaymentFacts, options: ChainReadOptions): Promise<ChainCheck> {
     if (!isTransactionId(SOLANA_DEVNET.caip2, facts.transaction)) return { chain: "unchecked", reason: "no transaction signature was given" };
     if (!matchable(facts)) return { chain: "unchecked", reason: "this payment's signed transaction was not recorded, so it cannot be matched" };
-    const rpc = await primaryRpc(options);
+    const cluster = clusterOf(facts);
+    if (!cluster) return { chain: "unchecked", reason: notInTable(facts) };
+    const rpc = await primaryRpc(cluster, options);
     if ("error" in rpc) return { chain: "unchecked", reason: rpc.error };
     let found: RpcTransaction | null;
     try {
@@ -169,7 +178,7 @@ export const solanaRail: X402Rail = {
       if (!found) {
         const confirmed = await rpcCall<RpcTransaction | null>(rpc.url, "getTransaction", [facts.transaction, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "json" }], options);
         if (confirmed) {
-          const check = judgeTransaction(confirmed, facts.transaction, facts, false);
+          const check = judgeTransaction(cluster, confirmed, facts.transaction, facts, false);
           return check.chain === "verified" ? { chain: "unchecked", included: true, reason: "the payment landed, but is not final on chain yet" } : check;
         }
       }
@@ -178,7 +187,7 @@ export const solanaRail: X402Rail = {
       return { chain: "unchecked", reason: "the chain could not be read: the RPC did not give a usable answer" };
     }
     if (!found) return { chain: "unchecked", missing: true, reason: "the chain does not show the transaction yet" };
-    return judgeTransaction(found, facts.transaction, facts);
+    return judgeTransaction(cluster, found, facts.transaction, facts);
   },
 
   /**
@@ -210,7 +219,9 @@ export const solanaRail: X402Rail = {
    */
   async findPayment(facts: PaymentFacts, options: ChainReadOptions): Promise<FoundPayment> {
     if (!matchable(facts)) return { found: false, reason: "the owner's signature was not recorded, so the payment cannot be looked for" };
-    const rpc = await primaryRpc(options);
+    const cluster = clusterOf(facts);
+    if (!cluster) return { found: false, reason: notInTable(facts), unreadable: true };
+    const rpc = await primaryRpc(cluster, options);
     if ("error" in rpc) return { found: false, reason: rpc.error, unreadable: true };
     const unreadable: FoundPayment = { found: false, reason: "the chain could not be read: the RPC did not give a usable answer", unreadable: true };
     const attributed = new Set(facts.attributed ?? []);
@@ -225,7 +236,7 @@ export const solanaRail: X402Rail = {
       const found = await readTransaction(url, signature, options, CANDIDATE_VERSION);
       if (!found) return "unreadable";
       if (!found.transaction?.signatures?.includes(facts.ownerSignature!)) return { found: false, reason: "" };
-      const check = judgeTransaction(found, signature, facts);
+      const check = judgeTransaction(cluster, found, signature, facts);
       if (check.chain === "verified") return { found: true, transaction: signature };
       if (check.chain === "unchecked") return "unreadable";
       return { found: false, reason: `transaction ${signature} carries the owner's signature, but ${check.reason}` };
@@ -255,7 +266,7 @@ export const solanaRail: X402Rail = {
         const recent = await rpcCall<unknown>(
           rpc.url,
           "getSignaturesForAddress",
-          [tokenAccountOf(facts.payer, MINT), { limit: SEARCH_LIMIT, commitment: "confirmed", minContextSlot: finalizedSlot, ...(before ? { before } : {}) }],
+          [tokenAccountOf(facts.payer, cluster.token.address), { limit: SEARCH_LIMIT, commitment: "confirmed", minContextSlot: finalizedSlot, ...(before ? { before } : {}) }],
           options,
         );
         if (!Array.isArray(recent)) return unreadable;
@@ -295,9 +306,15 @@ export const solanaRail: X402Rail = {
       // Past the blockhash: read the blocks it could have landed in, on from where an earlier search stopped. How far
       // they are read with no payment in them: that mark, then each block read whole whose transactions carrying the
       // owner's signature, each read and judged, are not this payment (another's, or failed on chain).
-      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, facts.searchedToSlot, options);
+      // `searchedToSlot` names no endpoint. On a mainnet the primary may be another one now, so it reads on only from the
+      // mark kept under its own endpoint id (confirmSearchedTo, the same map the other endpoints keep theirs in), and
+      // records its progress there too: no endpoint counts blocks another one read.
+      const primaryId = endpointId(rpc.url);
+      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, cluster.testnet ? facts.searchedToSlot : facts.confirmSearchedTo?.[primaryId], options);
       let searchedTo = window.readTo;
-      const progress = () => (searchedTo !== undefined ? { searchedToSlot: searchedTo } : {});
+      const progress = () => (searchedTo === undefined ? {} : cluster.testnet
+        ? { searchedToSlot: searchedTo }
+        : { searchedToSlot: searchedTo, confirmSearchedTo: { ...facts.confirmSearchedTo, [primaryId]: searchedTo } });
       for (const block of window.blocks) {
         for (const signature of block.carrying) {
           if (attributed.has(signature)) continue;
@@ -313,7 +330,7 @@ export const solanaRail: X402Rail = {
       // The primary read the whole window clean. A lying primary could have hidden the one block that holds the payment, and
       // Solana RPCs cannot be asked about a past slot: so every other endpoint of the verdict set reads the whole window
       // itself, with its own progress, and judges the transactions carrying the owner's signature itself.
-      const set = verdictSet(SOLANA_DEVNET, options);
+      const set = verdictSet(cluster, options);
       if ("error" in set) return { found: false, unreadable: true, reason: agreementWords({ agreed: false, why: "unreadable", reason: set.error }), ...progress() };
       const lastSlot = searchedTo;
       const left: string[] = [];
@@ -321,13 +338,14 @@ export const solanaRail: X402Rail = {
       const agreeing = new Set(set.verdict.filter((m) => m.source !== "env" && sameRpcUrl(m.url, rpc.url)).map((m) => m.operator));
       for (const member of set.verdict) {
         if (sameRpcUrl(member.url, rpc.url)) continue;
-        const words = await checkIdentity(member.url, identityOf(SOLANA_DEVNET), rpcCaller(options));
+        const words = await checkIdentity(member.url, identityOf(cluster), rpcCaller(options));
         if (words) {
           left.push(words);
           continue;
         }
         const id = endpointId(member.url);
-        const behind = { found: false as const, unreadable: true as const, ...progress(), ...(Object.keys(confirmed).length ? { confirmSearchedTo: confirmed } : {}) };
+        const mine = cluster.testnet || searchedTo === undefined ? {} : { [primaryId]: searchedTo };
+        const behind = { found: false as const, unreadable: true as const, ...progress(), ...(Object.keys(confirmed).length || Object.keys(mine).length ? { confirmSearchedTo: { ...confirmed, ...mine } } : {}) };
         let theirs: WindowRead;
         try {
           const there = await rpcCall<{ blockHeight?: unknown } | null>(member.url, "getEpochInfo", [{ commitment: "finalized" }], options);
@@ -357,7 +375,7 @@ export const solanaRail: X402Rail = {
             unreadable: true,
             reason: "no transaction carrying the owner's signature was found in the blocks it could land in on one RPC, but a second RPC endpoint has not finished reading them; the next status reads on",
             ...progress(),
-            confirmSearchedTo: confirmed,
+            confirmSearchedTo: cluster.testnet || searchedTo === undefined ? confirmed : { ...confirmed, [primaryId]: searchedTo },
           };
         }
         if (member.source !== "env") agreeing.add(member.operator);
@@ -382,24 +400,24 @@ export const solanaRail: X402Rail = {
 
 // ── Reading devnet ───────────────────────────────────────────────────────────────────────────────────────────
 
-/** The RPC is not on Solana devnet: nothing may be built on its blockhash. */
-export class NotDevnetError extends Error {
-  constructor() {
-    super("the Solana RPC this client reads is not on Solana devnet (its genesis hash differs), so nothing was built");
-    this.name = "NotDevnetError";
+/** The RPC is not on the cluster the payment is for: nothing may be built on its blockhash. */
+export class WrongClusterError extends Error {
+  constructor(cluster: SolanaNetwork = SOLANA_DEVNET) {
+    super(`the Solana RPC this client reads is not on ${cluster.label} (its genesis hash differs), so nothing was built`);
+    this.name = "WrongClusterError";
   }
 }
 
-/** Where Solana devnet is read: the caller's choice, or SUPERSTABLES_SOLANA_RPC, or the public devnet RPC, once it has said it is devnet (its genesis hash). */
-const primaryRpc = (options: ChainReadOptions) => verifiedRpc(SOLANA_DEVNET, options);
+/** Where a Solana cluster is read: the caller's choice, or SUPERSTABLES_SOLANA_RPC, or the cluster's public RPC, once it has said it is that cluster (its genesis hash). */
+const primaryRpc = (cluster: SolanaNetwork, options: ChainReadOptions) => verifiedRpc(cluster, options);
 
 /**
- * A fresh blockhash to build a payment on, after checking that the RPC is Solana devnet (its genesis hash). Throws
- * NotDevnetError when it is another cluster, and any other error when it could not be read.
+ * A fresh blockhash to build a payment on, after checking that the RPC is the cluster (its genesis hash). Throws
+ * WrongClusterError when it is another cluster, and any other error when it could not be read.
  */
-export async function devnetBlockhash(options: ChainReadOptions = {}): Promise<{ blockhash: string; lastValidBlockHeight: number; slot?: number }> {
-  const rpc = await primaryRpc(options);
-  if ("error" in rpc) throw rpc.wrongChain ? new NotDevnetError() : new Error(rpc.error);
+export async function solanaBlockhash(cluster: SolanaNetwork, options: ChainReadOptions = {}): Promise<{ blockhash: string; lastValidBlockHeight: number; slot?: number }> {
+  const rpc = await primaryRpc(cluster, options);
+  if ("error" in rpc) throw rpc.wrongChain ? new WrongClusterError(cluster) : new Error(rpc.error);
   const latest = await rpcCall<{ context?: { slot?: unknown }; value?: { blockhash?: unknown; lastValidBlockHeight?: unknown } }>(rpc.url, "getLatestBlockhash", [{ commitment: "confirmed" }], options);
   const blockhash = latest?.value?.blockhash;
   const lastValidBlockHeight = latest?.value?.lastValidBlockHeight;
@@ -411,9 +429,9 @@ export async function devnetBlockhash(options: ChainReadOptions = {}): Promise<{
   return { blockhash, lastValidBlockHeight, ...(typeof slot === "number" && Number.isSafeInteger(slot) ? { slot } : {}) };
 }
 
-/** Devnet's block height now. Throws when it could not be read. */
-export async function devnetBlockHeight(options: ChainReadOptions = {}): Promise<number> {
-  const rpc = await primaryRpc(options);
+/** The cluster's block height now. Throws when it could not be read. */
+export async function solanaBlockHeight(cluster: SolanaNetwork, options: ChainReadOptions = {}): Promise<number> {
+  const rpc = await primaryRpc(cluster, options);
   if ("error" in rpc) throw new Error(rpc.error);
   const height = await rpcCall<unknown>(rpc.url, "getBlockHeight", [{ commitment: "confirmed" }], options);
   if (typeof height !== "number" || !Number.isSafeInteger(height)) throw new Error("the RPC answered getBlockHeight with something else");
@@ -524,7 +542,9 @@ const strings = (value: unknown): string[] => (Array.isArray(value) ? value.filt
  * succeeded, and its one token instruction is a TransferChecked of the amount of devnet USDC from the owner's token
  * account to the recipient's, by the owner.
  */
-function judgeTransaction(found: RpcTransaction, signature: string, facts: PaymentFacts, final = true): ChainCheck {
+function judgeTransaction(cluster: SolanaNetwork, found: RpcTransaction, signature: string, facts: PaymentFacts, final = true): ChainCheck {
+  const mint = cluster.token.address;
+  const decimals = cluster.token.decimals;
   const signatures = found.transaction?.signatures;
   if (!Array.isArray(signatures) || signatures[0] !== signature) {
     return { chain: "unchecked", reason: "the chain could not be read: the RPC answered with another transaction" };
@@ -548,11 +568,11 @@ function judgeTransaction(found: RpcTransaction, signature: string, facts: Payme
   if (!data || data.length !== 10 || data[0] !== 12 || accounts.length !== 4) {
     return { chain: "mismatch", reason: "the transaction's token instruction is not the TransferChecked the owner signed" };
   }
-  if (accounts[1] !== MINT || data[9] !== DECIMALS) return { chain: "mismatch", reason: "the transaction moved another token than USDC on Solana devnet" };
-  if (accounts[0] !== tokenAccountOf(facts.payer, MINT) || accounts[3] !== facts.payer) {
+  if (accounts[1] !== mint || data[9] !== decimals) return { chain: "mismatch", reason: `the transaction moved another token than USDC on ${cluster.label.replace(/\s*\(testnet\)\s*/i, "").trim()}` };
+  if (accounts[0] !== tokenAccountOf(facts.payer, mint) || accounts[3] !== facts.payer) {
     return { chain: "mismatch", reason: "the transaction did not move the tokens from the owner's account" };
   }
-  if (accounts[2] !== tokenAccountOf(facts.recipient, MINT)) return { chain: "mismatch", reason: "the transaction did not pay the checked recipient" };
+  if (accounts[2] !== tokenAccountOf(facts.recipient, mint)) return { chain: "mismatch", reason: "the transaction did not pay the checked recipient" };
   if (Buffer.from(data).readBigUInt64LE(1) !== BigInt(facts.amountAtomic)) {
     return { chain: "mismatch", reason: "the transaction did not transfer the signed amount" };
   }

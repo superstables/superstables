@@ -817,6 +817,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     ${shows}
     ${limits}
     ${networkHint}
+    ${facts.chain.testnet || facts.kind === "settings" ? "" : `<div id="real-money" class="note bad">This is on ${esc(facts.chain.chainName)}, a mainnet: the money is real.</div>`}
     <div id="say" class="note" hidden></div>
     <div class="actions">
       <button id="connect" class="primary" data-act="connect">Connect wallet</button>
@@ -835,6 +836,7 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     eyebrow: facts.kind === "connect" ? "Owner sign-in" : facts.kind === "settings" ? "Owner settings" : "Agent request",
     lede: OWNER_LEDE,
     testnet: facts.chain.testnet,
+    mainnet: facts.kind !== "settings" && !facts.chain.testnet,
     style: ownerStyle(look),
     body,
   });

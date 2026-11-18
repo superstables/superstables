@@ -57,7 +57,7 @@ describe("reading the file", () => {
     ["65537 bytes", () => use(null, { raw: `{"version":1,"signature":{"x":"${"a".repeat(65537)}"}}` })],
     ["mode 622", () => use({ version: 1 }, { mode: 0o622 })],
     ["an owner folder of mode 777", () => { const h = use({ version: 1 }); chmodSync(join(h, ".superstables", "owner"), 0o777); }],
-    ["an unknown chain key", () => use({ version: 1, rpc: { base: { urls: [B] } } })],
+    ["an unknown chain key", () => use({ version: 1, rpc: { optimism: { urls: [B] } } })],
     ["six URLs", () => use({ version: 1, rpc: { "base-sepolia": { urls: [1, 2, 3, 4, 5, 6].map((n) => `https://r${n}.example`) } } })],
     ["two URLs equal once parsed", () => use({ version: 1, rpc: { "base-sepolia": { urls: ["https://a.example/", "https://A.example"] } } })],
     ["plain http", () => use({ version: 1, rpc: { "base-sepolia": { urls: ["http://rpc.example"] } } })],
@@ -81,6 +81,11 @@ describe("reading the file", () => {
       expect(ownerSettingsProblem()).toBe(err.message);
     });
   }
+
+  it("reads an RPC the owner set for a mainnet while the operator's switch was on, with the switch off now", () => {
+    use({ version: 1, rpc: { "skale-base": { urls: ["https://node.owner.example"], ownNode: true } } });
+    expect(readOwnerSettings()?.rpc["skale-base"]).toMatchObject({ urls: ["https://node.owner.example"], ownNode: true });
+  });
 
   it("a FIFO at the path is refused and never blocks", () => {
     const h = use(null);
@@ -276,7 +281,7 @@ describe("writing the file", () => {
     writeOwnerSettings(next() as any);
     const path = ownerSettingsPath();
     const before = readFileSync(path);
-    expect(() => writeOwnerSettings({ ...next(), rpc: { base: { urls: [A], ownNode: false } } } as any)).toThrow(/cannot be used/);
+    expect(() => writeOwnerSettings({ ...next(), rpc: { optimism: { urls: [A], ownNode: false } } } as any)).toThrow(/cannot be used/);
     expect(readFileSync(path).equals(before)).toBe(true);
   });
   it("a failed write (folder made read-only) leaves no temp file", () => {

@@ -3,7 +3,7 @@
 Superstables lets coding agents find paid services, check prices and pay for what they need.
 With Budgets, you approve an amount in your wallet and the agent can spend within it. Single purchase lets you approve each purchase, both available on superstables.com or on your machine.
 
-**Testnet by default.** Uses test tokens, no real money. Mainnet is off: this build ships the mainnet manifest off, so `SUPERSTABLES_ALLOW_MAINNET` alone does not turn it on.
+**Testnet by default.** Uses test tokens, no real money. Mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then every supported mainnet is open, and payments there move real money.
 
 ## Choose an install
 

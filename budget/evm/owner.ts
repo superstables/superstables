@@ -35,7 +35,7 @@ export const OWNER_CHAIN: OwnerChain = {
   rpcUrl: CHAINS[CFG.key].rpc,
   explorer: CFG.explorer,
   nativeCurrency: { name: GAS.symbol, symbol: GAS.symbol, decimals: GAS.decimals },
-  testnet: true,
+  testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true,
 };
 /** A flag for next-step commands: nothing on the default chain. */
 export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;

@@ -98,7 +98,7 @@ describe("budget/CLI.md against the help", () => {
     walk(join(REPO, "budget"));
     // the chain gate the budget scripts import (budget/evm/lib.ts, budget/solana/lib.mjs, budget/tempo/preflight.ts) reads
     // SUPERSTABLES_ALLOW_MAINNET for them
-    sources.push(readFileSync(join(REPO, "src/core/chain-gate.js"), "utf8"));
+    sources.push(readFileSync(join(REPO, "src/core/chain-gate.js"), "utf8"), readFileSync(join(REPO, "src/core/mainnet-policy.js"), "utf8"));
     // comments out: a name that is only mentioned in a comment is not read
     const code = sources
       .join("\n")

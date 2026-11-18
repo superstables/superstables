@@ -39,6 +39,8 @@ export interface ApprovalPageFacts {
   recipient: string;
   network: string;
   networkLabel: string;
+  /** Whether the chain is a testnet, from this client's chain table. False: a mainnet, where the money is real. */
+  testnet?: boolean;
   assetAddress: string;
   expiresAt: number;
   /** EIP-155 chain id as the hex string window.ethereum expects, e.g. "0x14a34". */
@@ -492,6 +494,7 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
     You can still reject the payment without one.
   </div>
 
+  ${facts.testnet !== false ? "" : `<div id="real-money" class="note bad">This payment is on ${esc(facts.networkLabel)}, a mainnet: the money is real, and a payment cannot be undone.</div>\n`}
   <div class="card">
     <div class="amount">${esc(facts.amountDecimal)}<span>${esc(facts.asset)}</span></div>
     ${sellerLine(facts)}
@@ -525,7 +528,8 @@ ${step.script ? `<script${n}>${step.script}</script>\n` : ""}<script${n}>${APPRO
     title: "Approve a payment",
     eyebrow: "Payment request",
     lede: step.words.lede,
-    testnet: /testnet/i.test(facts.networkLabel || facts.network),
+    testnet: facts.testnet ?? /testnet/i.test(facts.networkLabel || facts.network),
+    mainnet: facts.testnet === false,
     style: APPROVAL_STYLE,
     body,
   });

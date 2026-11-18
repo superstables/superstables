@@ -17,7 +17,7 @@ import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { noteBinding } from "../page-facts.mjs";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
-import { chainGate, chainGateSettings } from "../../src/core/chain-gate.js";
+import { chainGate } from "../../src/core/chain-gate.js";
 import { endpointSet } from "../../src/core/rpc-endpoints.mjs";
 import { agreeAtFinalSolana, agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
 import { TOKEN_PROGRAM_ID, decodeTokenAccount } from "./token.mjs";
@@ -92,7 +92,7 @@ export const USDC_DECIMALS = 6;
 /** The largest amount one SystemProgram transfer carries (a u64 of lamports). */
 export const U64_MAX = (1n << 64n) - 1n;
 /** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
-const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS } }, chainGateSettings());
+const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS }, agentKey: true });
 // No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
 // key file or asks an RPC anything.
 if (solanaGate()) {

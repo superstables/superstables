@@ -1,6 +1,6 @@
 // message_for_owner: the reply an agent sends word for word when a link needs the owner.
 import { describe, expect, it } from "vitest";
-import { TESTNET_LINE, messageForOwner } from "../../budget/once.mjs";
+import { TESTNET_LINE, messageForOwner, unshownNext } from "../../budget/once.mjs";
 
 describe("message_for_owner", () => {
   it("has the exact link, the code, the amount on the network, the testnet line and what to do next", () => {
@@ -13,6 +13,22 @@ describe("message_for_owner", () => {
       "This needs a superstables.com account: the link asks you to sign in with your wallet first (a message, no fee).",
       "Tell me when you've approved.",
     ].join("\n"));
+  });
+
+  it("on a mainnet budget says the money is real, never test tokens, even read while the operator's switch is off", () => {
+    const grant = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "base", terms: { title: "Approve a budget", amount: "5", unit: "USDC" } })!;
+    expect(grant).toContain("5 USDC on Base. This is Base, a mainnet: the money is real.");
+    expect(grant).toContain("Only the operator sets it; agents never set the variable.");
+    expect(grant).not.toMatch(/test USDC|Test tokens|no real money|\(testnet\)/);
+    const gas = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "polygon", terms: { title: "Send gas to the agent", amount: "0.2", unit: "POL" } })!;
+    expect(gas).toContain("0.2 POL on Polygon. This is Polygon, a mainnet");
+  });
+
+  it("the next step of an unshown mainnet approval says the money is real too", () => {
+    const next = unshownNext("ba_1", true, { rail: "evm", chain: "base" });
+    expect(next).toContain("This is Base, a mainnet: the money is real.");
+    expect(next).not.toMatch(/Test tokens|no real money/);
+    expect(unshownNext("ba_1", true, { rail: "evm", chain: "base-sepolia" })).toContain(TESTNET_LINE);
   });
 
   it("names a gas token as it is, and says where to open a page on this machine", () => {

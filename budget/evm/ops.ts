@@ -20,6 +20,7 @@ import { randomBytes } from "node:crypto";
 import { evmJournalProblem } from "../journal.mjs";
 import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, toEventSelector, pad, BlockNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import {
+  assertMainnetOpen,
   SYM,
   OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
   GasShort, gasWords, oneLine, receiptAgreed, txAgreed, authorizationStateAgreed, agreementWords,
@@ -633,6 +634,7 @@ const gasShortNote = (e: GasShort, what: string) =>
 
 /** Agent signs CancelAuthorization for this op's nonce (EIP-712, USDC domain) and returns v, r, s. */
 async function signCancel(w: Wallet, nonce: Hex) {
+  assertMainnetOpen("the cancellation was not signed");
   const sig = await w.account.signTypedData({
     domain: { name: CFG.domain.name, version: CFG.domain.version, chainId: CFG.chainId, verifyingContract: USDC },
     types: { CancelAuthorization: [{ name: "authorizer", type: "address" }, { name: "nonce", type: "bytes32" }] },

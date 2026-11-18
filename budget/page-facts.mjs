@@ -3,7 +3,7 @@
 // Hosts only, never a path or query: an RPC URL may carry an access key.
 
 import { budgetChainKey } from "../src/core/owner-settings.js";
-import { endpointSet } from "../src/core/rpc-endpoints.mjs";
+import { RPC_TESTNETS, endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { RPC_ENV, evmEnvNameSet } from "./rpc.mjs";
 
 const host = (url) => {
@@ -26,7 +26,7 @@ const host = (url) => {
 export function rpcFacts(rail, chain) {
   const key = budgetChainKey(rail, chain);
   const envName = rail === "evm" ? (evmEnvNameSet(chain) ?? RPC_ENV.evm) : RPC_ENV[rail];
-  const set = endpointSet(key, "verdict", { envUrl: process.env[envName], envName, testnet: true });
+  const set = endpointSet(key, "verdict", { envUrl: process.env[envName], envName, testnet: RPC_TESTNETS.has(key) });
   if ("error" in set) return undefined;
   const hosts = [];
   for (const e of [set.primary, ...set.verdict]) {
