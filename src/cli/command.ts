@@ -549,7 +549,7 @@ explain(
         "preflight` (signs nothing; prints the price and payTo), then `superstables budget buy --max <ceiling> " +
         "--pay-to <payTo> --op <new id>`. On tempo and solana there is no preflight: `buy` alone. Required " +
         "parameters are filled with an example value; index listings do not list theirs, so their URLs end in " +
-        "?<parameters>. A mainnet listing gets no command.",
+        "?<parameters>. While the operator's switch is off, a mainnet listing gets no command.",
       LISTING_TEXT_NOTE,
     ],
     money: "no. It reads listings and asks each built-in service for its price, unpaid.",

@@ -40,7 +40,7 @@ Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when
 - `with a budget, evm on CHAIN`: `superstables budget preflight --rail evm --chain CHAIN --url URL`, then `superstables budget buy --rail evm --chain CHAIN --url URL --max <ceiling> --pay-to <payTo> --op <new id>`.
 - `with a budget, tempo on moderato` or `solana on devnet`: the same two commands with `--rail tempo` or `--rail solana`; a seller that takes POST needs the same `--method` and `--body` on both.
 
-A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. A mainnet listing gets no command. Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
+A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. While the operator's switch is off, a mainnet listing gets no command. Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
 
 Each `services[]` entry in `--json`:
 
@@ -75,7 +75,7 @@ When several listings can answer the request:
 | `routes.pay: true` and `actionable: true` | `superstables quote --service ID --param k=v`, then `superstables pay QUOTE_ID` |
 | `routes.pay: true`, `actionable: false` (no params) | `superstables quote 'ENDPOINT?k=v'` with the parameters the seller documents, then `pay` |
 | `routes.budget: [{rail, chain}]` | `superstables budget buy --rail RAIL --chain CHAIN --url URL --max CEILING`, when a budget is live there |
-| Neither | This client cannot pay it (mainnet, or a protocol it does not speak). Say so |
+| Neither | This client cannot pay it (a mainnet while the operator's switch is off, or a protocol it does not speak). Say so |
 
 `routes` is a judgement from the listing's rails and chains. The seller still has to answer with an offer the payer accepts: `quote` or `preflight` confirms it.
 
@@ -112,7 +112,7 @@ superstables quote 'https://seller.example/path?k=v'
 - It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the starting defaults apply: it refuses a payment above 0.05 USDC and payments adding up to more than 1 USDC in a UTC day. The owner changes either in `policy.yaml`, or removes it by writing `null`.
 - The quote lasts 10 minutes and starts at most one payment. After that payment ends, however it ends, take a new quote.
 - `--json` prints the quote record: `id` (the quote id for `pay`; for example `superstables quote ... --json | jq -r .id`), `expiresAt`, `url`, `terms`, `requirement`, `policy` (`allowed`, `checks[]`), `next`.
-- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a mainnet); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
+- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a mainnet while the operator's switch is off); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
 
 ## Pricing for a budget
 

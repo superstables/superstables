@@ -115,7 +115,7 @@ You need Node 22 or newer and a browser wallet: any EVM browser wallet (MetaMask
 
 Install. Pick one; all run the same commands on the same keys and state.
 
-- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.3.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
+- **With the client from GitHub.** Follow [the git install](../docs/install.md#with-npm-from-git), pinned to the full 1.4.0 release commit: `npm install github:superstables/superstables#<commit>`. It builds the client on your machine and includes the tool as a self-contained build (`dist/budget` in the package), which runs with Node alone. In that installation folder, run `npx --no superstables budget ...`. `--version` names the build, and `dist/budget/THIRD_PARTY_NOTICES.txt` lists the bundled packages and their licences.
 - **From a checkout of this repository.** At the repository root:
 
   ```sh
@@ -305,7 +305,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 
 ## Not supported yet
 
-- Faucets are manual, except on `tempo`, where `setup` tops up the owner from the Moderato faucet. `doctor` reports missing setup and funds.
+- Faucets are manual, except on `tempo` Moderato, where `setup` tops up the owner from the Moderato faucet. `doctor` reports missing setup and funds.
 - Tempo Wallet (a passkey account at wallet.tempo.xyz) as the owner on `tempo`: not yet. Use an EVM browser wallet that can add a custom chain.
 - A Solana wallet's chain: the page cannot switch it. Switch the wallet to devnet yourself (for example, in Phantom: turn on Testnet Mode and pick Solana Devnet).
 - A Solana wallet that changes the transaction: the command sends only the transaction it built, with one exception. Phantom 26.31.0 added compute unit limit and price instructions to a transaction that had none; the command accepts those two, when the extra fee is at most 0.001 SOL and every original instruction, account and signer is unchanged. Any other change is refused and nothing is sent. With this, Phantom 26.31.0 approved `fund-agent`, `grant` and `revoke` on devnet. Phantom's Lighthouse checks were not observed in these tests.

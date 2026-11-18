@@ -107,7 +107,7 @@ Single purchase requests made on superstables.com appear in the [site account](h
 | Solana devnet | x402 `exact`, test USDC | Signs one token transfer whose fee the seller's facilitator pays; the facilitator sends it |
 
 The client pins each chain's token, and on the EVM chains the token's signing domain. If the seller
-offers no payment option the client supports, or asks for a mainnet, it is refused before the
+offers no payment option the client supports, or asks for a mainnet while the operator's switch is off, it is refused before the
 owner is asked. Local `pay` needs no account and no site.
 
 On Tempo Moderato the money moves when the wallet sends the transfer, before the seller is called.

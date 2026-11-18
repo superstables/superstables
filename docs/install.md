@@ -3,13 +3,13 @@
 The Superstables client is a command, `superstables`, and the `superstables` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off: it opens only on a chain a release approves, and only when the operator sets `SUPERSTABLES_ALLOW_MAINNET`.
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off: only the operator opens it, by setting `SUPERSTABLES_ALLOW_MAINNET`, which opens every supported mainnet at once.
 
 ## What you need
 
 - Node 22 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
-- Network access to sellers and testnet RPCs, and to the approval site when using approvals on superstables.com.
+- Network access to sellers and testnet RPCs (mainnet RPCs too while the operator's switch is on), and to the approval site when using approvals on superstables.com.
 - For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:
   an EVM wallet for EVM/Tempo, or a Solana wallet for a Solana budget. On the same machine, use
   a browser extension wallet. Over SSH, forward the approval link's port first:
@@ -21,7 +21,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   wallet cannot sign. Choose [Budget on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 1.3.0** and require that release build. Install it from npm
+These instructions describe **client 1.4.0** and require that release build. Install it from npm
 as `@superstables/client`, or use the released commit and skill from
 [GitHub Releases](https://github.com/superstables/superstables/releases).
 The CLI/skill runs on your own machine or server,
@@ -30,7 +30,7 @@ agent key on that runtime. Test-token and gas requirements belong to the chosen
 [Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
+testnet RPCs (mainnet RPCs too while the operator's switch is on), the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
 interactive `superstables doctor`, the npm registry (`SUPERSTABLES_NO_UPDATE_CHECK=1` turns that off).
 
 ## Install
@@ -73,7 +73,7 @@ client. The client's package is `@superstables/client`.
 ### From npm
 
 ```bash
-npm install -g @superstables/client@1.3.0
+npm install -g @superstables/client@1.4.0
 superstables --version
 ```
 
@@ -84,7 +84,7 @@ the command, not the agent skill: to connect an agent, also install the skill, a
 ### From a checkout
 
 To run the client from its sources, for example to work on it, replace `<commit>` with the full
-commit hash of the 1.3.0 release:
+commit hash of the 1.4.0 release:
 
 ```bash
 git clone https://github.com/superstables/superstables.git
@@ -104,7 +104,7 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder, with `<commit>` replaced by the full commit hash of the 1.3.0 release (its
+In any folder, with `<commit>` replaced by the full commit hash of the 1.4.0 release (its
 page on GitHub names the commit):
 
 ```bash
@@ -121,7 +121,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 ### The agent skill, with the whole CLI bundled
 
 `npm run skill` in a checkout builds `build/superstables-skill-<version>.zip`, and
-the 1.3.0 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+the 1.4.0 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables/`, and needs
 only Node:
 
@@ -183,7 +183,7 @@ which account last connected, that the approval port is free, and that the demo 
 index and the facilitators answer:
 
 ```
-  client version           1.3.0
+  client version           1.4.0
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
