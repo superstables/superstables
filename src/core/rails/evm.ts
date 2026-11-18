@@ -15,7 +15,7 @@ import type { PaymentTerms } from "../types.js";
 import type { Challenge, RawAccept } from "../x402.js";
 import type { ChainReadOptions, Judged, Offer, PaymentFacts, SignedFacts, X402Rail } from "./types.js";
 
-/** The EVM chains `pay` signs on: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia. */
+/** The EVM chains `pay` signs on: the EVM testnets, and their mainnets while the operator's switch is on (chain.ts). */
 const NETWORKS = EVM_NETWORKS;
 /**
  * The longest window a seller may offer (as on superstables.com). Until the authorization's validBefore it can still move

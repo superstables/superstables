@@ -25,7 +25,7 @@ export const PLUGIN_LISTING = {
   displayName: "Superstables",
   shortDescription: "Find paid services, use budgets, and request single purchases you approve. Testnet by default.",
   longDescription:
-    "Superstables lets your agent find services that charge per request and read what they cost. In an app with a terminal, Budgets let you approve a total spending limit in your wallet, on superstables.com or on your machine. The agent can then spend within that limit without approval for each purchase. You can revoke the budget by signing a transaction in your wallet. For a single purchase through the connector, an account member approves and signs in their wallet on superstables.com before payment. Testnet by default: test tokens, no real money.",
+    "Superstables lets your agent find services that charge per request and read what they cost. In an app with a terminal, Budgets let you approve a total spending limit in your wallet, on superstables.com or on your machine. The agent can then spend within that limit without approval for each purchase. You can revoke the budget by signing a transaction in your wallet. For a single purchase through the connector, an account member approves and signs in their wallet on superstables.com before payment. Testnet by default, with test tokens. Mainnet is off unless the operator turns it on, and payments there move real money.",
   marketplaceDescription: "Find paid services, use budgets, and request single purchases you approve. Testnet by default.",
   developerName: "Superstables",
   category: "Payments",

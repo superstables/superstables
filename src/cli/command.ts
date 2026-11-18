@@ -92,7 +92,7 @@ import {
  */
 const usdcSources = (others: string) =>
   `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on Robinhood Chain Testnet, test USDG from https://faucet.paxos.com; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: the seller or its facilitator pays it.`;
-const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")}`;
+const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")} A mainnet, open only while the operator's switch is on, has no faucet: the wallet needs the real token there.`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -106,8 +106,8 @@ program
   // person reaches for when a machine has been installed over more than once.
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
-    "Find services that charge per request, quote them, and pay them with test stablecoins from a wallet " +
-      "the owner controls. Testnet by default. Mainnet is open only when the operator turns it on, and then the money is real. Stop and ask the owner.",
+    "Find services that charge per request, quote them, and pay them with stablecoins from a wallet " +
+      "the owner controls. Testnet by default. Mainnet is open only when the operator turns it on, and then the money is real.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -164,7 +164,7 @@ explain(
         console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
         console.log(`Fund that account with test USDC (USDG on Robinhood Chain Testnet) on the chain you pay on: ${usdcSources("USDC chains")}`);
-        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself.");
+        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself. A mainnet, open only while the operator's switch is on, has no faucet: the wallet needs the real token there.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
       } else {
@@ -465,8 +465,8 @@ explain(
           const matching = `${hidden} matching ${hidden === 1 ? "listing is" : "listings are"} not shown because`;
           found.warnings.push(
             options.budget
-              ? `${matching} no \`superstables budget\` rail could pay ${hidden === 1 ? "it" : "them"} (for example on a mainnet, or not https); \`find --all\` lists ${hidden === 1 ? "it" : "them"} with the reason.`
-              : `${matching} \`superstables pay\` cannot call ${hidden === 1 ? "it" : "them"} (for example on a mainnet, or not https); \`find --all\` lists ${hidden === 1 ? "it" : "them"} with the reason.`,
+              ? `${matching} no \`superstables budget\` rail could pay ${hidden === 1 ? "it" : "them"} (for example on a mainnet while the operator's switch is off, or not https); \`find --all\` lists ${hidden === 1 ? "it" : "them"} with the reason.`
+              : `${matching} \`superstables pay\` cannot call ${hidden === 1 ? "it" : "them"} (for example on a mainnet while the operator's switch is off, or not https); \`find --all\` lists ${hidden === 1 ? "it" : "them"} with the reason.`,
           );
         }
         // Names, descriptions and parameters of index and catalogue listings come from whoever listed them. The built-in
@@ -732,7 +732,7 @@ explain(
         "the request there, so approving it afterwards signs nothing.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
         "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
-        "pathUSD on Tempo Moderato. The wallet signs on " +
+        "pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets, where the money is real. The wallet signs on " +
         "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
         "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
         "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +

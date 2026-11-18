@@ -32,10 +32,9 @@ This page is generated from the help by `npm run docs:cli`, and CI fails when th
 ```text
 Usage: superstables [options] [command]
 
-Find services that charge per request, quote them, and pay them with test
-stablecoins from a wallet the owner controls. Testnet by default. Mainnet is
-open only when the operator turns it on, and then the money is real. Stop and
-ask the owner.
+Find services that charge per request, quote them, and pay them with stablecoins
+from a wallet the owner controls. Testnet by default. Mainnet is open only when
+the operator turns it on, and then the money is real.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -85,8 +84,9 @@ Commands:
   help [command]                 display help for command
 
 What this is:
-  A client for paying per request with test stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain
-  Testnet): find a paid service, quote it, and pay it.
+  A client for paying per request with stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain):
+  find a paid service, quote it, and pay it. Testnet by default, with test tokens. Mainnets are open
+  only while the operator's switch is on, and the money there is real.
   The agent can ask for a payment but cannot approve one.
 
 Two ways to pay: Budgets or Single purchase
@@ -94,12 +94,13 @@ Two ways to pay: Budgets or Single purchase
            buys on its own until the budget is spent, expires or is revoked. The chain enforces
            the limit. Rails: evm (Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE
            Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet), tempo (Tempo Moderato), solana
-           (Solana devnet). Use it when the agent should buy without asking each time.
+           (Solana devnet), and their mainnets while the operator's switch is on. Use it when the
+           agent should buy without asking each time.
   pay      Single purchase on your machine. The owner approves each payment in their own wallet:
            a browser wallet such as MetaMask (Phantom on Solana) on a page `pay` serves on
            127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
-           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato. Use it when the
-           owner is there to approve.
+           x402 on the EVM chains above and Solana devnet, MPP on Tempo Moderato, and their mainnets
+           while the operator's switch is on. Use it when the owner is there to approve.
            Or `budget buy-once`: Single purchase on superstables.com, approved from any
            device (needs an account there), for the services `superstables budget find --once` lists.
 
@@ -529,12 +530,13 @@ request there, so approving it afterwards signs nothing.
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
 Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with
-test pathUSD on Tempo Moderato. The wallet signs on the EVM chains and Solana, and pay submits what
-it signed. On Tempo the owner's wallet sends the payment itself: pay records that before the wallet
-is asked, reads the owner's transaction on chain, and only then calls the seller. Once the wallet
-has been asked to send, an attempt that ends without a transaction report is uncertain, a rejection
-the page reports from the wallet included, and `superstables status` searches the chain for it.
---wallet local signs on the EVM chains only.
+test pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets, where the
+money is real. The wallet signs on the EVM chains and Solana, and pay submits what it signed. On
+Tempo the owner's wallet sends the payment itself: pay records that before the wallet is asked,
+reads the owner's transaction on chain, and only then calls the seller. Once the wallet has been
+asked to send, an attempt that ends without a transaction report is uncertain, a rejection the page
+reports from the wallet included, and `superstables status` searches the chain for it. --wallet
+local signs on the EVM chains only.
 
 How long it waits: with no --wait, until the attempt ends: the browser page gives the owner 5
 minutes; with --wallet local, pay gives the wallet 130 s (the wallet's own window is 120 s by
