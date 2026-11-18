@@ -306,7 +306,9 @@ export const solanaRail: X402Rail = {
       // Past the blockhash: read the blocks it could have landed in, on from where an earlier search stopped. How far
       // they are read with no payment in them: that mark, then each block read whole whose transactions carrying the
       // owner's signature, each read and judged, are not this payment (another's, or failed on chain).
-      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, facts.searchedToSlot, options);
+      // The progress an earlier search recorded names no endpoint. On a mainnet the primary may be another one now, so it
+      // reads the whole window itself rather than count blocks that another endpoint read.
+      const window = await readWindow(rpc.url, fromSlot, last!, facts.ownerSignature!, cluster.testnet ? facts.searchedToSlot : undefined, options);
       let searchedTo = window.readTo;
       const progress = () => (searchedTo !== undefined ? { searchedToSlot: searchedTo } : {});
       for (const block of window.blocks) {

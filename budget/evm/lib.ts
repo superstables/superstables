@@ -23,7 +23,7 @@ import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { noteBinding } from "../page-facts.mjs";
 import { chainGate } from "../../src/core/chain-gate.js";
-import "../../src/core/mainnet-spend.js";
+import { mainnetSendRefusal } from "../../src/core/mainnet-spend.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
@@ -336,6 +336,17 @@ export class ChainRefused extends Error {
   constructor(public reason: string) { super(reason); }
 }
 
+/**
+ * On a mainnet, throws ChainRefused when the operator's switch, the manifest or the pause has closed it since the command
+ * started; read right before each signature, broadcast and paid request. A testnet always passes.
+ */
+export function assertMainnetOpen(what: string): void {
+  const entry = (EVM_CHAINS as Record<string, { testnet?: unknown; token?: unknown }>)[CFG.key];
+  if (entry?.testnet === true) return;
+  const closed = mainnetSendRefusal({ rail: "evm", key: CFG.key, chainId: CFG.chainId, testnet: entry?.testnet, token: entry?.token });
+  if (closed) throw new ChainRefused(`${closed}; ${what}`);
+}
+
 /** Revert data in a viem error chain (the JSON-RPC error's `data`), if there is any. */
 export function revertData(e: any): Hex | undefined {
   for (let c = e, i = 0; c && i < 10; c = c.cause, i++) {
@@ -552,6 +563,7 @@ export async function receiptOf(hash: Hex, timeoutMs = 90_000) {
 /** Send native gas token (Base: ETH; Arc: USDC in 18-decimal units). */
 export async function sendNative(w: Wallet, to: Address, value: bigint, label: string) {
   await assertRpcChain();
+  assertMainnetOpen("nothing was signed or sent");
   const hash = await w.client.sendTransaction({ to, value, chain, account: w.account });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
@@ -562,6 +574,7 @@ export async function sendNative(w: Wallet, to: Address, value: bigint, label: s
 export async function send(w: Wallet, to: Address, data: Hex, label: string, agent?: { op: GasOp; then?: GasOp[] }) {
   await assertRpcChain();
   const pre = agent ? await agentGasFor(w.account.address, to, data, agent.op, agent.then) : null;
+  assertMainnetOpen("nothing was signed or sent");
   const hash = await w.client.sendTransaction({ to, data, value: 0n, chain, account: w.account, ...(pre ? { gas: pre.gas, ...pre.fees } : {}) } as any);
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);
@@ -586,9 +599,13 @@ export async function sendJournaled(
   const nm = (w.account as any).nonceManager;
   const nonce = nm ? await nm.consume({ address: w.account.address, chainId: CHAIN_ID, client: publicClient }) : undefined;
   const req: any = await w.client.prepareTransactionRequest({ to, data, value: 0n, chain, account: w.account, gas: pre.gas, ...pre.fees, ...(nonce !== undefined ? { nonce } : {}) } as any);
+  assertMainnetOpen("nothing was signed or sent");
   const serializedTransaction = await w.client.signTransaction(req);
   const hash = keccak256(serializedTransaction);
   await onHash({ hash, nonce: Number(req.nonce) });
+  // signed and journaled: a mainnet closed in this moment keeps the transaction here, never sent
+  const closed = (() => { try { assertMainnetOpen(""); return ""; } catch (e) { return (e as Error).message.replace(/; $/, ""); } })();
+  if (closed) throw new Error(`${closed}; ${label} was signed and kept on this computer, not sent (${hash})`);
   await publicClient.sendRawTransaction({ serializedTransaction });
   const r = await receiptOf(hash);
   console.log(`${label}: ${r.status} ${tx(hash)}`);

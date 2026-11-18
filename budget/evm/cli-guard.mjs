@@ -95,8 +95,8 @@ if (mainnetOff && (argv.includes("--mainnet") || (chainValue && !String(chainVal
 const gateKey = chainValue && !String(chainValue).startsWith("--") ? String(chainValue) : EVM_DEFAULT_CHAIN;
 const gateEntry = Object.hasOwn(EVM_CHAINS, gateKey) ? EVM_CHAINS[gateKey] : undefined;
 // On a mainnet the agent key must be in the OS keychain wherever it signs, or is granted a budget: setup stores it there
-// with --key-store os-keychain; revoke and recover, which stop or return money, never wait on it.
-const AGENT_KEY_SCRIPTS = new Set(["setBudget", "buy", "siteCall", "setup"]);
+// with --key-store os-keychain, and recover signs with it too. revoke, the owner's own transaction, never waits on it.
+const AGENT_KEY_SCRIPTS = new Set(["setBudget", "buy", "siteCall", "setup", "recover"]);
 const scriptName = basename(rel, ".ts");
 const movingToKeychain = scriptName === "setup" && argv.includes("--key-store") && argv[argv.indexOf("--key-store") + 1] === "os-keychain";
 const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token, agentKey: AGENT_KEY_SCRIPTS.has(scriptName) && !movingToKeychain }) : "";

@@ -52,6 +52,8 @@ import type { Signer } from "../../src/core/signer/types.js";
 import { termsFor } from "../../src/core/x402.js";
 import { accountHomeWith } from "../helpers/owner-settings.js";
 import { ApprovalServer } from "../../src/core/signer/approval-server.js";
+import { OwnerApprovalServer } from "../../src/core/signer/owner-approval-server.js";
+import { verdictSet } from "../../src/core/rpc.js";
 import { BrowserWalletSigner } from "../../src/core/signer/browser.js";
 import { LocalKeySigner } from "../../src/core/signer/local.js";
 import { SignRefused } from "../../src/core/signer/types.js";
@@ -309,5 +311,80 @@ describe("the approval page (browser signer)", () => {
     } finally {
       await signer.close();
     }
+  });
+
+  it("a page that handed out its authorization takes no signature back once mainnet signing is paused", async () => {
+    const signer = pageSigner();
+    try {
+      const { links, endings } = await open(signer, request(1, 91));
+      const address = wallet();
+      expect((await postJson(`${links[0]}/account`, { address })).status).toBe(200);
+      writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
+      const back = await postJson(`${links[0]}/signature`, { signature: `0x${"11".repeat(65)}` });
+      expect(back.status).toBe(409);
+      expect(String(back.body.error)).toMatch(/paused/);
+      const [ended] = await Promise.all(endings);
+      expect(ended).toBeInstanceOf(SignRefused);
+    } finally {
+      await signer.close();
+    }
+  });
+});
+
+describe("a budget owner page on a mainnet", () => {
+  const OWNER = privateKeyToAccount(generatePrivateKey()).address;
+  const terms = { title: "Approve a budget", amount: "1", unit: "USDC", summary: "Approve 1 USDC.", rows: [], enforced: [], notEnforced: [], notes: [] };
+  const mainChain = { chainId: 990001, chainName: "Example Main", rpcUrl: "http://127.0.0.1:1", explorer: "https://explorer.testmain.example", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, testnet: false };
+  const post = async (url: string, body: unknown) => {
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin: new URL(url).origin }, body: JSON.stringify(body) });
+    return { status: res.status, body: (await res.json().catch(() => ({}))) as Record<string, unknown> };
+  };
+  async function page() {
+    const server = new OwnerApprovalServer({ port: 0 });
+    await server.start();
+    const handle = server.request({ kind: "evm-transaction", chain: mainChain, terms, account: OWNER, transaction: { to: PAY_TO, data: "0x", value: "0x0" }, timeoutMs: 20_000 } as never);
+    return { server, handle };
+  }
+
+  it("hands out nothing, and never tells the wallet to send, once mainnet signing is paused", async () => {
+    const { server, handle } = await page();
+    try {
+      expect((await post(`${handle.url}/account`, { address: OWNER })).status).toBe(200);
+      writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
+      const sending = await post(`${handle.url}/sending`, { address: OWNER });
+      expect(sending.status).toBe(409);
+      expect(String(sending.body.error)).toMatch(/mainnet signing is paused/);
+      expect(sending.body.status).toBe("rejected");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("refuses at the first step once the operator's switch is off", async () => {
+    const { server, handle } = await page();
+    try {
+      vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "0");
+      const account = await post(`${handle.url}/account`, { address: OWNER });
+      expect(account.status).toBe(409);
+      expect(String(account.body.error)).toMatch(/^mainnet is off: /);
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("the endpoints that decide a mainnet verdict", () => {
+  it("never believe one RPC the caller pinned, while a testnet's still can", () => {
+    expect(verdictSet(TESTMAIN, { rpcUrlFor: () => "https://one.example" })).toMatchObject({ error: expect.stringMatching(/two RPC operators/) });
+    expect(verdictSet(BASE_SEPOLIA, { rpcUrlFor: () => "https://one.example" })).toMatchObject({ agreement: "caller", quorum: 1 });
+  });
+
+  it("take a caller's set only with two operators that must agree, or the owner's own node", () => {
+    const ep = (url: string, operator: string) => ({ url, operator, source: "caller" as const, id: url });
+    const one = { primary: ep("https://a.example", "a"), verdict: [ep("https://a.example", "a")], quorum: 1, agreement: "caller" as const };
+    const two = { primary: ep("https://a.example", "a"), verdict: [ep("https://a.example", "a"), ep("https://b.example", "b")], quorum: 2, agreement: "quorum" as const };
+    expect(verdictSet(TESTMAIN, { endpointsFor: () => one })).toMatchObject({ error: expect.any(String) });
+    expect(verdictSet(TESTMAIN, { endpointsFor: () => two })).toBe(two);
+    expect(verdictSet(TESTMAIN, { endpointsFor: () => ({ ...one, agreement: "owner-node" as const }) })).toMatchObject({ agreement: "owner-node" });
   });
 });

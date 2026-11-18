@@ -120,16 +120,16 @@ describe("the EVM mainnets with SUPERSTABLES_ALLOW_MAINNET=1", () => {
     expect(existsSync(join(home, "keys", "budget", "evm-agent.env"))).toBe(false);
   });
 
-  it("grant and buy refuse an agent key kept as plain text", () => {
+  it("grant, buy and recover refuse an agent key kept as plain text", () => {
     plainKey();
-    for (const name of ["setBudget", "buy"]) {
+    for (const name of ["setBudget", "buy", "recover"]) {
       const r = evm(name, ["--chain", "base"]);
       expect(r.code, name).toBe(3);
       expect(r.result?.reason, name).toMatch(KEYCHAIN);
     }
   });
 
-  it("read and revoke get past the gate, whatever the agent key file holds", () => {
+  it("read and revoke (the owner's own transaction) get past the gate, whatever the agent key file holds", () => {
     plainKey();
     for (const [name, args] of [["read", ["--chain", "base"]], ["revoke", ["--chain", "base", "--plan"]]] as const) {
       const r = evm(name, [...args]);

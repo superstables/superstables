@@ -30,6 +30,7 @@ import { readRegularFile } from "./secret-file.mjs";
 import { keccak256 } from "./keccak.mjs";
 import { RECORD_GONE, claim, isApprovalId, newApprovalId, readApproval, readStrict, recordFinal, recordFinalWith, release, saveApproval, updateApproval } from "./approvals.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
+import { mainnetEntry } from "../src/core/mainnet-policy.js";
 import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
@@ -58,6 +59,16 @@ export const ONCE_NETWORKS = {
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
 export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Test tokens, no real money.";
+/**
+ * The mainnet of the manifest a budget record is on (budget/command.mjs: evm only), or undefined on a testnet. Read from
+ * the manifest, not the chain table, so a record made while the switch was on still says so once it is off.
+ */
+export const recordMainnet = (rec) => (rec && rec.command !== "buy-once" && (rec.rail === undefined || rec.rail === "evm") ? mainnetEntry(String(rec.chain ?? "")) : undefined);
+/** The money line for a record: real money on a mainnet, the testnet line elsewhere. */
+export const moneyLineFor = (rec) => {
+  const m = recordMainnet(rec);
+  return m ? `This is ${m.label}, a mainnet: the money is real.\nSUPERSTABLES_ALLOW_MAINNET is on. Only the operator sets it; agents never set the variable.` : TESTNET_LINE;
+};
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";
 /** How long a wait reads on once a purchase's outcome is unknown (the owner's step is over) before it answers unknown. */
@@ -564,7 +575,7 @@ function termsOf(service, created, net) {
  * The `next` of every command that returns waiting_owner: the link is written for the owner first, and `wait` refuses
  * without --shown (cli.mjs), so an agent cannot poll before the owner can read it.
  */
-export const showFirst = (id, withCode = true) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Do not approve for the owner. ${TESTNET_LINE}`;
+export const showFirst = (id, withCode = true, rec = undefined) => `reply to the owner with message_for_owner, word for word (it has the approval link${withCode ? ", the code" : ""} and the amount), and end your turn there. When they say they've approved, run superstables budget wait --id ${id} --shown. Do not approve for the owner. ${moneyLineFor(rec)}`;
 /**
  * The `next` of a wait run without --shown: it read nothing (the owner may have acted since this machine last looked), so
  * it says nothing about whether the approval was approved or paid.
@@ -582,9 +593,10 @@ const shortAddress = (a) => (typeof a === "string" && a.length > 12 ? `${a.slice
 export function messageForOwner(r) {
   if (!r?.url) return null;
   const t = r.terms ?? {};
-  const network = EVM_CHAINS[r.chain]?.label ?? OTHER_NETWORKS[r.chain] ?? r.chain ?? "the testnet";
+  const mainnet = recordMainnet(r);
+  const network = mainnet?.label ?? EVM_CHAINS[r.chain]?.label ?? OTHER_NETWORKS[r.chain] ?? r.chain ?? "the testnet";
   const what = t.title ?? r.action ?? r.command ?? "this request";
-  const unit = !t.unit || t.unit === "USDC" ? "test USDC" : `${t.unit} (testnet)`;
+  const unit = mainnet ? (t.unit || mainnet.token.symbol) : !t.unit || t.unit === "USDC" ? "test USDC" : `${t.unit} (testnet)`;
   const hasAmount = t.amount != null && t.amount !== "";
   const hostedOn = typeof r.hosted?.site === "string"; // a site's link, not this client's own page
   const local = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])/.test(r.url);
@@ -607,7 +619,7 @@ export function messageForOwner(r) {
     r.command === "buy-once" && r.expectedPayer ? `Pay from ${shortAddress(r.expectedPayer)}.` : null,
     r.url,
     r.matchCode ? `Match code: ${r.matchCode} (pick it on the page)` : null,
-    `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${TESTNET_LINE}`,
+    `${hasAmount ? `${t.amount} ${unit} on ${network}.` : `On ${network}.`} ${moneyLineFor(r)}`,
     account,
     r.command === "buy-once" ? null : enforcementLine(r, t),
     expiry,

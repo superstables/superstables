@@ -135,11 +135,20 @@ export const rpcCaller = (options: RpcOptions) => (url: string, method: string, 
  */
 export function verdictSet(network: NetworkInfo, options: EndpointChoice = {}): EndpointSet {
   const given = options.endpointsFor?.(network);
-  if (given) return given;
+  if (given) return network.testnet || "error" in given || mainnetVerdictReady(given) ? given : { error: MAINNET_VERDICT_WORDS };
   const pinned = options.rpcUrlFor?.(network);
-  if (pinned) return callerSet(pinned);
+  // On a mainnet one pinned RPC is read, never believed alone: a verdict there takes the table's two operators or the owner's node.
+  if (pinned) return network.testnet ? callerSet(pinned) : { error: MAINNET_VERDICT_WORDS };
   const name = network.rpcEnv;
   return endpointSet(network.key, "verdict", { envUrl: name ? process.env[name] : undefined, envName: name, testnet: network.testnet });
+}
+
+const MAINNET_VERDICT_WORDS = "on a mainnet a verdict needs two RPC operators that agree, or the owner's own node in their settings; the RPC the caller chose is read, not believed alone";
+
+/** Whether a caller's endpoint set can decide a mainnet verdict: the owner's own node, or at least two operators that must agree. */
+function mainnetVerdictReady(set: Exclude<EndpointSet, { error: string }>): boolean {
+  if (set.agreement === "owner-node") return true;
+  return set.quorum >= 2 && new Set(set.verdict.map((e) => e.operator)).size >= set.quorum;
 }
 
 /**

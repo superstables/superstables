@@ -305,9 +305,9 @@ chain and refuses, before anyone is asked, when it is not the one the table stat
 answers for another chain. When a testnet's RPC cannot be read, `pay` goes on without that check (a
 wrong domain only makes a signature that does not verify) and reads again on the next payment. A
 budget grant never approves over a live allowance on any token, and a token that needs its
-allowance set to 0 first is never granted through an approval site such as superstables.com. A requirement naming anything else, every mainnet included, is refused before anyone is asked.
+allowance set to 0 first is never granted through an approval site such as superstables.com. A requirement naming anything else is refused before anyone is asked, and so is every mainnet while the operator's switch is off.
 
-Mainnet is off in this build, and the operator's switch does not turn it on by itself. The switch is the environment variable `SUPERSTABLES_ALLOW_MAINNET`,
+Mainnet is off unless the operator turns it on. The switch is the environment variable `SUPERSTABLES_ALLOW_MAINNET`,
 read in one place. `1` or `true` turns it on. Unset, empty, `0` or `false` leave it off. Any other value, such as `yes`,
 `TRUE` or ` 1`, is an error that names the variable and refuses every mainnet: a guess would turn a typo into a silent no or
 an unintended yes, on a switch that guards money. Only the operator sets it, in their own environment. An agent never does,
@@ -602,8 +602,7 @@ undo an owner signature or a transaction already sent through setup on superstab
   is here, and that the address was not retired. An edited public file is refused before any page
   opens. A public file from before this check has no signature: on testnet the command warns and
   goes on, and running `setup` again where the agent key is records one. Deleting the signature
-  lines makes a file look that old. On a chain that is not a testnet the command refuses such a file;
-  mainnet signing is off in this build, so that does not apply. The check proves
+  lines makes a file look that old. On a chain that is not a testnet the command refuses such a file. The check proves
   who the owner on record signed for, not who that owner is. `revoke` is never blocked by it.
 - **The checks depend on the rail.** The command builds the page's terms and the transaction
   from the same plan: the command's arguments and the chain's state, not the agent's description.

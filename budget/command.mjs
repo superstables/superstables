@@ -2699,9 +2699,9 @@ const backstopS = (cmd, f) => Number(f.timeout ?? 600) * (cmd === "setup" && (f.
  * the words after that, for a link on this computer.
  */
 const waitNext = (id, r = {}, end = "waiting_owner does not mean approved. If the approval link expires first, the command ends refused and nothing is sent: run it again for a new one. Do not start another owner command") => {
-  if (r.matchCode) return showFirst(id, true);
+  if (r.matchCode) return showFirst(id, true, r);
   const port = /^http:\/\/127\.0\.0\.1:(\d+)\//.exec(r.url ?? "")?.[1] ?? "PORT";
-  return `${showFirst(id, false)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. ${end}`;
+  return `${showFirst(id, false, r)} Only the owner uses the page, in the browser with their wallet. It is on this machine only: over SSH the owner first runs ssh -L ${port}:127.0.0.1:${port} user@this-host. ${end}`;
 };
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 /** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
@@ -3081,7 +3081,7 @@ async function wait({ f }) {
   if (walletWasAsked(rec, r.page)) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${finalWait(rec)}Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
   }
-  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true) : stillWaiting(rec.id), reason: words });
+  emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true, rec) : stillWaiting(rec.id), reason: words });
 }
 
 /**
