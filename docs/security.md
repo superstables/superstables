@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.4.0 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once; payments there move real money. This page says what each way to pay protects
+Superstables client 1.4.1 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once; payments there move real money. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -812,8 +812,8 @@ at the exact version its files name. In both apps, it reaches the Superstables t
 `https://mcp.superstables.com`. The checksum
 caveat below applies to the plugin zip as it does to the skill zip.
 
-For 1.4.0, use the agent skill zip attached to the 1.4.0 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-skill-1.4.0.zip`;
+For 1.4.1, use the agent skill zip attached to the 1.4.1 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-skill-1.4.1.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
