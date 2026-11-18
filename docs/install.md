@@ -9,7 +9,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
 
 - Node 22 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
-- Network access to sellers and testnet RPCs, and to the approval site when using approvals on superstables.com.
+- Network access to sellers and testnet RPCs (mainnet RPCs too while the operator's switch is on), and to the approval site when using approvals on superstables.com.
 - For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:
   an EVM wallet for EVM/Tempo, or a Solana wallet for a Solana budget. On the same machine, use
   a browser extension wallet. Over SSH, forward the approval link's port first:
@@ -30,7 +30,7 @@ agent key on that runtime. Test-token and gas requirements belong to the chosen
 [Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs, the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
+testnet RPCs (mainnet RPCs too while the operator's switch is on), the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
 interactive `superstables doctor`, the npm registry (`SUPERSTABLES_NO_UPDATE_CHECK=1` turns that off).
 
 ## Install

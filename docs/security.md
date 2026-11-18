@@ -940,7 +940,7 @@ checks above do not apply to it. A mainnet purchase read after the switch is off
 when this client reads the payment on that chain, and it is never read as a testnet purchase.
 
 While the switch is off, every budget command refuses a mainnet chain, `revoke` included. To revoke a mainnet budget then,
-the operator turns the switch on for that command, or set the allowance to 0 from your wallet on the chain itself.
+the operator turns the switch on for that command, or the owner sets the allowance to 0 from their wallet on the chain itself.
 
 **What is still outside the code.**
 
