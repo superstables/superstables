@@ -324,10 +324,13 @@ export function siteFor(purpose, candidate, options = {}) {
   return { error: `${origin} is not an approval site the owner allows: approvals use ${s.site.origin} unless the owner runs ${ownerCommand} in their own terminal (an agent never does)`, ownerCommand };
 }
 
-/** The settings key of a budget rail and chain: the core chain table's key ("base-sepolia", "tempo-moderato", "solana-devnet"). */
+/**
+ * The settings key of a budget rail and chain: the core chain table's key ("base-sepolia", "tempo-moderato",
+ * "solana-devnet"). A Tempo or Solana mainnet is its manifest key ("tempo", "solana"); a rail with no chain is its testnet.
+ */
 export function budgetChainKey(rail, chain) {
-  if (rail === "tempo") return "tempo-moderato";
-  if (rail === "solana") return "solana-devnet";
+  if (rail === "tempo") return chain === undefined || chain === "moderato" ? "tempo-moderato" : chain;
+  if (rail === "solana") return chain === undefined || chain === "devnet" ? "solana-devnet" : chain;
   return chain === "moderato" ? "tempo-moderato" : chain === "devnet" ? "solana-devnet" : chain;
 }
 

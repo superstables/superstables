@@ -39,14 +39,14 @@ export const MAINNET_PREREQUISITES = Object.freeze([
   "the agent key kept in the OS keychain, not as plain text",
 ]);
 
-/** @type {{ verdictRpc?: (chainKey: string) => unknown, agentKeyStore?: (rail: string) => unknown }} */
+/** @type {{ verdictRpc?: (chainKey: string) => unknown, agentKeyStore?: (rail: string, chainKey: string) => unknown }} */
 const checks = {};
 
 /**
  * Registers the check behind a prerequisite that needs files: "verdictRpc" (rpc-endpoints.mjs) or "agentKeyStore"
  * (budget/os-keychain.mjs). undefined removes it. Any other name throws: it is a mistake in this program.
  * @param {"verdictRpc" | "agentKeyStore"} name
- * @param {((arg: string) => unknown) | undefined} check
+ * @param {((arg: string, chainKey: string) => unknown) | undefined} check  verdictRpc gets the chain key; agentKeyStore the rail and the chain key
  */
 export function setPrerequisiteCheck(name, check) {
   if (name !== "verdictRpc" && name !== "agentKeyStore") throw new Error(`no prerequisite check is named ${String(name)}`);
@@ -76,7 +76,7 @@ export function chainPrerequisitesMissing(chain) {
       const seconds = finalityProfile(rail, finalityName(rail, key)).typicalSeconds;
       return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0;
     }),
-    chain?.agentKey === true ? passes(() => (rail && checks.agentKeyStore ? checks.agentKeyStore(rail) : false)) : true,
+    chain?.agentKey === true ? passes(() => (rail && checks.agentKeyStore ? checks.agentKeyStore(rail, key) : false)) : true,
   ];
   return MAINNET_PREREQUISITES.filter((_, i) => !ok[i]);
 }

@@ -13,7 +13,7 @@
 import { SETTINGS_COMMAND, budgetChainKey, rpcFor, shownUrl } from "../src/core/owner-settings.js";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { readCapped } from "./response.mjs";
-import { RPC_TESTNETS, endpointSet } from "../src/core/rpc-endpoints.mjs";
+import { RPC_ENDPOINTS, RPC_TESTNETS, endpointSet } from "../src/core/rpc-endpoints.mjs";
 import { siteText } from "./site.mjs";
 
 /** The most read of one answer by jsonRpc and the Tempo rail: far more than a receipt, a block without its transactions or a filtered log search returns. */
@@ -25,6 +25,16 @@ export const SOLANA_RPC_MAX_BYTES = 16_000_000;
 
 export const RPC_ENV = { evm: "B4_RPC", tempo: "SUPERSTABLES_TEMPO_RPC", solana: "SUPERSTABLES_SOLANA_RPC" };
 export const DEFAULT_RPC = { tempo: "https://rpc.moderato.tempo.xyz", solana: "https://api.devnet.solana.com" };
+/**
+ * The built-in RPC of a budget rail and chain: the chain table's (evm/chains.mjs), else the first of the RPC table
+ * (src/core/rpc-endpoints.mjs), which holds a Tempo or Solana mainnet only while the operator's switch is on. undefined for
+ * a chain neither table holds: nothing is read in its place.
+ */
+export function builtinRpc(rail, chain) {
+  if (rail === "evm") return EVM_CHAINS[chain]?.rpc;
+  const key = budgetChainKey(rail, chain);
+  return Object.hasOwn(RPC_ENDPOINTS, key) ? RPC_ENDPOINTS[key][0]?.url : undefined;
+}
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
@@ -105,7 +115,7 @@ export function evmRpcFromEnv(chainKey, fallback, purpose = "read") {
 export function ownerRpcProblem(rail, chain) {
   const name = rpcEnvNameFor(rail, chain);
   if (!name) return "";
-  const builtin = rail === "evm" ? EVM_CHAINS[chain]?.rpc : DEFAULT_RPC[rail];
+  const builtin = builtinRpc(rail, chain);
   return rpcFor(budgetChainKey(rail, chain), "owner", process.env[name], { envName: name, fallback: builtin }).error ?? "";
 }
 /** What to do about it. */

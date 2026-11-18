@@ -15,7 +15,7 @@ export const KEYCHAIN_REFUSED = "KEYCHAIN_REFUSED";
 
 // What a secret may look like before it goes anywhere near `security -i`'s tokenizer: an EVM key, or a base58 Solana key.
 const SECRET_RE = /^(0x[0-9a-f]{64}|[1-9A-HJ-NP-Za-km-z]{80,90})$/;
-const ADDRESS_RE = { evm: /^0x[0-9a-fA-F]{40}$/, solana: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ };
+const ADDRESS_RE = { evm: /^0x[0-9a-fA-F]{40}$/, tempo: /^0x[0-9a-fA-F]{40}$/, solana: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/ };
 const TIMEOUT_MS = 10_000;
 const MAX_BUFFER = 64 * 1024;
 
@@ -71,7 +71,7 @@ function toolOrThrow(platform) {
 
 function checkIds(rail, address) {
   const syntax = ADDRESS_RE[rail];
-  if (!syntax) throw refused(`the keychain holds evm and solana agent keys, not ${String(rail).slice(0, 20)}`);
+  if (!syntax || !Object.hasOwn(ADDRESS_RE, rail)) throw refused(`the keychain holds evm, tempo and solana agent keys, not ${String(rail).slice(0, 20)}`);
   if (typeof address !== "string" || !syntax.test(address)) throw refused(`not an ${rail} address: ${String(address).slice(0, 60)}`);
   return `${rail}:${address}`;
 }
@@ -86,7 +86,7 @@ function failure(err) {
 /**
  * Puts an agent key in the keychain, from standard input. Reads it back and compares, because `security -i` can report a
  * failed command without a failing exit status. Throws, and stores nothing it cannot read back, otherwise.
- * @param {"evm" | "solana"} rail
+ * @param {"evm" | "tempo" | "solana"} rail
  * @param {string} address
  * @param {string} secret
  * @param {typeof execFileSync} [run]
@@ -116,7 +116,7 @@ export function storeAgentSecret(rail, address, secret, run = execFileSync, plat
 
 /**
  * The agent key in the keychain. Throws "the agent key for <address> is not in the keychain" when there is none.
- * @param {"evm" | "solana"} rail
+ * @param {"evm" | "tempo" | "solana"} rail
  * @param {string} address
  * @param {typeof execFileSync} [run]
  * @param {NodeJS.Platform} [platform]
@@ -143,7 +143,7 @@ export function readAgentSecret(rail, address, run = execFileSync, platform = pr
 
 /**
  * Removes an agent key's entry. An entry that is not there is not an error.
- * @param {"evm" | "solana"} rail
+ * @param {"evm" | "tempo" | "solana"} rail
  * @param {string} address
  * @param {typeof execFileSync} [run]
  * @param {NodeJS.Platform} [platform]
@@ -163,26 +163,36 @@ export function deleteAgentSecret(rail, address, run = execFileSync, platform = 
 }
 
 const STORE_LINES = { evm: ["B4_AGENT_KEY_STORE", "B4_AGENT_KEY"], solana: ["SOLANA_AGENT_KEY_STORE", "SOLANA_AGENT_SECRET_BASE58"] };
+/** The line a Tempo agent file names the keychain with. Every key in such a file (AGENT<label>_ADDRESS) is in the keychain. */
+export const TEMPO_STORE_LINE = "AGENT_KEY_STORE";
 
 /**
  * How this machine keeps the rail's agent key: "os-keychain" (the file names the keychain and holds no key), "file",
- * "absent", or "unreadable" (not a regular file, too large, or unreadable). Keeps nothing it read. Tempo is always "file".
+ * "absent", or "unreadable" (not a regular file, too large, or unreadable). Keeps nothing it read. A Tempo file holds
+ * several keys (AGENT_PRIVATE_KEY, AGENT2_PRIVATE_KEY, ...): it is "os-keychain" only when it names the keychain and holds
+ * no private key under any label.
  * @param {string} rail
  * @param {string} [path]
  * @returns {"os-keychain" | "file" | "absent" | "unreadable"}
  */
 export function agentKeyStorage(rail, path = agentKeyFile(rail)) {
-  const names = Object.hasOwn(STORE_LINES, rail) ? STORE_LINES[rail] : undefined;
   let text;
   try {
     text = readRegularFile(path, "agent key file");
   } catch (err) {
     return /** @type {any} */ (err)?.code === "ENOENT" ? "absent" : "unreadable";
   }
-  if (!names) return "file";
   const lines = new Map(text.split(/\r?\n/).map((l) => l.match(/^([A-Za-z0-9_]+)=(.*)$/)).filter(Boolean).map((m) => [m[1], m[2]]));
+  if (rail === "tempo") {
+    const anyKey = [...lines.keys()].some((k) => /PRIVATE/i.test(k));
+    return lines.get(TEMPO_STORE_LINE) === "os-keychain" && !anyKey ? "os-keychain" : "file";
+  }
+  const names = Object.hasOwn(STORE_LINES, rail) ? STORE_LINES[rail] : undefined;
+  if (!names) return "file";
   return lines.get(names[0]) === "os-keychain" && !lines.get(names[1]) ? "os-keychain" : "file";
 }
 
-// The chain gate's key prerequisite (src/core/chain-gate.js): this rail's agent key file names the keychain and holds no key.
-setPrerequisiteCheck("agentKeyStore", (rail) => agentKeyStorage(String(rail)) === "os-keychain");
+// The chain gate's key prerequisite (src/core/chain-gate.js): the agent key file of this rail and chain names the keychain
+// and holds no key. On tempo the chain picks the file (paths.mjs agentKeyFile); `chainKey` is the gate's key, which on a
+// mainnet is the --chain key.
+setPrerequisiteCheck("agentKeyStore", (rail, chainKey) => agentKeyStorage(String(rail), agentKeyFile(String(rail), typeof chainKey === "string" ? chainKey : undefined)) === "os-keychain");
