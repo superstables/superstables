@@ -839,6 +839,67 @@ describe("find and quote output for a listing that carries a referral", () => {
   }, 90_000);
 });
 
+// ── quote on a mainnet: the network says so ──────────────────────────────────────────
+
+describe("quote against a local seller on Base mainnet", () => {
+  let seller: TestServer;
+  let testnet: TestServer;
+  const PAY_TO = `0x${"33".repeat(20)}`;
+  // Base mainnet's USDC, as the mainnet manifest names it. Nothing here reaches a chain: quote only reads the 402.
+  const offer = {
+    scheme: "exact",
+    network: "eip155:8453",
+    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    amount: "50000",
+    payTo: PAY_TO,
+    maxTimeoutSeconds: 300,
+    extra: { name: "USD Coin", version: "2" },
+  };
+  const challenge = (url: string, accept: unknown) => Buffer.from(JSON.stringify({ x402Version: 2, resource: { url }, accepts: [accept] })).toString("base64");
+
+  beforeAll(async () => {
+    seller = await startServer((req, res) => {
+      const url = `${seller.url}${req.url ?? "/"}`;
+      res.writeHead(402, { "content-type": "application/json", "payment-required": challenge(url, offer) });
+      res.end("{}");
+    });
+    testnet = await startServer((req, res) => {
+      const url = `${testnet.url}${req.url ?? "/"}`;
+      res.writeHead(402, { "content-type": "application/json", "payment-required": challenge(url, { ...offer, network: DEFAULT_NETWORK.caip2, asset: DEFAULT_NETWORK.token.address, extra: { ...DEFAULT_NETWORK.token.domain } }) });
+      res.end("{}");
+    });
+  });
+
+  afterAll(async () => {
+    await Promise.all([seller.close(), testnet.close()]);
+  });
+
+  it("with the operator's switch on, names the network as a mainnet, as a testnet quote says (testnet)", async () => {
+    const r = await run(["quote", `${seller.url}/paid/intel`], { SUPERSTABLES_ALLOW_MAINNET: "1" });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^\s*price\s+0\.05 USDC/m);
+    expect(r.stdout).toMatch(/^\s*network\s+Base \(mainnet\)$/m);
+    const quote = JSON.parse((await run(["quote", `${seller.url}/paid/intel`, "--json"], { SUPERSTABLES_ALLOW_MAINNET: "1" })).stdout) as { terms: { network: string } };
+    expect(quote.terms.network).toBe("eip155:8453");
+  });
+
+  it("with the switch off, takes no quote for it", async () => {
+    const r = await run(["quote", `${seller.url}/paid/intel`]);
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toMatch(/^\s*network\s+Base/m);
+  });
+
+  it.each([["off", {}], ["on", { SUPERSTABLES_ALLOW_MAINNET: "1" }]] as const)(
+    "on a testnet, with the switch %s, says (testnet) and nothing about real money",
+    async (_label, env) => {
+      const r = await run(["quote", `${testnet.url}/paid/intel`], env);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toMatch(/^\s*network\s+Base Sepolia \(testnet\)$/m);
+      expect(r.stdout).not.toMatch(/mainnet/);
+    },
+  );
+});
+
 // ── find: the commands for each listing fit the ways it can be paid ──────────────────
 
 describe("find against a local index", () => {
@@ -862,6 +923,17 @@ describe("find against a local index", () => {
       payment: { rail: "x402", scheme: "exact", network: "eip155:84532", asset: "USDC", price: { amountDecimal: 0.003, asset: "USDC", display: "0.003 USDC per request" } },
       testnet: true,
       mock: true,
+    },
+    {
+      // It lists its parameters, but has no payout address: hidden by default for that, not for missing parameters.
+      id: "unpaid.example",
+      name: "Unpaid qqzv",
+      description: "A catalogue listing with no payout address.",
+      endpoint: `${index.url}/paid/unpaid`,
+      method: "GET",
+      params: [{ name: "asset", in: "query", required: true, example: "BTC" }],
+      payment: { rail: "x402", scheme: "exact", network: "eip155:84532", asset: "USDC", configured: false },
+      testnet: true,
     },
   ];
 
@@ -931,16 +1003,19 @@ describe("find against a local index", () => {
     expect(builtIn.services.find((s) => s.id === "superstables-demo-market-data")?.mock).toBe(false);
   });
 
-  it("says how many matching listings the default filter hides, in the table and in --json, and not with --all", async () => {
-    // Index rows do not list their parameters, so pay cannot call any of the four: all are hidden by default.
-    const hidden = /4 matching listings are not shown because `superstables pay` cannot call them \(for example on a mainnet while the operator's switch is off, or not https\); `find --all` lists them with the reason\./;
+  it("says how many matching listings the default filter hides, and why, in the table and in --json, and not with --all", async () => {
+    // Index rows do not list their parameters, so pay cannot call any of the four as listed: all are hidden by default.
+    // Three are on testnets pay pays on (pay: with params); the mainnet one is refused while the switch is off.
+    const hidden =
+      "4 matching listings are not shown: for 3, the index does not record the request parameters `superstables pay` needs (pay: with params); " +
+      "`superstables pay` cannot call the other 1 (for example on a mainnet while the operator's switch is off, or not https). `find --all` lists them with the reason.";
     const table = await find();
     expect(table.code).toBe(0);
-    expect(table.stdout).toMatch(hidden);
+    expect(table.stdout).toContain(`note: ${hidden}`);
 
     const { stdout } = await find("--json");
     const { warnings } = JSON.parse(stdout) as { warnings: string[] };
-    expect(warnings.some((w) => hidden.test(w))).toBe(true);
+    expect(warnings).toContain(hidden);
 
     // --budget words it by the budget rail: only the mainnet row is dropped
     const budgetTable = await find("--budget");
@@ -954,6 +1029,37 @@ describe("find against a local index", () => {
     expect(all.stdout).not.toMatch(/matching listings? (is|are) not shown/);
     const allJson = JSON.parse((await find("--all", "--json")).stdout) as { warnings: string[] };
     expect(allJson.warnings.some((w) => /not shown because/.test(w))).toBe(false);
+  });
+
+  it("does not blame missing parameters for a catalogue listing hidden for another reason", async () => {
+    const r = await run(["find", "qqzv", "--demo"], { SUPERSTABLES_INDEX_URL: "off", SUPERSTABLES_CATALOGUE_URL: `${index.url}/catalogue` });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(
+      "note: 1 matching listing is not shown because `superstables pay` cannot call it (for example on a mainnet while the operator's switch is off, or not https); `find --all` lists it with the reason.",
+    );
+    expect(r.stdout).not.toContain("pay: with params");
+  });
+
+  it("with the operator's switch on, hides a mainnet listing without parameters as a testnet one is hidden, and says why", async () => {
+    const on = (...args: string[]) =>
+      run(["find", "zzqx", ...args], { SUPERSTABLES_INDEX_URL: `${index.url}/api/v1/services`, SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_ALLOW_MAINNET: "1" });
+    const table = await on();
+    expect(table.code).toBe(0);
+    // The mainnet row is pay: with params now, exactly like the three testnet rows, and none of them blames the switch.
+    expect(table.stdout).toContain(
+      "note: 4 matching listings are not shown because the index does not record the request parameters `superstables pay` needs (pay: with params); " +
+        "`find --all` lists them, with the command that quotes each once its parameters are filled in.",
+    );
+    expect(table.stdout).not.toMatch(/switch is off/);
+
+    const all = await on("--all", "--json");
+    const { services } = JSON.parse(all.stdout) as { services: { id: string; actionable: boolean; routes: { pay: boolean } }[] };
+    for (const id of ["sats.example", "main.example"]) {
+      expect(services.find((s) => s.id === id)).toMatchObject({ actionable: false, routes: { pay: true } });
+    }
+
+    const budget = await on("--budget");
+    expect(`${budget.stdout}\n${budget.stderr}`).not.toMatch(/switch is off/);
   });
 
   it("tells the reader that listing text is the listing's own words, in the output and in the help", async () => {
