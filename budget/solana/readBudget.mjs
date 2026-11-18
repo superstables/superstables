@@ -16,6 +16,7 @@ import {
   parseEnvFile,
   parseStrict,
   parsePubkeyFlag,
+  CHAIN_FLAG,
   clusterProblem,
   oneLine,
   agreedAccount,
@@ -43,7 +44,7 @@ if (cluster) {
 
 const ownerPk = ownerFlag ?? readPublic().owner;
 if (!ownerPk) {
-  console.error(`Owner address unknown: pass --owner <address> or create ${PUBLIC_PATH} (superstables budget setup --rail solana writes it).`);
+  console.error(`Owner address unknown: pass --owner <address> or create ${PUBLIC_PATH} (superstables budget setup --rail solana${CHAIN_FLAG} writes it).`);
   process.exit(1);
 }
 // A revoke this machine recorded (revokeBudget writes REVOKED_AT in the public file), for the owner that file records only.

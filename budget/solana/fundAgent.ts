@@ -11,7 +11,7 @@
 // expired) or a mismatch (the transaction moved another amount), 5 unknown (read the chain).
 import { rpcPause } from "../rpc-pause.mjs";
 import { SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import { CLUSTER_NEXT, U64_MAX, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead } from "./lib.mjs";
+import { CHAIN_FLAG, CLUSTER_NEXT, U64_MAX, getSolHint, clusterProblem, connection, loadOwner, oneLine, explorerTx, parseUnits, parseStrict, usageError, ownerPlanCtx, retryRead } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, fundTerms, sol, transactionPort, finalizedOf, LANDED_SOLANA_FUND } from "./owner.ts";
@@ -19,7 +19,7 @@ import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.t
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
-Owner command. Sends the agent SOL for transaction fees (default 0.01). Devnet only.
+Owner command. Sends the agent SOL for transaction fees (default 0.01). Devnet, or mainnet while the operator's switch is on.
 The owner approves it in their own wallet on a page this command opens on 127.0.0.1, or on
 superstables.com when the chain was set up with --hosted.
 
@@ -52,7 +52,7 @@ const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, ch
 const ownerHas = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
 const agentHas = BigInt(await retryRead(() => conn.getBalance(agent, "confirmed")));
 console.log(`owner ${owner.toBase58()} ${sol(ownerHas)} SOL, agent ${agent.toBase58()} ${sol(agentHas)} SOL`);
-if (ownerHas < amount + MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(ownerHas)} SOL, less than ${sol(amount)} plus the fee`, "get devnet SOL (faucet.solana.com), then fund the agent again");
+if (ownerHas < amount + MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(ownerHas)} SOL, less than ${sol(amount)} plus the fee`, getSolHint("fund the agent again"));
 
 const ix = () => [SystemProgram.transfer({ fromPubkey: owner, toPubkey: agent, lamports: amount })];
 let sig: string;
@@ -83,20 +83,20 @@ if (OWNER_KEY_FILE) {
   if (c.status === "unknown") {
     handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
-    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget doctor --rail solana: read the agent's SOL" }));
+    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: `superstables budget doctor --rail solana${CHAIN_FLAG}: read the agent's SOL` }));
   }
   if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The transfer is not confirmed. Check the command result and wallet activity before retrying.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: "superstables budget doctor --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: `superstables budget doctor --rail solana${CHAIN_FLAG}` }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
     handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig, { what: "transfer", ended: c.status === "failed" ? "failed on chain" : undefined }), hash: sig });
     await closeOwnerPage();
-    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
+    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: `check the owner's wallet activity, then superstables budget doctor --rail solana${CHAIN_FLAG}` }));
   }
   const i = c.accountKeys!.indexOf(agent.toBase58());
   if (i >= 0) delta = BigInt(c.meta.postBalances[i]) - BigInt(c.meta.preBalances[i]);
@@ -116,14 +116,14 @@ if (delta !== null && delta !== amount) {
   console.log(`MISMATCH: ${why}`);
   finish?.({ outcome: "unknown", message: `The transfer was not confirmed as the planned step: ${why}.`, hash: sig });
   await closeOwnerPage();
-  process.exit(result(3, { state: "mismatch", tx: sig, reason: why, next: "check the owner's wallet activity, then superstables budget doctor --rail solana" }));
+  process.exit(result(3, { state: "mismatch", tx: sig, reason: why, next: `check the owner's wallet activity, then superstables budget doctor --rail solana${CHAIN_FLAG}` }));
 }
 if (delta === null && after < agentHas + amount) {
   const why = `the transaction landed, but the agent's balance reads ${sol(after)} SOL, not at least ${sol(agentHas + amount)} SOL (the node may lag behind, or the agent spent some meanwhile)`;
   console.log(`UNKNOWN: ${why}`);
   finish?.({ outcome: "unknown", message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: sig });
   await closeOwnerPage();
-  process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: "superstables budget doctor --rail solana: read the agent's SOL" }));
+  process.exit(result(5, { state: "unknown", tx: sig, reason: why, next: `superstables budget doctor --rail solana${CHAIN_FLAG}: read the agent's SOL` }));
 }
 if (after < agentHas + amount) console.log(`the agent's balance reads ${sol(after)} SOL now, less than ${sol(agentHas + amount)}: it spent some, or the node lags behind; the transaction itself moved ${sol(amount)} SOL`);
 // Final: the transfer's signature reaches finalized (waiting up to a minute); before that it is landed.
@@ -132,4 +132,4 @@ const final = fin.final && !fin.failed;
 if (!final) console.log("The transfer is in a block, but the transaction is not finalized yet.");
 finish?.({ outcome: "confirmed", message: final ? `Done. Your agent received ${sol(amount)} SOL. You can close this page.` : LANDED_SOLANA_FUND, hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : "landed, not finalized yet: the transfer is final once its transaction is finalized. Start the next owner command (grant) only then. superstables budget doctor --rail solana reads the balance" }));
+process.exit(result(0, { state: final ? "ok" : "landed", final, tx: sig, sent: sol(amount), agentBefore: sol(agentHas), agentAfter: sol(after), next: final ? "none" : `landed, not finalized yet: the transfer is final once its transaction is finalized. Start the next owner command (grant) only then. superstables budget doctor --rail solana${CHAIN_FLAG} reads the balance` }));

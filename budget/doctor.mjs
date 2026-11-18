@@ -17,14 +17,25 @@ import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
+import { SOLANA_CHAINS } from "./solana/chains.mjs";
 import { staleOwnerLine } from "./evm-owner-line.mjs";
-import { TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
+import { TEMPO_CHAINS, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
 const rpcEnv = (name, fallback, chainKey) => rpcFromEnv(name, fallback, "read", chainKey).url;
-const SOLANA = { rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "solana-devnet"), usdcMint: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
-const TEMPO = { rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", DEFAULT_RPC.tempo, "tempo-moderato"), chainId: 42431, pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+/** A Solana chain's facts for doctor (solana/chains.mjs: the dispatcher's process has no CHAIN of its own), with its RPC and minimums. */
+const solanaChain = (key) => {
+  const c = SOLANA_CHAINS[key];
+  if (!c) throw new Error(`${key} is not a Solana chain this process holds`);
+  return { ...c, rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", c.rpc, c.gateKey), usdcMint: c.mint, minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
+};
+/** A Tempo chain's facts for doctor (tempo/lib/constants.mjs: the dispatcher's process has no CHAIN of its own), with its RPC. A mainnet is there only while the operator's switch is on. */
+const tempoChain = (key) => {
+  const c = TEMPO_CHAINS[key];
+  if (!c) throw new Error(`${key} is not a Tempo chain this process holds`);
+  return { ...c, rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", c.rpc, c.gateKey), pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+};
 
 const rpc = (url, method, params = []) => jsonRpc(url, method, params);
 const erc20Balance = async (url, token, addr, decimals) => Number(BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + addr.slice(2).toLowerCase().padStart(64, "0") }, "latest"]))) / 10 ** decimals;
@@ -54,9 +65,9 @@ const solanaKeyAddress = async (v) => {
   const bytes = bs58.decode(v);
   return bytes.length === 64 ? bs58.encode(bytes.slice(32)) : null;
 };
-const solBalance = async (addr) => (await rpc(SOLANA.rpc, "getBalance", [addr, { commitment: "confirmed" }])).value / 1e9;
-const splBalance = async (addr) => {
-  const r = await rpc(SOLANA.rpc, "getTokenAccountsByOwner", [addr, { mint: SOLANA.usdcMint }, { encoding: "jsonParsed", commitment: "confirmed" }]);
+const solBalance = async (c, addr) => (await rpc(c.rpc, "getBalance", [addr, { commitment: "confirmed" }])).value / 1e9;
+const splBalance = async (c, addr) => {
+  const r = await rpc(c.rpc, "getTokenAccountsByOwner", [addr, { mint: c.usdcMint }, { encoding: "jsonParsed", commitment: "confirmed" }]);
   return r.value.reduce((sum, a) => sum + Number(a.account.data.parsed.info.tokenAmount.uiAmountString), 0);
 };
 
@@ -104,29 +115,49 @@ const RAILS = {
       },
     };
   },
-  tempo: ({ agent = "" }) => ({
-    ownerVars: null, agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"], agentKeyVar: `AGENT${agent}_PRIVATE_KEY`,
-    pub: publicFile("tempo", "moderato"), ownerAddr: "OWNER_ADDRESS", agentAddr: `AGENT${agent}_ADDRESS`,
-    setup: agent ? `superstables budget setup --rail tempo --agent ${agent}` : "superstables budget setup --rail tempo",
-    keyAddress: evmKeyAddress, caseSensitive: false,
-    rpc: async () => { const id = Number(await rpc(TEMPO.rpc, "eth_chainId")); if (id !== TEMPO.chainId) throw new Error(`chain id ${id}, expected ${TEMPO.chainId}`); return `chain id ${id}`; },
-    // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds.
-    balances: async (owner) => [
-      { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(TEMPO.rpc, TEMPO.pathUsd, owner, PATH_USD_DECIMALS), need: TEMPO.minOwner, hint: "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" },
-    ],
-  }),
-  solana: () => ({
-    ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58", storeVar: "SOLANA_AGENT_KEY_STORE",
-    pub: publicFile("solana", "devnet"), ownerAddr: "SOLANA_OWNER_ADDRESS", agentAddr: "SOLANA_AGENT_ADDRESS",
-    setup: "superstables budget setup --rail solana",
-    keyAddress: solanaKeyAddress, caseSensitive: true,
-    rpc: async () => `solana ${(await rpc(SOLANA.rpc, "getVersion"))["solana-core"]}`,
-    balances: async (owner, agent) => [
-      { who: "owner", addr: owner, token: "SOL", have: await solBalance(owner), need: SOLANA.minOwnerSol, hint: "solana airdrop 1 <address> --url devnet, or faucet.solana.com" },
-      { who: "owner", addr: owner, token: "USDC", have: await splBalance(owner), need: SOLANA.minOwnerUsdc, hint: "faucet.circle.com, Solana devnet" },
-      { who: "agent", addr: agent, token: "SOL (fees)", have: await solBalance(agent), need: SOLANA.minAgentSol, hint: `superstables budget fund-agent --rail solana (you approve it in your wallet), or send 0.01 SOL to ${agent}` },
-    ],
-  }),
+  tempo: ({ agent = "", chain = "moderato" }) => {
+    const c = tempoChain(chain);
+    const flag = c.testnet ? "" : ` --chain ${c.key}`;
+    return {
+      ownerVars: null, agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"], agentKeyVar: `AGENT${agent}_PRIVATE_KEY`,
+      // the mainnet's agent file is its own (paths.mjs), and names the OS keychain with AGENT_KEY_STORE
+      agentFile: agentKeyFile("tempo", c.key), storeVar: c.testnet ? undefined : "AGENT_KEY_STORE",
+      pub: publicFile("tempo", c.key), ownerAddr: "OWNER_ADDRESS", agentAddr: `AGENT${agent}_ADDRESS`,
+      setup: agent ? `superstables budget setup --rail tempo${flag} --agent ${agent}` : `superstables budget setup --rail tempo${flag}`,
+      mainnetKeyFix: c.testnet ? undefined : `superstables budget setup --rail tempo${flag} --key-store os-keychain`,
+      keyAddress: evmKeyAddress, caseSensitive: false,
+      rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
+      // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds. A mainnet has no faucet.
+      balances: async (owner) => [
+        { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(c.rpc, c.pathUsd, owner, PATH_USD_DECIMALS), need: c.minOwner, hint: c.faucet ? "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" : "the owner adds pathUSD to this wallet (network fees are paid in it)" },
+      ],
+    };
+  },
+  solana: ({ chain }) => {
+    const c = solanaChain(chain ?? "devnet");
+    const flag = c.key === "devnet" ? "" : ` --chain ${c.key}`;
+    return {
+      ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58", storeVar: "SOLANA_AGENT_KEY_STORE",
+      pub: publicFile("solana", c.key), ownerAddr: "SOLANA_OWNER_ADDRESS", agentAddr: "SOLANA_AGENT_ADDRESS",
+      setup: `superstables budget setup --rail solana${flag}`, newOwner: `superstables budget setup --rail solana${flag} --new-owner`,
+      mainnetKeyFix: c.testnet ? undefined : `superstables budget setup --rail solana${flag} --key-store os-keychain`,
+      keyAddress: solanaKeyAddress, caseSensitive: true,
+      // a mainnet has no faucet: the owner adds SOL and USDC
+      rpc: async () => {
+        // a mainnet's RPC must answer that mainnet's genesis (a devnet fake in the tests answers getVersion only)
+        if (!c.testnet) {
+          const genesis = await rpc(c.rpc, "getGenesisHash");
+          if (genesis !== c.genesis) throw new Error(`genesis hash ${String(genesis).slice(0, 12)}..., expected ${c.label}'s`);
+        }
+        return `solana ${(await rpc(c.rpc, "getVersion"))["solana-core"]} (${c.label})`;
+      },
+      balances: async (owner, agent) => [
+        { who: "owner", addr: owner, token: "SOL", have: await solBalance(c, owner), need: c.minOwnerSol, hint: c.faucet ? "solana airdrop 1 <address> --url devnet, or faucet.solana.com" : "the owner adds SOL to this wallet" },
+        { who: "owner", addr: owner, token: "USDC", have: await splBalance(c, owner), need: c.minOwnerUsdc, hint: c.faucet ? "faucet.circle.com, Solana devnet" : "the owner adds USDC to this wallet" },
+        { who: "agent", addr: agent, token: "SOL (fees)", have: await solBalance(c, agent), need: c.minAgentSol, hint: `superstables budget fund-agent --rail solana${flag} (you approve it in your wallet), or send 0.01 SOL to ${agent}` },
+      ],
+    };
+  },
 };
 
 // Each file is opened once, non-blocking, and must be a regular file of a sane size (./secret-file.mjs): a FIFO in place
@@ -205,14 +236,15 @@ function newOwnerCmd(r, f, pub) {
 /** Runs every check for f.rail (and f.chain, f.agent), prints one line per check to stderr, returns the number that failed. */
 export async function runDoctor(f) {
   const r = RAILS[f.rail](f);
+  const agentPath = r.agentFile ?? agentKeyFile(f.rail); // tempo mainnet has its own agent file
   let failed = 0;
   const topUps = [];
   const line = (ok, what, detail) => { if (!ok) failed++; process.stderr.write(`  ${ok ? "ok  " : "FAIL"}  ${what}${detail ? `: ${detail}` : ""}\n`); };
   process.stderr.write(`\nsuperstables budget doctor: ${f.rail} (${f.chain})\n`);
 
-  const agent = readEnv(agentKeyFile(f.rail), "the agent key file"), pub = readEnv(r.pub, "the public file");
+  const agent = readEnv(agentPath, "the agent key file"), pub = readEnv(r.pub, "the public file");
   if (unsafe.has(r.pub)) line(false, `public file ${r.pub}`, unsafe.get(r.pub));
-  const files = [["agent key file", agentKeyFile(f.rail), agent, r.agentVars]];
+  const files = [["agent key file", agentPath, agent, r.agentVars]];
   const ownerFileProblem = ownerKeyFileProblem(ownerKeyFile(f.rail));
   if (ownerFileProblem) line(false, `owner key file ${ownerKeyFile(f.rail)}`, ownerFileProblem);
   for (const [label, path, env, vars] of files) {
@@ -227,7 +259,7 @@ export async function runDoctor(f) {
 
   // Where the agent key is kept: in the file, or in the OS keychain (the file then names it and holds the address).
   let agentSecret = agent[r.agentKeyVar];
-  if (existsSync(agentKeyFile(f.rail)) && !unsafe.has(agentKeyFile(f.rail))) {
+  if (existsSync(agentPath) && !unsafe.has(agentPath)) {
     if (r.storeVar && agent[r.storeVar] !== undefined) {
       if (agent[r.storeVar] !== "os-keychain") line(false, "key storage", `${r.storeVar} is "${String(agent[r.storeVar]).slice(0, 40)}", not os-keychain`);
       else if (agent[r.agentKeyVar]) line(false, "key storage", `the agent key file names the keychain and also holds a key (${r.agentKeyVar})`);
@@ -246,7 +278,9 @@ export async function runDoctor(f) {
         process.stderr.write("  info  key storage: OS keychain\n");
       }
     } else if (agent[r.agentKeyVar]) {
-      process.stderr.write("  info  key storage: file (testnet only; mainnet will require the OS keychain)\n");
+      // a rail that names its mainnet fix fails a plain-text key there: it is never silently allowed
+      if (r.mainnetKeyFix) line(false, "key storage", `the agent key is a plain-text file, and a mainnet needs it in the OS keychain: ${r.mainnetKeyFix}`);
+      else process.stderr.write("  info  key storage: file (testnet only; mainnet will require the OS keychain)\n");
     }
   }
   // the folders the budget writes into: real folders of this user that others cannot write to
@@ -262,7 +296,7 @@ export async function runDoctor(f) {
   process.stderr.write(ownerAddress
     ? `\n  OWNER (recorded): ${ownerAddress}\n  If this isn't your wallet, stop: do not approve grants for it. ${newOwnerCmd(r, f, pub)} replaces it (refused while a budget is live).\n\n`
     : `\n  OWNER (recorded): none yet. Setup records whoever connects: the owner runs it, or watches it run.\n\n`);
-  if (existsSync(agentKeyFile(f.rail))) {
+  if (existsSync(agentPath)) {
     const problems = r.ownerSecrets.filter((n) => agent[n]).map((n) => `defines ${n}`);
     for (const [name, value] of Object.entries(agent)) {
       if (ownerAddress && keyShaped(value)) {
@@ -278,9 +312,9 @@ export async function runDoctor(f) {
     }
   }
 
-  if (f.rail === "evm" && existsSync(agentKeyFile(f.rail)) && !unsafe.has(agentKeyFile(f.rail))) {
+  if (f.rail === "evm" && existsSync(agentPath) && !unsafe.has(agentPath)) {
     const stale = staleOwnerLine(agent, pub, f.chain);
-    if (stale) line(false, "owner on record", `the agent key file ${agentKeyFile(f.rail)} records ${stale.fileOwner}, the public file records ${stale.publicOwner}. Buy refuses while these owners differ. Run ${stale.repair} where the agent key is. It asks the owner to sign only when the record needs a new signature`);
+    if (stale) line(false, "owner on record", `the agent key file ${agentPath} records ${stale.fileOwner}, the public file records ${stale.publicOwner}. Buy refuses while these owners differ. Run ${stale.repair} where the agent key is. It asks the owner to sign only when the record needs a new signature`);
   }
 
   if (!existsSync(r.pub)) line(false, `public file ${r.pub}`, `does not exist (run ${r.setup})`);

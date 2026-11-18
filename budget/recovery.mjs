@@ -28,6 +28,7 @@ import { journalProblem, writeJournalFile } from "./journal.mjs";
 import { lockRecord } from "./op-lock.mjs";
 import { STATE_DIR, opsDir } from "./paths.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
+import { SOLANA_CHAINS } from "./solana/chains.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 
 /** The site's announcement in GET /api/v1/budget/services `features`. */
@@ -153,8 +154,8 @@ export function termsReadsOf(text) {
 
 // ---- the chains recovery may use -------------------------------------------------------------------------------------------
 
-/** Solana devnet USDC (budget/solana/lib.mjs USDC_MINT; written out here because that module is not plain Node). */
-const SOLANA_DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+/** Solana devnet USDC, from the chain table (budget/solana/chains.mjs, plain data). Recovery is the test-token family: no Solana mainnet is here, and an order on one is never recovered. */
+const SOLANA_DEVNET_USDC = SOLANA_CHAINS.devnet.mint;
 /** The one pricing family this version recovers across: the test USDC tokens, 6 decimals. Everything else never mixes. */
 export const TEST_USDC_FAMILY = "test:USDC:6";
 /** Recovery chains by the key the site uses: the rail, the token and the family. Tempo and every other chain are not here. */
@@ -1065,7 +1066,7 @@ async function runAttempt(deps, record, attempt) {
 }
 
 function switchedFields(record, attempt, fields) {
-  const where = `${attempt.rail === "evm" ? attempt.chain : "solana devnet"}`;
+  const where = `${attempt.rail === "evm" ? attempt.chain : `solana ${attempt.chain}`}`;
   const host = (() => { try { return new URL(attempt.url).host; } catch { return "the candidate seller"; } })();
   const state = fields.state;
   const what = state === "settled" ? `paid ${host} on ${where}` : state === "unknown" ? `may have paid ${host} on ${where} (outcome unknown, do not pay again)` : `tried ${host} on ${where}`;

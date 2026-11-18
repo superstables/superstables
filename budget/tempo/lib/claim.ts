@@ -1,4 +1,4 @@
-// One challenge, one purchase. A claim file per challenge under ops/tempo-moderato/claims/, created only if none exists
+// One challenge, one purchase. A claim file per challenge under ops/tempo-<chain>/claims/, created only if none exists
 // (O_EXCL), before the agent key signs. The challenge is named by its payment memo (mppx's, from the challenge's realm and id)
 // with the referral's slot zeroed: the same challenge paid under another referral, or none, is the same challenge. The memo
 // is what binds a payment on chain to one purchase: two operations with one memo would both match one payment. Claims are

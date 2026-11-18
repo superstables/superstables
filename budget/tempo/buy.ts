@@ -9,7 +9,7 @@
 //   1. Parse flags. Bad or missing flags exit 2 before any file is read.
 //   2. Open tempo-agent.env only (access key + the owner's PUBLIC address; no owner key).
 //   3. Fetch the seller's challenge (an unpaid request) and run the pre-signing checks: price <= --max
-//      (required), token is pathUSD on Moderato, whole base units, recipient == --pay-to when given, the
+//      (required), token is pathUSD on the chain, whole base units, recipient == --pay-to when given, the
 //      challenge names a realm, stays open at most 600 s and does not turn on mppx's machine-token route.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
 //   4. Write the operation journal (state quoted, with the purchase memo and the seller's referral, which
@@ -47,19 +47,24 @@ import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
 import { createClient, http, isHex, keccak256, type Address, type Hex } from 'viem'
-import { tempoModerato } from 'viem/tempo/chains'
 import { addressCheck, decimalCheck, labelCheck, opIdCheck, parseCli, urlCheck } from './lib/args.mjs'
 import {
+  CHAIN,
+  CHAIN_FLAG,
   CHAIN_ID,
   RPC_URL,
   TOKEN_ADDRESS,
   TOKEN_LABEL,
+  VIEM_CHAIN,
   agentAccessKeyAccount,
+  assertMainnetOpen,
   describeError,
   explorerTx,
   fromBaseUnits,
   isChainRefusal,
+  isKeyRefusal,
   loadAgentEnv,
+  mainnetClosedError,
   makeClient,
   oneLine,
   tempoGate,
@@ -164,6 +169,8 @@ function beforeBroadcast(body: unknown) {
   // a payment other than the quoted transfers, or one valid too long, never leaves: throwing here stops the request
   const signed = quoted ? signedPayment(raw, quoted) : { problem: 'nothing was quoted to pay', validBefore: undefined }
   if (signed.problem) throw new Error(`the payment mppx built was not sent: ${signed.problem}`)
+  // On a mainnet the switch, the manifest and the pause are read once more right before the payment leaves: a refusal keeps it here
+  assertMainnetOpen(`the signed payment was kept on this computer and not sent${signed.validBefore ? ` (it expires at unix ${signed.validBefore})` : ''}`, true)
   broadcastBegan = true
   if (!op) return markSend(body)
   if (typeof raw === 'string' && isHex(raw)) {
@@ -182,7 +189,7 @@ async function main() {
   const existing = readOp(opId)
   if (existing && BLOCKING.includes(existing.state)) {
     console.log(`Operation ${opId} is already ${existing.state}${existing.tx ? ` (tx ${oneLine(existing.tx, 100)})` : ''}. Not paying again.`)
-    console.log(`Run: superstables budget reconcile --rail tempo --op ${opId}`)
+    console.log(`Run: superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}`)
     printResult({
       op: opId,
       state: existing.state,
@@ -190,7 +197,7 @@ async function main() {
       debit: null,
       remaining: null,
       delivered: existing.delivered ?? null,
-      next: `superstables budget reconcile --rail tempo --op ${opId}`,
+      next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}`,
       reason: `op_already_${existing.state}`,
     })
     process.exit(3)
@@ -203,8 +210,16 @@ async function main() {
   const attribution = { referral, clientId }
 
   // 2. Agent file only.
-  const env = loadAgentEnv()
-  const agent = agentAccessKeyAccount(env, agentLabel)
+  let agent: ReturnType<typeof agentAccessKeyAccount>
+  try {
+    agent = agentAccessKeyAccount(loadAgentEnv(), agentLabel)
+  } catch (err) {
+    // a keychain that is locked, missing the key or holding another, or a plain key on a mainnet: nothing is signed
+    if (!isKeyRefusal(err)) throw err
+    const msg = oneLine((err as Error).message)
+    console.log(`\nREFUSED before signing: the agent key cannot be used: ${msg}. Nothing was signed or sent.`)
+    finish('refused_precheck', { reason: `agent_key_unavailable: ${msg}`, next: 'unlock the keychain (or run superstables budget doctor --rail tempo' + CHAIN_FLAG + '); nothing was signed' })
+  }
   const ownerAddress = agent.address as Address
   const agentKey = agent.accessKeyAddress as Address
   console.log(`op ${opId}`)
@@ -213,7 +228,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: tempoModerato, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: VIEM_CHAIN, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)
@@ -263,7 +278,7 @@ async function main() {
     finish('refused_precheck', { reason: `${check.code}: ${check.reason}`, next: 'nothing was signed; pick another seller or raise --max' })
   }
 
-  // The payment is signed for Moderato whatever RPC_URL is, sent there in push mode, and every outcome is read there.
+  // The payment is signed for this chain whatever RPC_URL is, sent there in push mode, and every outcome is read there.
   const wrongChain = await rpcChainProblem()
   if (wrongChain) {
     console.log(`\nREFUSED before signing: ${wrongChain}. Nothing was signed or sent.`)
@@ -271,11 +286,11 @@ async function main() {
   }
 
   // The chain gate. This script signs through mppx's own client, not makeClient, so it asks for itself before anything is signed.
-  // Today the load-time gate in lib/common.ts stops the script first; this call is a backstop.
+  // The load-time gate in lib/common.ts stops the script first; this call is a backstop.
   const gate = tempoGate()
   if (gate) {
     console.log(`\nREFUSED before signing: ${gate}. Nothing was signed or sent.`)
-    finish('refused_precheck', { reason: `chain_gate: ${gate}`, next: 'nothing was signed or sent; this build signs on Tempo Moderato only' })
+    finish('refused_precheck', { reason: `chain_gate: ${gate}`, next: 'nothing was signed or sent; ask the owner: the refusal says what this chain still needs' })
   }
 
   // 4. Journal the intent before signing.
@@ -344,8 +359,8 @@ async function main() {
     finish('refused_precheck', {
       reason: `no_budget: ${noBudget}`,
       next: newKey
-        ? `the owner makes a new key with superstables budget setup --rail tempo --agent LABEL, then superstables budget grant --rail tempo --agent LABEL --amount A; nothing was signed`
-        : `the owner grants a budget: superstables budget grant --rail tempo${agentLabel ? ` --agent ${agentLabel}` : ''} --amount A; nothing was signed`,
+        ? `the owner makes a new key with superstables budget setup --rail tempo${CHAIN_FLAG} --agent LABEL, then superstables budget grant --rail tempo${CHAIN_FLAG} --agent LABEL --amount A; nothing was signed`
+        : `the owner grants a budget: superstables budget grant --rail tempo${CHAIN_FLAG}${agentLabel ? ` --agent ${agentLabel}` : ''} --amount A; nothing was signed`,
     })
   }
 
@@ -385,6 +400,8 @@ async function main() {
   let credential: string
   let pullExpiry: number | undefined
   try {
+    // the agent key signs next: on a mainnet the switch, the manifest and the pause are read once more first
+    assertMainnetOpen('nothing was signed or sent')
     credential = await payment.createCredential()
     // pull mode: the signed payment is still in this process; it leaves only if it is the quoted transfer, valid 600 s at most
     const pulled = Credential.deserialize(credential).payload as { type?: string; signature?: unknown }
@@ -402,7 +419,12 @@ async function main() {
     // the signed payment was handed to the RPC (beforeBroadcast): whatever the error, it may land until its validBefore
     if (broadcastBegan) {
       console.log(`\nUNKNOWN: the signed payment was handed to the RPC client and may have reached the RPC; the attempt ended with an error: ${desc}`)
-      finish('unknown', { reason: desc, next: `superstables budget reconcile --rail tempo --op ${opId}` })
+      finish('unknown', { reason: desc, next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}` })
+    }
+    const closed = mainnetClosedError(err)
+    if (closed) {
+      console.log(`\nREFUSED: ${oneLine(closed.message, 500)}.`)
+      finish('refused_precheck', { reason: `mainnet_closed: ${oneLine(closed.message, 500)}`, remaining: remainingBefore, next: closed.signed ? 'the signed payment was kept on this computer and never sent, so nothing was paid; buy again with a new op id only once the owner says the mainnet is open' : 'nothing was signed or sent; buy again with a new op id only once the owner says the mainnet is open' })
     }
     if (isChainRefusal(desc)) {
       console.log(`\nREFUSED by the chain before anything was signed or sent: ${desc}`)
@@ -420,6 +442,17 @@ async function main() {
   if (payload.type === 'transaction' && payload.signature) {
     op.signedHash = keccak256(payload.signature) // informational: a sponsored tx's final hash differs (the seller adds the fee payer signature)
     op.validBefore = pullExpiry // read from the signed payment (lib/signed.ts); after it the payment can never land
+  }
+  // pull mode: the signed payment is still in this process and goes to the seller next. On a mainnet that is read against the
+  // boundary once more; a refusal keeps it here (it is dropped with this process and expires at validBefore on its own).
+  if (payload.type === 'transaction') {
+    try {
+      assertMainnetOpen(`the signed payment was kept on this computer and not sent to the seller${pullExpiry ? ` (it expires at unix ${pullExpiry})` : ''}`, true)
+    } catch (err) {
+      const msg = oneLine((err as Error).message, 500)
+      console.log(`\nREFUSED: ${msg}.`)
+      finish('refused_precheck', { reason: `mainnet_closed: ${msg}`, remaining: remainingBefore, next: 'the signed payment was kept on this computer and never sent, so nothing was paid; buy again with a new op id only once the owner says the mainnet is open' })
+    }
   }
   op.state = 'submitted'
   writeOp(op, 'signed; about to send to the seller')
@@ -475,7 +508,7 @@ async function main() {
       finish('failed', { tx: r.transactionHash, debit: 0n, remaining: remainingAfter, delivered, reason: j.note, next: failedNext(r.feePayer, ownerAddress) })
     }
     console.log(`UNKNOWN: ${j.note}`)
-    finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `superstables budget reconcile --rail tempo --op ${opId}` })
+    finish('unknown', { tx: r.transactionHash, remaining: remainingAfter, delivered, reason: j.note, next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}` })
   }
   if (outcome.kind === 'expired') {
     const spent = remainingBefore !== null && remainingAfter !== null && remainingBefore > remainingAfter ? remainingBefore - remainingAfter : 0n
@@ -483,7 +516,7 @@ async function main() {
     finish('not_found', { debit: 0n, remaining: remainingAfter, delivered, reason: 'signed payment expired; no transfer with this purchase memo on chain', next: notFoundNext(spent, mode) })
   }
   console.log('UNKNOWN: the chain does not show the payment yet and it may still land.')
-  finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}` })
+  finish('unknown', { remaining: remainingAfter, delivered, reason: sendError ?? 'not visible on chain yet', next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}` })
 }
 
 function baseOp(
@@ -528,7 +561,7 @@ main().catch((err) => {
   const msg = oneLine((err as Error)?.message ?? err)
   console.error('buy failed:', msg)
   if (op && (broadcastBegan || !(['quoted', 'refused_precheck'] as OpState[]).includes(op.state))) {
-    finish('unknown', { reason: msg, next: `superstables budget reconcile --rail tempo --op ${opId}` })
+    finish('unknown', { reason: msg, next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}` })
   }
   if (op) finish('failed', { reason: `error before signing: ${msg}`, next: 'nothing was signed; safe to retry with a new op id' })
   process.exit(1)

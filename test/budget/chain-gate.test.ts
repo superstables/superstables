@@ -182,8 +182,8 @@ describe("a copy of the client whose chain tables name chains that are not testn
  * What the budget needs on each EVM mainnet`);
     // the owner settings name the chains an RPC can be set for: the copy names this one too
     edit("src/core/owner-settings.js", '"robinhood-testnet",', '"robinhood-testnet", "gated-base",');
-    edit("budget/solana/lib.mjs", "export const TESTNET = true;", "export const TESTNET = false;");
-    edit("budget/tempo/lib/constants.mjs", "export const TESTNET = true", "export const TESTNET = false");
+    edit("budget/solana/chains.mjs", `label: "Solana devnet", testnet: true,`, `label: "Solana devnet", testnet: false,`);
+    edit("budget/tempo/lib/constants.mjs", "chainId: 42431, testnet: true,", "chainId: 42431, testnet: false,");
   }, 60_000);
   afterAll(async () => {
     await Promise.all(servers.map((s) => s.close()));

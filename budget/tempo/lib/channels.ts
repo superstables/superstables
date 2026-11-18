@@ -15,7 +15,7 @@ import { Abis } from 'viem/tempo'
 import { rpcRead } from './chain.ts'
 
 export const CHANNEL_RESERVE: Address = '0x4D50500000000000000000000000000000000000'
-const MAX_LOG_RANGE = 100_000 // Moderato's eth_getLogs limit
+const MAX_LOG_RANGE = 100_000 // the chains' eth_getLogs limit (Moderato's; the mainnet manifest states the same)
 const ABI = Abis.tip20ChannelReserve
 
 export type Descriptor = {

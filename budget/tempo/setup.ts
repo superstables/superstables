@@ -1,12 +1,14 @@
 // setup for the tempo rail: make this machine an agent and record who its owner is. No owner key is ever created or stored.
 //   1. The agent key file ($SUPERSTABLES_HOME/keys/budget/tempo-agent.env, mode 600): AGENT_PRIVATE_KEY, its address and,
 //      once known, the owner's public OWNER_ADDRESS (buy binds the access key to it). Created if missing, never overwritten.
+//      On Tempo mainnet (--chain tempo) the key is made in the OS keychain (--key-store os-keychain, the only store taken there)
+//      and tempo-tempo-agent.env holds AGENT_KEY_STORE=os-keychain and the addresses, never a key.
 //   2. The owner connects their own wallet (MetaMask or any EIP-1193 wallet) on the owner page and signs a free sign-in
 //      message: it proves the address is theirs and sends nothing. With --owner-key-file <path> the address comes from that
 //      key instead (tests and automation only).
 //   3. The public file: owner and agent addresses, no secret.
-//   4. If the owner holds less than 1 pathUSD, the Moderato faucet (tempo_fundAddress) tops it up. The agent needs nothing:
-//      its access key spends the owner's pathUSD and the fees come from the owner.
+//   4. If the owner holds less than 1 pathUSD, the Moderato faucet (tempo_fundAddress) tops it up (the mainnet has no faucet: the
+//      owner adds pathUSD). The agent needs nothing: its access key spends the owner's pathUSD and the fees come from the owner.
 //
 //   setup.ts                        the above
 //   setup.ts --agent <label>        a new agent key AGENT<label>_* (key to the agent file, address to the public file), for the
@@ -28,16 +30,17 @@
 // the owner runs it or watches it run, and an agent must not complete it. A recorded owner never changes silently.
 // Never prints a private key.
 // Usage: npx tsx budget/tempo/setup.ts [--agent <label>] [--fund-only] [--new-owner] [--hosted [--site <url>] [--grant <amount>]]
-//                                      [--timeout <s>] [--no-open] [--owner-key-file <path>]
+//                                      [--key-store os-keychain] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
 import { existsSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 import { LABEL, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, PUBLIC_ENV_PATH, TOKEN_ADDRESS, TOKEN_LABEL, appendExtraAgent, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, oneLine, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
+import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, PUBLIC_ENV_PATH, STORE_LINE, TOKEN_ADDRESS, TOKEN_LABEL, agentSecretFor, appendExtraAgent, explorerTx, fromBaseUnits, inKeychain, isKeyRefusal, loadOwnerKeyFile, loadPublicEnv, oneLine, parseEnvFile, agentFileText, setAgentPublic, toBaseUnits, writePublicEnv } from './lib/common.ts'
 import { NEW_OWNER, OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { UNSAFE_SECRET_FILE } from '../secret-file.mjs'
+import { KEYCHAIN_UNAVAILABLE, deleteAgentSecret, storeAgentSecret } from '../os-keychain.mjs'
 import { HOME, ensurePrivateDir } from '../paths.mjs'
 import { siteFailedWords, type HostedStep, type HostedStepOutcome, type PriorLink } from '../hosted.ts'
 import { chosenSite, isSiteRequestId, siteOrigin } from '../site.mjs'
@@ -51,7 +54,8 @@ const { values: args } = parseCli({
   summary: 'Create the agent key file (never overwritten), let the owner connect their own wallet on the owner page, and write the public file. No owner key is created.',
   flags: {
     agent: { type: 'string', metavar: 'label', desc: 'Add a new agent key AGENT<label> (for the next budget after a revoke)', check: labelCheck },
-    'fund-only': { type: 'boolean', desc: 'Fund the recorded owner from the Moderato faucet, change no file' },
+    'fund-only': { type: 'boolean', desc: 'Fund the recorded owner from the Moderato faucet, change no file (Moderato only)' },
+    'key-store': { type: 'string', metavar: 'store', desc: 'Where the agent key is kept: os-keychain (Tempo mainnet: the only store; never passed on Moderato)', choices: ['file', 'os-keychain'] },
     'new-owner': { type: 'boolean', desc: 'Replace the recorded owner with the wallet that connects (refused while a key is live)' },
     hosted: { type: 'boolean', desc: 'The owner approves on superstables.com (adds this agent to their account) instead of a page here' },
     site: { type: 'string', metavar: 'url', desc: 'With --hosted: the site (default superstables.com, or SUPERSTABLES_SITE)' },
@@ -64,12 +68,21 @@ const { values: args } = parseCli({
 })
 
 const MIN_OWNER = 1_000_000n // 1 pathUSD, what doctor asks for
+/** Where the agent key is, in the owner page's words. */
+const KEY_WHERE = CHAIN.testnet ? `in ${AGENT_ENV_PATH}` : 'in its OS keychain'
+const KEY_STORE = typeof args['key-store'] === 'string' ? (args['key-store'] as string) : undefined
 /** A grant asked for in setup --hosted --grant lasts this long, as grant's default. */
 const GRANT_SECONDS = 86_400
 const same = (x?: string, y?: string) => !!x && !!y && x.toLowerCase() === y.toLowerCase()
 const result = (exit: number, o: Record<string, unknown>) => emit('setup', exit, o)
 const usage = (message: string): never => {
   process.stderr.write(`setup.ts: ${message}\n`)
+  process.exit(2)
+}
+
+// A Moderato agent key stays in its file (it is limited on chain); a mainnet one never does.
+if (KEY_STORE !== undefined && CHAIN.testnet) {
+  process.stderr.write(`setup.ts: --key-store is for Tempo mainnet; on ${CHAIN.label} the agent key stays in its key file\n`)
   process.exit(2)
 }
 
@@ -83,7 +96,7 @@ async function fundAddress(address: string): Promise<string[]> {
 
 async function faucet(owner: string) {
   console.log(`Funding the owner ${owner} from the Moderato faucet (tempo_fundAddress, test pathUSD)...`)
-  for (const h of await fundAddress(owner)) console.log(`  https://explore.testnet.tempo.xyz/tx/${h}`)
+  for (const h of await fundAddress(owner)) console.log(`  ${explorerTx(h)}`)
 }
 
 // hosted approvals: the site, chosen here (--site, else SUPERSTABLES_SITE, else superstables.com)
@@ -98,7 +111,7 @@ if (HOSTED) {
 } else if (typeof args.site === 'string') usage('--site goes with --hosted')
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
 // would ask on the page on this computer and move the chain's approvals there, or take SUPERSTABLES_SITE.
-const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail tempo${site ? ` --hosted --site ${site}` : ''} --new-owner`
+const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail tempo${CHAIN_FLAG}${site ? ` --hosted --site ${site}` : ''} --new-owner`
 const GRANT = typeof args.grant === 'string' ? args.grant : undefined
 if (GRANT !== undefined && !HOSTED) usage('--grant goes with --hosted: without it, run setup, then grant')
 const LIMIT = GRANT !== undefined ? toBaseUnits(GRANT) : undefined
@@ -121,8 +134,8 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
     summary: `Sign in to ${host} with your wallet and add the agent's new key ${address} to your account, so you can grant it a budget there. This does not grant a budget or send a transaction.`,
     rows: [
       { label: 'New agent key', value: address, mono: true },
-      { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
-      { label: 'Agent key', value: `on the agent's machine only, in ${AGENT_ENV_PATH}` },
+      { label: 'Chain', value: CHAIN.binding },
+      { label: 'Agent key', value: `on the agent's machine only, ${KEY_WHERE}` },
     ],
     enforced: [],
     notEnforced: [],
@@ -140,7 +153,7 @@ async function linkExtraAgent(label: string, address: Address, owner: Address) {
   if (!link) throw new Error('an add-agent request without its id and code')
   writePublicEnv({ [`AGENT${label}_LINK_ID`]: link.id, [`AGENT${label}_LINK_CODE`]: link.code, ...(outcome.proof ? bindingLines(outcome.proof, label) : {}) })
   console.log(`Key ${address} added to the ${host} account ${owner}`)
-  process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
+  process.exit(result(0, { state: 'ok', owner, agent: address, linked: true, next: `superstables budget grant --rail tempo${CHAIN_FLAG} --agent ${label} --amount A (the owner approves it on ${host}, in their wallet)` }))
 }
 
 /**
@@ -158,20 +171,20 @@ async function bindExtraAgent(label: string, address: Address, owner: Address) {
       console.log(`REFUSED: ${reason}. Nothing was signed.`)
       process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: 'pass the owner key file of the owner on record' }))
     }
-    proof = await signLocalBinding('tempo', key.OWNER_PRIVATE_KEY, address, 'Tempo Testnet (Moderato)')
+    proof = await signLocalBinding('tempo', key.OWNER_PRIVATE_KEY, address, CHAIN.binding)
   } else {
     const { handle, outcome } = await askConnect('setup', {
       title: "Confirm your agent's new key",
       summary: `Connect your wallet and sign a message naming the agent's new key ${address}, so you can grant it a budget. This does not grant a budget or send a transaction.`,
       rows: [
         { label: 'New agent key', value: address, mono: true },
-        { label: 'Agent key', value: `on this machine only, in ${AGENT_ENV_PATH}` },
+        { label: 'Agent key', value: `on this machine only, ${KEY_WHERE}` },
         { label: 'Owner on record', value: owner, mono: true },
       ],
       enforced: [],
       notEnforced: [],
       notes: ['Signing the message proves control of this address. It grants no spending permission and has no network fee.', 'Connect this wallet. Any other wallet is refused, and nothing changes.'],
-    }, `Superstables budget: record this wallet as the owner of agent ${address} on Tempo Testnet (Moderato).`, undefined)
+    }, `Superstables budget: record this wallet as the owner of agent ${address} on ${CHAIN.binding}.`, undefined)
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent: address })
     if (outcome.status !== 'connected') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
@@ -189,7 +202,7 @@ async function bindExtraAgent(label: string, address: Address, owner: Address) {
     await closeOwnerPage()
     const reason = "the owner's signature did not come back"
     console.log(`REFUSED: ${reason}. Nothing was changed.`)
-    process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `run superstables budget setup --rail tempo --agent ${label} again; the owner signs once` }))
+    process.exit(result(3, { state: 'refused_precheck', reason, owner, agent: address, next: `run superstables budget setup --rail tempo${CHAIN_FLAG} --agent ${label} again; the owner signs once` }))
   }
   writePublicEnv(bindingLines(proof, label))
   console.log(`the owner's signature naming agent ${address} is recorded in ${PUBLIC_ENV_PATH}`)
@@ -259,13 +272,32 @@ function recordedKeys(pub: Record<string, string>): Address[] {
   return keys
 }
 
+/** The keychain refused (locked, no tool, wrong entry): exit 3, nothing was changed and nothing was signed. */
+function keychainRefusal(err: unknown): never {
+  const unavailable = (err as { code?: string }).code === KEYCHAIN_UNAVAILABLE
+  const reason = unavailable ? `no keychain tool (secret-tool or security) answered: ${(err as Error).message}` : `the keychain refused the key: ${(err as Error).message}`
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
+  process.exit(result(3, { state: 'refused_precheck', reason, next: unavailable ? 'install secret-tool (libsecret-tools) on Linux, or use macOS; a Tempo mainnet key is never kept anywhere else' : 'unlock the keychain, then run setup again' }))
+}
+/** A Tempo mainnet agent key lives in the OS keychain only: any other store, or a file holding a key, is refused (exit 3). */
+function refuseStore(reason: string): never {
+  console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
+  process.exit(result(3, { state: 'refused_precheck', reason, next: `superstables budget setup --rail tempo${CHAIN_FLAG} --key-store os-keychain (the key is kept in the OS keychain; ${AGENT_ENV_PATH} then holds addresses only)` }))
+}
+
 async function main() {
   const pub = loadPublicEnv()
 
+  if (!CHAIN.testnet && KEY_STORE === 'file') refuseStore(`a plain-text agent key file is never made on ${CHAIN.label}`)
+  if (args['fund-only'] && !CHAIN.faucet) {
+    const reason = `${CHAIN.label} has no faucet: the owner adds pathUSD themselves (network fees are paid in pathUSD)`
+    console.log(`REFUSED: ${reason}. Nothing was changed.`)
+    process.exit(result(3, { state: 'refused_precheck', reason, next: 'the owner sends pathUSD to their own wallet, then superstables budget doctor --rail tempo' + CHAIN_FLAG }))
+  }
   if (args['fund-only']) {
-    if (!pub.OWNER_ADDRESS) process.exit(result(3, { state: 'refused_precheck', reason: 'no owner is recorded yet', next: 'superstables budget setup --rail tempo' }))
+    if (!pub.OWNER_ADDRESS) process.exit(result(3, { state: 'refused_precheck', reason: 'no owner is recorded yet', next: 'superstables budget setup --rail tempo' + CHAIN_FLAG }))
     await faucet(pub.OWNER_ADDRESS)
-    process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, next: 'superstables budget doctor --rail tempo' }))
+    process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, next: 'superstables budget doctor --rail tempo' + CHAIN_FLAG }))
   }
 
   // Every path below reads or rewrites the agent key file, through agentFileTextOrRefuse or a helper that checks the same
@@ -275,14 +307,14 @@ async function main() {
 
   if (typeof args.agent === 'string') {
     const label = args.agent
-    if (!pub.OWNER_ADDRESS || !existsSync(AGENT_ENV_PATH)) process.exit(result(3, { state: 'refused_precheck', reason: 'run setup without --agent first: no owner is recorded yet', next: 'superstables budget setup --rail tempo' }))
+    if (!pub.OWNER_ADDRESS || !existsSync(AGENT_ENV_PATH)) process.exit(result(3, { state: 'refused_precheck', reason: 'run setup without --agent first: no owner is recorded yet', next: 'superstables budget setup --rail tempo' + CHAIN_FLAG }))
     // a new key for the owner on record only: an agent key file bound to another owner is a conflict, not a choice
     const boundTo = parseEnvFile(agentFileTextOrRefuse()).OWNER_ADDRESS
     if (boundTo && !same(boundTo, pub.OWNER_ADDRESS)) {
       const reason = `the owner files disagree: ${PUBLIC_ENV_PATH} records the owner ${pub.OWNER_ADDRESS}, and ${AGENT_ENV_PATH} is bound to ${boundTo}`
       console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
       const site = pub.APPROVALS === 'hosted' && pub.SITE ? siteOrigin(pub.SITE, 'read').origin : undefined
-      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent ${label}` }))
+      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, next: `${newOwnerCmd(site)} records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo${CHAIN_FLAG} --agent ${label}` }))
     }
     // unbound (an interrupted setup, a backup): bind it to the owner on record, so a later setup cannot replace that owner
     // without --new-owner
@@ -293,17 +325,31 @@ async function main() {
     if (recordedKey && !(heldKey && same(heldKey, recordedKey))) {
       const reason = `${PUBLIC_ENV_PATH} already records the access key ${recordedKey} under the label ${label}, and ${heldKey ? `${AGENT_ENV_PATH} holds another key (${heldKey}) under it` : `${AGENT_ENV_PATH} holds no key for it`}; setup --agent never replaces a recorded key`
       console.log(`REFUSED: ${reason}. Nothing was changed on this machine.`)
-      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, agent: recordedKey, next: `pick another label (superstables budget setup --rail tempo --agent OTHER). If ${recordedKey} may still hold a budget, revoke it: superstables budget revoke --rail tempo --agent ${label}, approved by ${pub.OWNER_ADDRESS}` }))
+      process.exit(result(3, { state: 'refused_precheck', reason, owner: pub.OWNER_ADDRESS, agent: recordedKey, next: `pick another label (superstables budget setup --rail tempo${CHAIN_FLAG} --agent OTHER). If ${recordedKey} may still hold a budget, revoke it: superstables budget revoke --rail tempo${CHAIN_FLAG} --agent ${label}, approved by ${pub.OWNER_ADDRESS}` }))
     }
     if (!boundTo) refuseAgentFileErrors(() => setAgentPublic({ OWNER_ADDRESS: pub.OWNER_ADDRESS! }))
-    const { address, created } = refuseAgentFileErrors(() => appendExtraAgent(label))
-    console.log(`${created ? 'created' : 'reusing'} agent key AGENT${label} in ${AGENT_ENV_PATH}: ${address}`)
+    // a mainnet file must already name the keychain (appendExtraAgent stores the new key there first, and adds only its address)
+    if (!CHAIN.testnet) {
+      const env = parseEnvFile(agentFileTextOrRefuse())
+      const plain = Object.keys(env).filter((k) => /PRIVATE/i.test(k))
+      if (plain.length) refuseStore(`${AGENT_ENV_PATH} holds a plain-text key (${plain.join(', ')}), which is never used on ${CHAIN.label}`)
+      if (!inKeychain(env)) refuseStore(`${AGENT_ENV_PATH} does not name the OS keychain (${STORE_LINE}=os-keychain)`)
+    }
+    let extra: { address: Address; created: boolean }
+    try {
+      extra = refuseAgentFileErrors(() => appendExtraAgent(label))
+    } catch (err) {
+      if (!isKeyRefusal(err)) throw err
+      return keychainRefusal(err)
+    }
+    const { address, created } = extra
+    console.log(`${created ? 'created' : 'reusing'} agent key AGENT${label} ${CHAIN.testnet ? `in ${AGENT_ENV_PATH}` : 'in the OS keychain'}: ${address}`)
     if (approvalSite() && OWNER_KEY_FILE) console.log(`--owner-key-file is ignored: this chain's approvals are on ${new URL(approvalSite()!).host}, so the owner adds the new key there`)
     if (approvalSite()) await linkExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
     // on this computer: the owner signs for the new key, unless the public file already holds a signature that names it
     const held = await agentBinding('tempo', { owner: pub.OWNER_ADDRESS as Address, agent: address, lines: loadPublicEnv() }, { label, keyAgent: address, file: PUBLIC_ENV_PATH })
     if (held.state !== 'signed') await bindExtraAgent(label, address, pub.OWNER_ADDRESS as Address)
-    process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, agent: address, next: `superstables budget grant --rail tempo --agent ${label} --amount A (you approve it in your wallet)` }))
+    process.exit(result(0, { state: 'ok', owner: pub.OWNER_ADDRESS, agent: address, next: `superstables budget grant --rail tempo${CHAIN_FLAG} --agent ${label} --amount A (you approve it in your wallet)` }))
   }
   useApprovalSite(SITE)
 
@@ -312,14 +358,49 @@ async function main() {
   let agentOwner: string | undefined
   if (existsSync(AGENT_ENV_PATH)) {
     const env = parseEnvFile(agentFileTextOrRefuse())
-    if (!env.AGENT_PRIVATE_KEY) process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} has no AGENT_PRIVATE_KEY`, next: `move ${AGENT_ENV_PATH} away if you mean to start over` }))
-    try {
-      agent = privateKeyToAddress(env.AGENT_PRIVATE_KEY as `0x${string}`)
-    } catch {
-      process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} holds an AGENT_PRIVATE_KEY that is not a key`, next: `restore ${AGENT_ENV_PATH} from a copy that has the agent key, or move it away if you mean to start over` }))
+    if (!CHAIN.testnet) {
+      // a mainnet file names the keychain and holds no key: its key is read back from there and must be the address on the file
+      const plain = Object.keys(env).filter((k) => /PRIVATE/i.test(k))
+      if (plain.length) refuseStore(`${AGENT_ENV_PATH} holds a plain-text key (${plain.join(', ')}), which is never used on ${CHAIN.label}; move it away if you mean to start over`)
+      if (!inKeychain(env)) refuseStore(`${AGENT_ENV_PATH} does not name the OS keychain (${STORE_LINE}=os-keychain)`)
+      if (!isAddressValue(env.AGENT_ADDRESS)) process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} has no AGENT_ADDRESS`, next: `restore ${AGENT_ENV_PATH} from a copy, or move it away if you mean to start over` }))
+      try {
+        agentSecretFor(env, '', env.AGENT_ADDRESS)
+      } catch (err) {
+        if (!isKeyRefusal(err)) throw err
+        keychainRefusal(err)
+      }
+      agent = env.AGENT_ADDRESS
+      agentOwner = env.OWNER_ADDRESS
+      console.log(`agent key file ${AGENT_ENV_PATH} exists; reusing it (agent ${agent}); the key is in the OS keychain`)
+    } else {
+      if (!env.AGENT_PRIVATE_KEY) process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} has no AGENT_PRIVATE_KEY`, next: `move ${AGENT_ENV_PATH} away if you mean to start over` }))
+      try {
+        agent = privateKeyToAddress(env.AGENT_PRIVATE_KEY as `0x${string}`)
+      } catch {
+        process.exit(result(3, { state: 'refused_precheck', reason: `${AGENT_ENV_PATH} holds an AGENT_PRIVATE_KEY that is not a key`, next: `restore ${AGENT_ENV_PATH} from a copy that has the agent key, or move it away if you mean to start over` }))
+      }
+      agentOwner = env.OWNER_ADDRESS
+      console.log(`agent key file ${AGENT_ENV_PATH} exists; reusing it (agent ${agent})`)
     }
-    agentOwner = env.OWNER_ADDRESS
-    console.log(`agent key file ${AGENT_ENV_PATH} exists; reusing it (agent ${agent})`)
+  } else if (!CHAIN.testnet) {
+    // a mainnet key is made in the keychain first (it reads the key back): when the keychain refuses, no file is written and no key is lost
+    if (KEY_STORE !== 'os-keychain') refuseStore(`a ${CHAIN.label} agent key is kept only in the OS keychain: no key file is made without --key-store os-keychain`)
+    const key = generatePrivateKey()
+    agent = privateKeyToAddress(key)
+    try {
+      storeAgentSecret('tempo', agent, key)
+    } catch (err) {
+      keychainRefusal(err)
+    }
+    try {
+      ensurePrivateDir(dirname(AGENT_ENV_PATH), { root: HOME })
+      writeFileSync(AGENT_ENV_PATH, `# Tempo agent on ${CHAIN.label}: the access keys are in the OS keychain. This file holds addresses only, no private key.\n${STORE_LINE}=os-keychain\nAGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: 'wx' })
+    } catch (err) {
+      try { deleteAgentSecret('tempo', agent) } catch { /* the entry belongs to a key nothing else knows */ }
+      throw err
+    }
+    console.log(`created the agent key in the OS keychain (service superstables-budget-agent, account tempo:${agent}); ${AGENT_ENV_PATH} (mode 600) holds only its address`)
   } else {
     const key = generatePrivateKey()
     agent = privateKeyToAddress(key)
@@ -365,7 +446,7 @@ async function main() {
           const label = publicKeys(pub).find((p) => same(p.address, key))?.label
           const viaRevoke = publicOwner && same(was, publicOwner) && !(agentOwner && !same(agentOwner, publicOwner)) && label !== undefined
           console.log(`REFUSED: ${reason}. Nothing was changed.`)
-          process.exit(result(3, { state: 'refused_precheck', reason, owner: was, next: live === null ? `superstables budget doctor --rail tempo, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke it first (superstables budget revoke --rail tempo${label ? ` --agent ${label}` : ''}, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${key}, using a tool that can call AccountKeychain.revokeKey(${key}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }))
+          process.exit(result(3, { state: 'refused_precheck', reason, owner: was, next: live === null ? `superstables budget doctor --rail tempo${CHAIN_FLAG}, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke it first (superstables budget revoke --rail tempo${CHAIN_FLAG}${label ? ` --agent ${label}` : ''}, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on ${CHAIN.label} that revokes access key ${key}, using a tool that can call AccountKeychain.revokeKey(${key}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }))
         }
       }
     }
@@ -390,14 +471,14 @@ async function main() {
         if (k.exists || k.revoked) {
           const reason = k.revoked ? `agent key ${agent} is revoked on the owner on record ${recorded}, and a revoked key can never be authorized again` : `a budget is live: agent key ${agent} is already authorized on the owner on record ${recorded}`
           console.log(`REFUSED: ${reason}. Nothing was requested.`)
-          process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: k.revoked ? 'make a new agent key: superstables budget setup --rail tempo --agent LABEL, then grant with --agent LABEL' : 'revoke first (superstables budget revoke --rail tempo), then grant a new key' }))
+          process.exit(result(3, { state: 'refused_precheck', reason, owner: recorded, next: k.revoked ? 'make a new agent key: superstables budget setup --rail tempo' + CHAIN_FLAG + ' --agent LABEL, then grant with --agent LABEL' : 'revoke first (superstables budget revoke --rail tempo' + CHAIN_FLAG + '), then grant a new key' }))
         }
       }
       head = await chainHead()
     } catch (e) {
-      const reason = `could not read Tempo Moderato before asking (${oneLine((e as Error).message, 300)}); the grant could not be checked afterwards`
+      const reason = `could not read ${CHAIN.label} before asking (${oneLine((e as Error).message, 300)}); the grant could not be checked afterwards`
       console.log(`REFUSED: ${reason}. Nothing was requested.`)
-      process.exit(result(3, { state: 'refused_precheck', reason, next: 'superstables budget doctor --rail tempo checks the RPC; then run the same command again' }))
+      process.exit(result(3, { state: 'refused_precheck', reason, next: 'superstables budget doctor --rail tempo' + CHAIN_FLAG + ' checks the RPC; then run the same command again' }))
     }
     startBlock = head!.number
     plan = { agent, limit: LIMIT, expiry: head!.timestamp + GRANT_SECONDS }
@@ -419,11 +500,11 @@ async function main() {
     const ownerFile = loadOwnerKeyFile(OWNER_KEY_FILE)
     owner = ownerFile.OWNER_ADDRESS
     console.log(`owner address from --owner-key-file: ${owner}`)
-    binding = await signLocalBinding('tempo', ownerFile.OWNER_PRIVATE_KEY, agent, 'Tempo Testnet (Moderato)')
+    binding = await signLocalBinding('tempo', ownerFile.OWNER_PRIVATE_KEY, agent, CHAIN.binding)
   } else if (reuse) {
     owner = publicOwner!
     console.log(`${PUBLIC_ENV_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`)
-    if (recordedSite && heldBinding?.state !== 'signed') console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail tempo --hosted --site ${recordedSite} records it from the site's owner proof`)
+    if (recordedSite && heldBinding?.state !== 'signed') console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail tempo${CHAIN_FLAG} --hosted --site ${recordedSite} records it from the site's owner proof`)
   } else if (HOSTED) {
     // the owner links this agent to their account on the site; the account's address becomes the owner on record
     const amt = GRANT !== undefined ? `${fromBaseUnits(LIMIT!)} ${TOKEN_LABEL}` : ''
@@ -435,14 +516,14 @@ async function main() {
         : `Sign in to ${HOST} with your wallet and add this agent to your account. Your account's address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
       rows: [
         { label: 'Your agent', value: agent, mono: true },
-        { label: 'Chain', value: 'Tempo Testnet (Moderato)' },
-        ...(plan ? [{ label: 'Transaction', value: `AccountKeychain.authorizeKey(${agent}, ...) at ${KEYCHAIN}`, mono: true }] : [{ label: 'Agent key', value: `on the agent's machine only, in ${AGENT_ENV_PATH}` }]),
+        { label: 'Chain', value: CHAIN.binding },
+        ...(plan ? [{ label: 'Transaction', value: `AccountKeychain.authorizeKey(${agent}, ...) at ${KEYCHAIN}`, mono: true }] : [{ label: 'Agent key', value: `on the agent's machine only, ${KEY_WHERE}` }]),
       ],
       enforced: plan ? [`A total limit of ${amt}.`, `The expiry. After ${iso(plan.expiry)} every payment the key signs is refused.`] : [],
       notEnforced: plan ? ['No call or seller restriction. Whoever holds the key can make other calls as your account, subject to the keychain limits.', 'No per-payment limit. The CLI checks --max, but anyone using the key outside the CLI can skip it.'] : [],
       notes: [
         `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
-        ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
+        ...(plan ? ['You pay the network fee in your wallet. To end the budget at any time: superstables budget revoke --rail tempo' + CHAIN_FLAG + '.'] : [`Grants and revokes for this agent are then approved on ${HOST}, in your wallet.`]),
       ],
     }, '', newOwner ? recorded : undefined, then, { prior, newOwner, expectedOwner: newOwner ? undefined : recorded })
     bundle = r.bundle
@@ -466,7 +547,7 @@ async function main() {
       summary: "Connect your wallet and sign a message to record its address as the budget owner on this machine. This does not grant a budget or send a transaction.",
       rows: [
         { label: 'Your agent', value: agent, mono: true },
-        { label: 'Agent key', value: `on this machine only, in ${AGENT_ENV_PATH}` },
+        { label: 'Agent key', value: `on this machine only, ${KEY_WHERE}` },
         ...(recorded && !newOwner ? [{ label: 'Owner on record', value: recorded, mono: true }] : []),
       ],
       enforced: [],
@@ -476,7 +557,7 @@ async function main() {
         'Your signing key stays in your wallet. You will review and approve any later budget grant separately.',
         ...(recorded && !newOwner ? ['Connect this wallet. Any other wallet is refused, and nothing changes.'] : []),
       ],
-    }, `Superstables budget: record this wallet as the owner of agent ${agent} on Tempo Testnet (Moderato).`, newOwner ? recorded : undefined)
+    }, `Superstables budget: record this wallet as the owner of agent ${agent} on ${CHAIN.binding}.`, newOwner ? recorded : undefined)
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setup', outcome, { agent })
     if (outcome.status !== 'connected') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     owner = outcome.address as Address
@@ -518,9 +599,12 @@ async function main() {
   console.log(`wrote ${PUBLIC_ENV_PATH} (no secret) and the owner's address into ${AGENT_ENV_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ''}`)
   if (binding) console.log(`the owner's signature naming agent ${agent} is recorded in ${PUBLIC_ENV_PATH}`)
 
-  // 4. test pathUSD for the owner, if it has too little
+  // 4. test pathUSD for the owner, if it has too little (the mainnet has no faucet: the owner adds it)
   let held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => null)
-  if (held !== null && held < MIN_OWNER) {
+  if (!CHAIN.faucet && held !== null && held < MIN_OWNER) {
+    console.log(`the owner holds less than ${fromBaseUnits(MIN_OWNER)} ${TOKEN_LABEL}: there is no faucet on ${CHAIN.label}, so the owner adds ${TOKEN_LABEL} to their wallet (network fees are paid in ${TOKEN_LABEL} too)`)
+  }
+  if (CHAIN.faucet && held !== null && held < MIN_OWNER) {
     try {
       await faucet(owner)
       // the faucet answers with transaction hashes before they are mined: wait (up to 30 s) for the balance to show them
@@ -529,7 +613,7 @@ async function main() {
         held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => held)
       }
     } catch (e) {
-      console.log(`the faucet did not answer (${oneLine((e as Error).message, 300)}); fund the owner later with: superstables budget setup --rail tempo --fund-only`)
+      console.log(`the faucet did not answer (${oneLine((e as Error).message, 300)}); fund the owner later with: superstables budget setup --rail tempo${CHAIN_FLAG} --fund-only`)
     }
   }
   console.log(`owner ${owner}: pathUSD ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)
@@ -538,14 +622,14 @@ async function main() {
 
   const where = approvalSite() ? `on ${new URL(approvalSite()!).host.replace(/^www\./, '')}, in your wallet` : 'in your wallet'
   const steps = [
-    'Check everything: superstables budget doctor --rail tempo',
-    `Grant a budget: superstables budget grant --rail tempo --amount 0.05 [--expiry ISO] [--period S] [--sellers a,b] (you approve it ${where}).`,
+    'Check everything: superstables budget doctor --rail tempo' + CHAIN_FLAG,
+    `Grant a budget: superstables budget grant --rail tempo${CHAIN_FLAG} --amount 0.05 [--expiry ISO] [--period S] [--sellers a,b] (you approve it ${where}).`,
   ]
   console.log('\nNext:')
   steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`))
   finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: grant a budget (the terminal lists the command).` })
   await closeOwnerPage()
-  process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, steps, next: 'superstables budget doctor --rail tempo, then superstables budget grant --rail tempo --amount A' }))
+  process.exit(result(0, { state: 'ok', owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH, ...(CHAIN.testnet ? {} : { keyStore: 'os-keychain' }), steps, next: 'superstables budget doctor --rail tempo' + CHAIN_FLAG + ', then superstables budget grant --rail tempo' + CHAIN_FLAG + ' --amount A' }))
 }
 
 /**
@@ -582,14 +666,14 @@ async function finishBundle(owner: Address, agent: Address, plan: GrantPlan, sta
   const base = { owner, agent, linked: true, steps: reports, tx: r.tx ? { grant: r.tx } : {}, cap: done ? amount : undefined, allowance: done?.key ? fromBaseUnits(done.key.remaining) : undefined, expiry: done?.key ? iso(done.key.expiry) : undefined, publicFile: PUBLIC_ENV_PATH, agentKeyFile: AGENT_ENV_PATH }
   if (r.state === 'settled') {
     console.log(`\nDone with one approval link: the agent was added to the account and has a budget of ${amount} ${TOKEN_LABEL} until ${iso(plan.expiry)}.`)
-    process.exit(result(0, { state: 'ok', ...base, next: 'none: the agent can buy under the budget. superstables budget status --rail tempo shows what is left' }))
+    process.exit(result(0, { state: 'ok', ...base, next: 'none: the agent can buy under the budget. superstables budget status --rail tempo' + CHAIN_FLAG + ' shows what is left' }))
   }
   const summary = `agent added: yes; budget: ${r.state === 'refused_precheck' ? (r.reason ?? '').slice(0, 120) : `${r.state}, ${(r.reason ?? '').slice(0, 110)}`}`
   const next = r.state === 'unknown'
-    ? "superstables budget status --rail tempo and the owner's wallet activity: read whether the grant landed before running anything again. The agent has been added to the account"
+    ? "superstables budget status --rail tempo" + CHAIN_FLAG + " and the owner's wallet activity: read whether the grant landed before running anything again. The agent has been added to the account"
     : r.state === 'mismatch'
-      ? 'the chain shows another key than planned: the owner revokes it (superstables budget revoke --rail tempo); grant again only with a new key (setup --agent LABEL), and only if the owner asks'
-      : 'the agent has been added to the account. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo --amount A'
+      ? 'the chain shows another key than planned: the owner revokes it (superstables budget revoke --rail tempo' + CHAIN_FLAG + '); grant again only with a new key (setup --agent LABEL), and only if the owner asks'
+      : 'the agent has been added to the account. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: superstables budget grant --rail tempo' + CHAIN_FLAG + ' --amount A'
   process.exit(result(r.state === 'unknown' ? 5 : r.state === 'failed' ? 1 : 3, { state: r.state, proof: r.proof, ...base, reason: summary, next }))
 }
 

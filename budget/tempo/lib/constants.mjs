@@ -13,16 +13,18 @@ export const CHAIN_ENV = 'SUPERSTABLES_BUDGET_CHAIN'
 
 /**
  * The Tempo chains a budget can be on, by their --chain key. `gateKey` is the chain's key in the chain gate, the RPC
- * tables and the owner settings; `binding` is how the owner-binding message and the owner page name the chain.
+ * tables and the owner settings; `short` is its name in the middle of a sentence; `binding` is how the owner-binding message
+ * and the owner page name it ("Tempo Mainnet", not "Tempo": owner-binding.mjs tells a Tempo signature from an EVM one by the
+ * chain name starting with "Tempo ").
  */
 export const TEMPO_CHAINS = {
   moderato: {
-    key: 'moderato', gateKey: 'tempo-moderato', label: 'Tempo Moderato', binding: 'Tempo Testnet (Moderato)', chainId: 42431, testnet: true,
+    key: 'moderato', gateKey: 'tempo-moderato', label: 'Tempo Moderato', short: 'Moderato', binding: 'Tempo Testnet (Moderato)', chainId: 42431, testnet: true,
     rpc: DEFAULT_RPC.tempo, explorer: 'https://explore.testnet.tempo.xyz', faucet: true,
   },
 }
 for (const [key, c] of mainnetChains('tempo')) {
-  TEMPO_CHAINS[key] = { key, gateKey: key, label: c.label, binding: c.label, chainId: c.chainId, testnet: false, rpc: c.rpc[0].url, explorer: c.explorer, faucet: false }
+  TEMPO_CHAINS[key] = { key, gateKey: key, label: c.label, short: c.label, binding: `${c.label} Mainnet`, chainId: c.chainId, testnet: false, rpc: c.rpc[0].url, explorer: c.explorer, faucet: false }
 }
 export const TEMPO_CHAIN_KEYS = Object.keys(TEMPO_CHAINS)
 export const TEMPO_DEFAULT_CHAIN = 'moderato'

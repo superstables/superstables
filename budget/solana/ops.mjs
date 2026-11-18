@@ -1,6 +1,6 @@
 // Operation journal, lock and chain lookup for purchases (buy.mjs, reconcile.mjs).
 //
-// One JSON file per operation under $SUPERSTABLES_HOME/budget/ops/solana-devnet/<id>.json (../paths.mjs),
+// One JSON file per operation under $SUPERSTABLES_HOME/budget/ops/solana-<chain>/<id>.json (../paths.mjs),
 // outside the code folder. It is written BEFORE the payment is submitted (intent: seller URL,
 // amount, recipient, token) and updated after (signature, state). It never holds a key.
 //
@@ -13,13 +13,12 @@
 //   failed            our own transaction landed and failed, or was refused by the chain
 //   refused_chain     the chain refused it (simulation) and it cannot land while that holds
 //   not_found         the blockhash expired and no transaction was ever found (safe to retry)
-import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { budgetMemo } from "../../src/core/referral-memo.mjs";
 import { createHash, randomBytes } from "node:crypto";
 import { readJournalFile, solanaOpProblem, writeJournalFile } from "../journal.mjs";
 import { join } from "node:path";
 import { PublicKey } from "@solana/web3.js";
-import { OPS_DIR, retryRead, sleep, formatUnits, connectionTo, rpcCall, solanaVerdictSet } from "./lib.mjs";
+import { CHAIN_FLAG, CHAIN, OPS_DIR, retryRead, sleep, formatUnits, connectionTo, rpcCall, solanaVerdictSet } from "./lib.mjs";
 import { endpointId } from "../../src/core/rpc-endpoints.mjs";
 import { agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
 import { lockRecord } from "../op-lock.mjs";
@@ -81,8 +80,8 @@ export function acquireLock(op) {
 // seller can name any old successful transaction. It counts only if that transaction carries the
 // agent's signature for this operation; otherwise it is unrelated and the search goes on.
 // A failed read throws (never "not found"): the caller keeps the outcome unknown.
-const DEVNET_GENESIS = SOLANA_DEVNET_GENESIS;
-// As in the core rail, candidate reads must include version 1 transactions found on devnet.
+const CHAIN_GENESIS = CHAIN.genesis;
+// As in the core rail, candidate reads must include version 1 transactions.
 const CANDIDATE_VERSION = 1;
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
 const DISCOVERY_PAGES = 10;
@@ -179,7 +178,7 @@ async function addressHistory(conn, rec, epoch, boundary, options, progress) {
   return { complete: false };
 }
 
-/** Pacing and durable progress keep the complete block fallback short, including on public devnet. */
+/** Pacing and durable progress keep the complete block fallback short, including on a public RPC. */
 async function landingWindow(conn, rec, options, progress) {
   if (!count(rec.searchFromSlot) || !count(rec.lastValidBlockHeight)) return { complete: false };
   const slots = await conn.getBlocks(rec.searchFromSlot + 1, rec.searchFromSlot + 1000, "finalized");
@@ -236,7 +235,7 @@ export async function assessOp(conn, rec, options = {}) {
   rec = view;
   const lostInclusion = { verdict: "pending", reason: "The earlier payment inclusion could not be verified; outcome unknown. Do not pay again" };
   if (!rec.agentSig) return rec.inclusionObserved ? lostInclusion : { verdict: "no_tx" };
-  if (await conn.getGenesisHash() !== DEVNET_GENESIS) throw new Error("RPC is not Solana devnet");
+  if (await conn.getGenesisHash() !== CHAIN_GENESIS) throw new Error(`RPC is not ${CHAIN.label}`);
   const own = await findOwnTx(conn, rec, { discover: false, paceMs, pause });
   const landed = (t) => t.err === null
     ? { verdict: "settled", tx: t.sig, slot: t.slot, final: t.final !== false }
@@ -301,7 +300,7 @@ export async function assessAgreed(conn, rec, options = {}) {
   const agreeing = new Set(set.verdict.filter((m) => primaryUrl && sameEndpoint(m.url, primaryUrl)).map((m) => m.operator));
   for (const m of set.verdict) {
     if (primaryUrl && sameEndpoint(m.url, primaryUrl)) continue;
-    const identity = await checkIdentity(m.url, { kind: "solana", genesis: DEVNET_GENESIS }, call);
+    const identity = await checkIdentity(m.url, { kind: "solana", genesis: CHAIN_GENESIS }, call);
     if (identity) { left.push(identity); continue; }
     let r;
     try {
@@ -365,7 +364,7 @@ export function gateExistingOp(rec) {
     return { allow: false, state: "settled", tx: rec.tx ?? null, reason: `operation ${rec.op} is already settled (${rec.tx ?? "no tx id"}); use a new --op for a new purchase` };
   }
   if (pending) {
-    return { allow: false, state: rec.state, tx: rec.tx ?? null, reason: `operation ${rec.op} is ${rec.state}; its transaction may still land. Run: superstables budget reconcile --rail solana --op ${rec.op}` };
+    return { allow: false, state: rec.state, tx: rec.tx ?? null, reason: `operation ${rec.op} is ${rec.state}; its transaction may still land. Run: superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${rec.op}` };
   }
   return { allow: true };
 }

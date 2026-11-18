@@ -24,7 +24,7 @@
 import { rpcPause } from "../rpc-pause.mjs";
 import { Transaction, sendAndConfirmTransaction, type PublicKey } from "@solana/web3.js";
 import { createRevokeInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { AGENT_KEY_PATH, CLUSTER_NEXT, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, writePublic } from "./lib.mjs";
+import { CHAIN_FLAG, AGENT_KEY_PATH, CHAIN, CLUSTER_NEXT, getSolHint, agreedAccount, clusterProblem, connection, recentFinalizedSlot, loadOwner, explorerTx, USDC_MINT, formatUnits, oneLine, parseEnvText, parseStrict, readPublic, retryRead, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -54,7 +54,7 @@ const conn = connection("owner");
 const cluster = await clusterProblem(conn);
 if (cluster) refuse(cluster, CLUSTER_NEXT);
 const pub = readPublic();
-if (!pub.owner) refuse("the public file names no owner", "superstables budget setup --rail solana");
+if (!pub.owner) refuse("the public file names no owner", `superstables budget setup --rail solana${CHAIN_FLAG}`);
 const owner: PublicKey = pub.owner;
 // The agent key file also records the owner. While it names another, this command (which acts for the public file's
 // owner) says nothing about either: an answer for one could hide the other's live budget. Read for that one
@@ -63,7 +63,7 @@ const owner: PublicKey = pub.owner;
 {
   let bound: string | undefined;
   try { bound = (parseEnvText(readRegularFile(AGENT_KEY_PATH, "the agent key file")) as Record<string, string>).SOLANA_OWNER_ADDRESS; } catch {}
-  if (bound && bound !== owner.toBase58()) refuse(`the owner files disagree: the public file records the owner ${owner.toBase58()}, and the agent key file is bound to ${bound}`, "superstables budget setup --rail solana --new-owner checks both owners for a live budget and names the owner who must revoke it, and how");
+  if (bound && bound !== owner.toBase58()) refuse(`the owner files disagree: the public file records the owner ${owner.toBase58()}, and the agent key file is bound to ${bound}`, `superstables budget setup --rail solana${CHAIN_FLAG} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how`);
 }
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
 let before: Awaited<ReturnType<typeof getAccountOrNull>>;
@@ -73,7 +73,7 @@ try {
   // could not read is not "no delegate": whether a budget is live is unknown
   const reason = `could not read the owner's USDC account ${ata.toBase58()} (${oneLine((err as Error)?.message ?? err, 160)}); whether a delegate is live is unknown`;
   console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
-  process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then run revoke again" }));
+  process.exit(result(5, { state: "unknown", tx: null, reason, next: `superstables budget status --rail solana${CHAIN_FLAG}, then run revoke again` }));
 }
 console.log(`Before: ${before ? `delegate=${before.delegate?.toBase58() ?? "none"} remaining=${formatUnits(before.delegatedAmount)} USDC` : "the owner has no USDC account (the chain says it does not exist)"}`);
 if (!before) {
@@ -86,14 +86,14 @@ if (!before) {
     const words = !agreed ? "the finalized slot could not be read" : agreed.agreed ? "the confirming RPC endpoints read it" : agreementWords(agreed);
     const reason = `the owner's USDC account reads as absent on one RPC, but ${words}; whether a delegate is live is unknown`;
     console.log(`UNKNOWN: ${reason}. Nothing was sent.`);
-    process.exit(result(5, { state: "unknown", tx: null, reason, next: "superstables budget status --rail solana, then revoke again" }));
+    process.exit(result(5, { state: "unknown", tx: null, reason, next: `superstables budget status --rail solana${CHAIN_FLAG}, then revoke again` }));
   }
   console.log("The owner has no USDC account (the chain says it does not exist): there is no delegate to clear. Nothing was sent.");
-  process.exit(result(0, { state: "ok", evidence: "no_token_account", agreement: agreed.agreement, revoked: null, tx: null, remaining: "0", reason: "the owner has no USDC account on Solana devnet, so there is no delegate to clear; nothing was sent", next: "none" }));
+  process.exit(result(0, { state: "ok", evidence: "no_token_account", agreement: agreed.agreement, revoked: null, tx: null, remaining: "0", reason: `the owner has no USDC account on ${CHAIN.label}, so there is no delegate to clear; nothing was sent`, next: "none" }));
 }
 if (!before.delegate) console.log("No delegate reads on the owner's USDC account; sending Revoke anyway: one read is not proof that no delegate is live.");
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
-if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, "get devnet SOL (faucet.solana.com), then revoke again");
+if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, getSolHint("revoke again"));
 
 const ix = () => [createRevokeInstruction(ata, owner)];
 let sig: string;
@@ -123,13 +123,13 @@ if (OWNER_KEY_FILE) {
   if (c.status === "unknown") {
     handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
-    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana" }));
+    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: `superstables budget status --rail solana${CHAIN_FLAG}` }));
   }
   if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
-    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana; run revoke again only if a delegate remains.`, hash: sig });
+    handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. This transaction did not revoke the budget. Check superstables budget status --rail solana${CHAIN_FLAG}; run revoke again only if a delegate remains.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: "superstables budget status --rail solana; run revoke again only if a delegate remains" }));
+    process.exit(result(1, { state: "not_revoked", proof, tx: sig, reason: c.status === "expired" ? "it was sent but never landed before its blockhash expired" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)})`, next: `superstables budget status --rail solana${CHAIN_FLAG}; run revoke again only if a delegate remains` }));
   }
   if (c.problems.length) {
     // not the Revoke alone: the transaction did something else as well (or instead), so it is not reported as a revoke
@@ -138,7 +138,7 @@ if (OWNER_KEY_FILE) {
     const now = await retryRead(() => getAccountOrNull(conn, ata)).catch(() => undefined);
     handle.finish({ outcome: "unknown", message: mismatchPage(c.problems, c.siteFailed, sig, { ended: c.status === "failed" ? "failed on chain" : undefined }), hash: sig });
     await closeOwnerPage();
-    process.exit(result(3, { state: "mismatch", tx: sig, ...(now !== undefined ? { remaining: formatUnits(now?.delegatedAmount ?? 0n) } : {}), reason, next: "check the owner's wallet activity, then superstables budget status --rail solana; revoke again if a delegate still reads" }));
+    process.exit(result(3, { state: "mismatch", tx: sig, ...(now !== undefined ? { remaining: formatUnits(now?.delegatedAmount ?? 0n) } : {}), reason, next: `check the owner's wallet activity, then superstables budget status --rail solana${CHAIN_FLAG}; revoke again if a delegate still reads` }));
   }
 }
 
@@ -167,7 +167,7 @@ if (!final) {
   console.log("The revoke is in a block and no delegate reads, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it.");
   finish?.({ outcome: "confirmed", message: LANDED_SOLANA_REVOKE, hash: sig });
   await closeOwnerPage();
-  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: "superstables budget status --rail solana later: the revoke is final when status says so" }));
+  process.exit(result(0, { state: "landed", final: false, revoked: false, tx: sig, ...(fin.slot !== undefined ? { slot: fin.slot } : {}), remaining: "0", next: `superstables budget status --rail solana${CHAIN_FLAG} later: the revoke is final when status says so` }));
 }
 console.log("This delegation is cleared. Transactions that still require it will fail. Previously transferred funds are not recovered.");
 finish?.({ outcome: "confirmed", message: "Confirmed. Your USDC account has no delegate. This does not recover tokens already transferred. You can close this page.", hash: sig });
