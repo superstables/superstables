@@ -10,14 +10,18 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { HOME, ensurePrivateDir, ownerKeyFile, agentKeyFile, publicFile, opsDir } from "../paths.mjs";
-import { readAgentSecret } from "../os-keychain.mjs";
+import { agentKeyStorage, readAgentSecret } from "../os-keychain.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from "../secret-file.mjs";
-import { DEFAULT_RPC, SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
+import { SOLANA_RPC_MAX_BYTES, budgetCall, cappedRpcFetch, jsonRpc, rpcFromEnv } from "../rpc.mjs";
 import { markSend } from "../proof.mjs";
 import { agentBinding, hostedFlags, legacyWarning } from "../owner-binding.mjs";
 import { noteBinding } from "../page-facts.mjs";
-import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 import { chainGate } from "../../src/core/chain-gate.js";
+import { mainnetRefusal } from "../../src/core/mainnet-policy.js";
+// The pause file check, which this plain .mjs build cannot load from src/core/mainnet-spend.ts: without it every mainnet reads as paused.
+// The name is used below on purpose: a bare import of the module can be hoisted after this file in the bundle, past the load-time gate.
+import { MAINNET_PAUSE_FILE } from "../mainnet-pause.mjs";
+import { CHAIN, CHAIN_ENV, CHAIN_PROBLEM } from "./chains.mjs";
 import { endpointSet } from "../../src/core/rpc-endpoints.mjs";
 import { agreeAtFinalSolana, agreementWords, checkIdentity } from "../../src/core/rpc-quorum.mjs";
 import { TOKEN_PROGRAM_ID, decodeTokenAccount } from "./token.mjs";
@@ -60,22 +64,22 @@ const crashHandler = async (err) => {
 crashHandler[RAIL_CRASH_HANDLER] = true;
 process.on("uncaughtException", crashHandler);
 
-/** Solana devnet is a testnet. The chain gate (../../src/core/chain-gate.js) signs on nothing else in this build. */
-export const TESTNET = true;
-// SUPERSTABLES_SOLANA_RPC replaces the devnet RPC URL for reads (tests point it at a local fake; you can point it at your own node).
+/** Whether this process runs on a testnet (Solana devnet). Any other chain only passes the chain gate (../../src/core/chain-gate.js) while the operator's switch is on. */
+export const TESTNET = CHAIN.testnet;
+// SUPERSTABLES_SOLANA_RPC replaces the chain's RPC URL for reads (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
 // the command before it runs a script. Owner commands and the verdicts that let an agent pay again do not take the replacement
 // on its word: they use the endpoints the owner set (src/core/rpc-endpoints.mjs), and a replacement that is not one of them is
 // refused there (an owner command exits 3; a verdict stays unknown, with that reason).
 const envRpc = (() => {
-  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", DEFAULT_RPC.solana, "read", "solana-devnet");
-  if (r.error) process.stderr.write(`warning: ${r.error}; using ${DEFAULT_RPC.solana}\n`);
+  const r = rpcFromEnv("SUPERSTABLES_SOLANA_RPC", CHAIN.rpc, "read", CHAIN.gateKey);
+  if (r.error) process.stderr.write(`warning: ${r.error}; using ${CHAIN.rpc}\n`);
   // custom is also true for the owner's own URL (source "settings"): that one is not the variable
   return r.custom && r.source !== "settings" ? r.url : undefined;
 })();
 /** The endpoints for a purpose: "read" (balances, searches, the primary), "verdict" (what lets an agent pay again) or "owner" (what an owner command reads and sends through). */
 export function solanaSet(purpose = "read") {
-  return endpointSet("solana-devnet", purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
+  return endpointSet(CHAIN.gateKey, purpose, { envUrl: envRpc, envName: "SUPERSTABLES_SOLANA_RPC", testnet: TESTNET });
 }
 /** The URL a connection for `purpose` talks to. Throws (in words) when the owner settings cannot be read. */
 export function rpcUrl(purpose = "read") {
@@ -83,34 +87,80 @@ export function rpcUrl(purpose = "read") {
   if ("error" in set) throw new Error(set.error);
   return set.primary.url;
 }
-export const RPC_URL = (() => { try { return rpcUrl("read"); } catch { return DEFAULT_RPC.solana; } })();
-export const EXPLORER_CLUSTER = "?cluster=devnet";
-export const USDC_MINT = new PublicKey(
-  "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
-);
+export const RPC_URL = (() => { try { return rpcUrl("read"); } catch { return CHAIN.rpc; } })();
+export const EXPLORER_CLUSTER = CHAIN.explorerQuery;
+export const USDC_MINT = new PublicKey(CHAIN.mint);
 export const USDC_DECIMALS = 6;
 /** The largest amount one SystemProgram transfer carries (a u64 of lamports). */
 export const U64_MAX = (1n << 64n) - 1n;
-/** The chain gate for this rail's one chain: "" when this build may sign, ask the owner's wallet or send on it, else why not. */
-const solanaGate = () => chainGate({ rail: "solana", key: "solana-devnet", testnet: TESTNET, token: { symbol: "USDC", address: USDC_MINT.toBase58(), decimals: USDC_DECIMALS }, agentKey: true });
-// No Solana budget script runs on a chain this build does not sign on: it refuses here, as it loads, before it reads a
-// key file or asks an RPC anything.
-if (solanaGate()) {
-  const command = String(process.argv[1] ?? "").split(/[\\/]/).pop().replace(/\.(?:ts|mjs)$/, "") || "solana";
-  console.error(`REFUSED: ${solanaGate()}. Nothing was signed or sent.`);
-  console.log(`RESULT ${JSON.stringify({ ok: false, command, rail: "solana", chain: "devnet", state: "refused_precheck", reason: solanaGate(), next: "nothing was signed or sent; this build signs on Solana devnet only" })}`);
-  process.exit(3);
+
+// Which scripts sign with the agent key or grant a budget to it: on a mainnet that key must be in the OS keychain
+// (chain-gate.js). The owner's own scripts (readBudget, reconcile, revokeBudget, fundAgent, buy --check) never wait on it.
+// setup is exempt while --key-store os-keychain is moving or creating the key there.
+const SCRIPT = String(process.argv[1] ?? "").split(/[\\/]/).pop().replace(/\.(?:ts|mjs)$/, "");
+const ARGV = process.argv.slice(2);
+const keyStoreArg = (() => {
+  const i = ARGV.findIndex((a) => a === "--key-store" || a.startsWith("--key-store="));
+  return i < 0 ? undefined : ARGV[i].includes("=") ? ARGV[i].slice(ARGV[i].indexOf("=") + 1) : ARGV[i + 1];
+})();
+const SIGNS_WITH_AGENT_KEY =
+  (SCRIPT === "buy" && !ARGV.includes("--check")) || SCRIPT === "setBudget" || SCRIPT === "siteCall" || (SCRIPT === "setup" && keyStoreArg !== "os-keychain");
+const chainToken = () => ({ symbol: "USDC", address: CHAIN.mint, decimals: USDC_DECIMALS });
+/** The chain gate for the chain this process runs on: "" when it may sign, ask the owner's wallet or send on it, else why not. */
+const solanaGate = () => CHAIN_PROBLEM || chainGate({ rail: "solana", key: CHAIN.gateKey, testnet: TESTNET, token: chainToken(), agentKey: SIGNS_WITH_AGENT_KEY });
+// No Solana budget script runs on a chain it must not sign on: it refuses here, as it loads, before it reads a key file or
+// asks an RPC anything.
+{
+  const gate = solanaGate();
+  if (gate) {
+    console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
+    console.log(`RESULT ${JSON.stringify({ ok: false, command: SCRIPT || "solana", rail: "solana", chain: CHAIN_PROBLEM ? oneLine(process.env[CHAIN_ENV], 40) : CHAIN.key, state: "refused_precheck", reason: gate, next: CHAIN_PROBLEM ? "nothing was signed or sent; use --chain devnet, or ask the operator to open mainnet" : /paused/.test(gate) ? `nothing was signed or sent; the operator paused mainnet (SUPERSTABLES_MAINNET_PAUSE, or the file ${MAINNET_PAUSE_FILE} in the client's home folder): ask them` : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}`);
+    process.exit(3);
+  }
+}
+
+/**
+ * Why nothing may be signed or sent on this chain at this moment, or "": the operator's switch, the manifest and the pause,
+ * read again. Ask it right before an agent key signs and right before a signature leaves (a testnet always passes).
+ */
+export function mainnetClosed() {
+  return TESTNET ? "" : mainnetRefusal({ rail: "solana", key: CHAIN.gateKey, testnet: false, token: chainToken() });
+}
+/** Throws when a mainnet has closed since the command began. `signed`: a signature exists and stays on this computer. */
+export function assertMainnetOpen(what, signed = false) {
+  const closed = mainnetClosed();
+  if (closed) throw new Error(`${closed}; ${signed ? "the signed transaction was kept on this computer and not sent: " : ""}${what}`);
 }
 
 export const OWNER_KEY_PATH = ownerKeyFile("solana");
 export const AGENT_KEY_PATH = agentKeyFile("solana");
-export const PUBLIC_PATH = publicFile("solana", "devnet");
-export const OPS_DIR = opsDir("solana", "devnet");
+export const PUBLIC_PATH = publicFile("solana", CHAIN.key);
+export const OPS_DIR = opsDir("solana", CHAIN.key);
+export { CHAIN };
+/** What a command line that names this rail adds to name this chain: nothing on devnet, the default. */
+export const CHAIN_FLAG = CHAIN.key === "devnet" ? "" : ` --chain ${CHAIN.key}`;
+/** What to do about too little SOL or USDC, then `then`: a faucet on devnet; on a mainnet the owner adds them, there is no faucet. */
+export const getSolHint = (then) => (CHAIN.faucet ? `get devnet SOL (faucet.solana.com), then ${then}` : `the owner adds SOL to the wallet, then ${then}`);
+export const getUsdcHint = (then) => (CHAIN.faucet ? `get devnet USDC from faucet.circle.com (Solana devnet), then ${then}` : `the owner adds USDC to the wallet, then ${then}`);
+/**
+ * On a mainnet, why the agent key file must not sign a request to the site (a hosted owner command signs with it too): it holds the
+ * key as plain text or cannot be read. "" on a testnet, and for a file that names the keychain or is not there (loadAgent's own words).
+ */
+export function plainKeyProblem() {
+  if (TESTNET) return "";
+  const store = agentKeyStorage("solana", AGENT_KEY_PATH);
+  return store === "file" || store === "unreadable" ? `${AGENT_KEY_PATH} ${store === "file" ? "holds the agent key as plain text" : "cannot be read"}, and on a mainnet the key must be in the OS keychain (superstables budget setup --rail solana --chain ${CHAIN.key} --key-store os-keychain)` : "";
+}
 
 const rpcFetch = cappedRpcFetch(SOLANA_RPC_MAX_BYTES);
 /** A connection to `url`: a broadcast prints SENDING before it leaves (../proof.mjs); every answer is read through cappedRpcFetch (../rpc.mjs). */
 export function connectionTo(url) {
-  return new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (u, init) => { markSend(init?.body); return rpcFetch(u, { ...init, signal: AbortSignal.timeout(10_000) }); } });
+  return new Connection(url, { commitment: "confirmed", disableRetryOnRateLimit: true, confirmTransactionInitialTimeout: 15_000, fetch: (u, init) => {
+    // the broadcast boundary: a mainnet closed since the transaction was signed keeps it here, before SENDING is printed
+    if (typeof init?.body === "string" && /"method":\s*"sendTransaction"/.test(init.body)) assertMainnetOpen("nothing was broadcast", true);
+    markSend(init?.body);
+    return rpcFetch(u, { ...init, signal: AbortSignal.timeout(10_000) });
+  } });
 }
 /** The connection for reads (the default) or for an owner command, which reads and sends through the owner's endpoints. */
 export function connection(purpose = "read") {
@@ -121,9 +171,9 @@ export function connection(purpose = "read") {
 export const RPC_HOST = (() => { try { return new URL(RPC_URL).host; } catch { return "the Solana RPC"; } })();
 const hostOf = (url) => { try { return new URL(url).host; } catch { return "the Solana RPC"; } };
 /** What to do when the RPC is on another cluster. */
-export const CLUSTER_NEXT = "unset SUPERSTABLES_SOLANA_RPC, or set it to a Solana devnet RPC, then run the command again";
+export const CLUSTER_NEXT = `unset SUPERSTABLES_SOLANA_RPC, or set it to a ${CHAIN.label} RPC, then run the command again`;
 /**
- * Why `conn` must not be used for a budget transaction, in words, or "" when its RPC answers Solana devnet's genesis
+ * Why `conn` must not be used for a budget transaction, in words, or "" when its RPC answers this chain's genesis
  * hash. Asked before a blockhash is fetched, a transaction is offered to a wallet, signed or sent, and before a read
  * that decides one: a SOL transfer names no cluster, so one built on another cluster's blockhash moves SOL there. A
  * genesis that cannot be read is a reason too.
@@ -138,8 +188,8 @@ export async function clusterProblem(conn) {
   } catch (err) {
     return `could not read which Solana cluster ${host} is on (${oneLine(err?.message ?? err, 160)})`;
   }
-  if (genesis === SOLANA_DEVNET_GENESIS) return "";
-  return `the Solana RPC ${host} is not on Solana devnet (its genesis hash is ${oneLine(genesis, 60)})`;
+  if (genesis === CHAIN.genesis) return "";
+  return `the Solana RPC ${host} is not on ${CHAIN.label} (its genesis hash is ${oneLine(genesis, 60)})`;
 }
 
 /** A JSON-RPC call to `url` for the agreement engine: plain data in and out, with a timeout. */
@@ -168,7 +218,7 @@ export function agreedAccount(address, { minSlot, atLeast, purpose = "read" } = 
   return agreeAtFinalSolana({
     set: solanaVerdictSet(purpose),
     call: rpcCall,
-    genesis: SOLANA_DEVNET_GENESIS,
+    genesis: CHAIN.genesis,
     minSlot,
     atLeast,
     read: async (url, slot) => {
@@ -219,11 +269,11 @@ export function fromBaseUnits(baseUnits) {
 }
 
 export function explorerTx(sig) {
-  return `https://explorer.solana.com/tx/${sig}${EXPLORER_CLUSTER}`;
+  return `${CHAIN.explorer}/tx/${sig}${EXPLORER_CLUSTER}`;
 }
 
 export function explorerAddr(addr) {
-  return `https://explorer.solana.com/address/${addr}${EXPLORER_CLUSTER}`;
+  return `${CHAIN.explorer}/address/${addr}${EXPLORER_CLUSTER}`;
 }
 
 export function parseEnvFile(path) {
@@ -335,7 +385,7 @@ export function writePublic(pairs, drop = []) {
   for (const k of drop) delete env[k];
   ensurePrivateDir(dirname(PUBLIC_PATH), { root: HOME });
   const body =
-    "# Solana devnet public addresses only. Read commands use this file. No secrets.\n" +
+    `# ${CHAIN.label} public addresses only. Read commands use this file. No secrets.\n` +
     Object.entries(env).map(([k, v]) => `${k}=${v}\n`).join("");
   writeFileSync(PUBLIC_PATH, body);
 }
@@ -435,7 +485,7 @@ export function parseAmountFlag(flags, name, usage) {
   }
 }
 
-// Reads (never payments) retry with backoff: the public devnet RPC answers 429 under load.
+// Reads (never payments) retry with backoff: the public RPCs answer 429 under load.
 export async function retryRead(fn, tries = 6) {
   let delay = 700;
   for (let i = 0; ; i++) {
@@ -460,8 +510,8 @@ export async function ownerPlanCtx(refuse) {
   const env = existsSync(PUBLIC_PATH) ? parseEnvFile(PUBLIC_PATH) : {};
   const owner = pk(env, "SOLANA_OWNER_ADDRESS");
   const agent = pk(env, "SOLANA_AGENT_ADDRESS");
-  if (!owner || !agent) return refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
-  const next = `check the public file: run superstables budget setup --rail solana${hostedFlags(env)} where the agent key is, to record the owner's signature again. The owner can still end the delegation from any machine: superstables budget revoke --rail solana`;
+  if (!owner || !agent) return refuse("the public file names no owner or no agent", `superstables budget setup --rail solana${CHAIN_FLAG}`);
+  const next = `check the public file: run superstables budget setup --rail solana${CHAIN_FLAG}${hostedFlags(env)} where the agent key is, to record the owner's signature again. The owner can still end the delegation from any machine: superstables budget revoke --rail solana${CHAIN_FLAG}`;
   let keyAgent = null;
   if (existsSync(AGENT_KEY_PATH)) {
     const file = agentKeyFileValues();

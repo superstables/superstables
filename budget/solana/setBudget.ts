@@ -21,7 +21,7 @@
 import { rpcPause } from "../rpc-pause.mjs";
 import { Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { createApproveCheckedInstruction, getAssociatedTokenAddressSync, getAccount, getAccountOrNull } from "./token.mjs";
-import { CLUSTER_NEXT, agreementLine, agreedAccount, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, ownerPlanCtx, retryRead, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
+import { CHAIN_FLAG, CHAIN, CLUSTER_NEXT, getSolHint, getUsdcHint, agreementLine, agreedAccount, clusterProblem, connection, loadOwner, explorerTx, USDC_MINT, USDC_DECIMALS, formatUnits, parseStrict, parseAmountFlag, oneLine, usageError, ownerPlanCtx, retryRead, PUBLIC_PATH, parseEnvFile, writePublic } from "./lib.mjs";
 import { OWNER_KEY_FILE, checkOwnerKeyFile } from "../owner-page.ts";
 import { differsFromRequest, mismatchPage, mismatchReason, siteName } from "../site.mjs";
 import { MIN_FEE_LAMPORTS, approvalSite, askSolanaIntent, askSolanaTransaction, closeOwnerPage, confirmHosted, confirmSent, emit, endUnapproved, grantTerms, sol, transactionPort, finalizedOf, agreedFinalAccount, LANDED_SOLANA_GRANT } from "./owner.ts";
@@ -65,23 +65,23 @@ if (cluster) refuse(cluster, CLUSTER_NEXT);
 const { owner, agent } = await ownerPlanCtx(refuse); // the public addresses, checked against the owner's setup signature
 const ata = getAssociatedTokenAddressSync(USDC_MINT, owner);
 const before = await retryRead(() => getAccountOrNull(conn, ata)).catch((err) =>
-  refuse(`could not read the owner's USDC account ${ata.toBase58()} (${oneLine(err?.message ?? err, 160)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again"),
+  refuse(`could not read the owner's USDC account ${ata.toBase58()} (${oneLine(err?.message ?? err, 160)})`, `check the ${CHAIN.label} RPC (superstables budget doctor --rail solana${CHAIN_FLAG}), then grant again`),
 );
-if (!before) refuse(`the owner ${owner.toBase58()} has no devnet USDC account yet`, "get devnet USDC from faucet.circle.com (Solana devnet), then grant again");
-if (before.amount === 0n) refuse(`the owner's USDC account ${ata.toBase58()} holds no USDC`, "get devnet USDC from faucet.circle.com (Solana devnet), then grant again");
+if (!before) refuse(`the owner ${owner.toBase58()} has no ${CHAIN.label} USDC account yet`, getUsdcHint("grant again"));
+if (before.amount === 0n) refuse(`the owner's USDC account ${ata.toBase58()} holds no USDC`, getUsdcHint("grant again"));
 console.log(`Owner ${owner.toBase58()} (USDC account ${ata.toBase58()}, ${formatUnits(before.amount)} USDC), agent ${agent.toBase58()}`);
 console.log(`Before: delegate=${before.delegate?.toBase58() ?? "none"} delegatedAmount=${formatUnits(before.delegatedAmount)} USDC`);
 if (before.delegate && (before.delegatedAmount > 0n || !before.delegate.equals(agent))) {
   refuse(
     `the owner's USDC account already has delegate ${before.delegate.toBase58()} with ${formatUnits(before.delegatedAmount)} USDC left. ApproveChecked overwrites the single delegate slot, so that would void it`,
-    "revoke first (superstables budget revoke --rail solana), then grant again",
+    `revoke first (superstables budget revoke --rail solana${CHAIN_FLAG}), then grant again`,
   );
 }
 // What the owner's endpoints agree on at finalized: a delegate still live there means the previous revoke is not finalized yet, and an
 // answer that cannot be agreed is not taken as "no delegate".
 {
   const fin = await agreedAccount(ata.toBase58(), { purpose: "owner" });
-  if (!fin.agreed) refuse(`the owner's USDC account at finalized could not be confirmed (${agreementLine(fin)})`, "check the devnet RPC (superstables budget doctor --rail solana), then grant again");
+  if (!fin.agreed) refuse(`the owner's USDC account at finalized could not be confirmed (${agreementLine(fin)})`, `check the ${CHAIN.label} RPC (superstables budget doctor --rail solana${CHAIN_FLAG}), then grant again`);
   // A recorded revoke that is not finalized yet: a grant waits for it, whatever the finalized view of the account reads (an earlier
   // grant that is itself not finalized leaves the finalized view with no delegate).
   const rec = parseEnvFile(PUBLIC_PATH);
@@ -90,19 +90,19 @@ if (before.delegate && (before.delegatedAmount > 0n || !before.delegate.equals(a
     if (!done.final) {
       refuse(
         `the previous revoke is not finalized yet: ${rec.REVOKED_TX} has not reached finalized. Grant again once it is finalized`,
-        "superstables budget status --rail solana, then grant again once the revoke is finalized",
+        `superstables budget status --rail solana${CHAIN_FLAG}, then grant again once the revoke is finalized`,
       );
     }
   }
   if (fin.value && fin.value.delegate !== null && (fin.value.delegatedAmount > 0n || fin.value.delegate !== agent.toBase58())) {
     refuse(
       `the previous revoke is not finalized yet: the account shows no live delegate on the latest read but delegate ${fin.value.delegate} with ${formatUnits(fin.value.delegatedAmount)} USDC at finalized. Grant again once it is finalized`,
-      "superstables budget status --rail solana, then grant again once the revoke is finalized",
+      `superstables budget status --rail solana${CHAIN_FLAG}, then grant again once the revoke is finalized`,
     );
   }
 }
 const lamports = BigInt(await retryRead(() => conn.getBalance(owner, "confirmed")));
-if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, "get devnet SOL (faucet.solana.com), then grant again");
+if (lamports < MIN_FEE_LAMPORTS) refuse(`the owner holds ${sol(lamports)} SOL, too little for the network fee`, getSolHint("grant again"));
 console.log(`ApproveChecked: delegate ${agent.toBase58()}, ${formatUnits(cap)} USDC (${cap} base units). The chain enforces the total cap only.`);
 
 const ix = () => [createApproveCheckedInstruction(ata, USDC_MINT, agent, owner, cap, USDC_DECIMALS)];
@@ -136,21 +136,21 @@ if (OWNER_KEY_FILE) {
   if (c.status === "unknown") {
     handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain yet. The command reports it as unknown.", hash: sig });
     await closeOwnerPage();
-    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: "superstables budget status --rail solana: read the delegate before granting again" }));
+    process.exit(result(5, { state: "unknown", tx: sig, reason: "the transaction was sent but the chain does not show it yet", next: `superstables budget status --rail solana${CHAIN_FLAG}: read the delegate before granting again` }));
   }
   if (c.status !== "success" && !differsFromRequest(c.problems, c.siteFailed)) {
     const why = c.status === "expired" ? "it was sent but never landed before its blockhash expired; nothing changed" : `it failed on chain (${oneLine(JSON.stringify(c.err), 300)}); nothing changed`;
     const proof = c.status === "expired" ? "blockhash_expired" : "reverted";
     handle.finish({ outcome: "failed", proof, message: `The transaction ${c.status === "expired" ? "never landed" : "failed on chain"}. The grant is not confirmed. A failed on-chain transaction may still charge a fee.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", proof, tx: sig, reason: why, next: "superstables budget status --rail solana" }));
+    process.exit(result(1, { state: "failed", proof, tx: sig, reason: why, next: `superstables budget status --rail solana${CHAIN_FLAG}` }));
   }
   if (c.problems.length) {
     const reason = mismatchReason(c.problems, c.siteFailed, sig);
     console.log(`MISMATCH: ${reason}`);
-    handle.finish({ outcome: "unknown", message: `${mismatchPage(c.problems, c.siteFailed, sig, { ended: c.status === "failed" ? "failed on chain" : undefined })} Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+    handle.finish({ outcome: "unknown", message: `${mismatchPage(c.problems, c.siteFailed, sig, { ended: c.status === "failed" ? "failed on chain" : undefined })} Revoke it: superstables budget revoke --rail solana${CHAIN_FLAG}.`, hash: sig });
     await closeOwnerPage();
-    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
+    process.exit(result(3, { state: "mismatch", tx: sig, reason, next: `revoke (superstables budget revoke --rail solana${CHAIN_FLAG}), then grant again` }));
   }
   if (c.signer !== owner.toBase58()) console.log(`note: signer 0 is ${c.signer}, not the owner`);
 }
@@ -172,9 +172,9 @@ console.log(`explorer: ${explorerTx(sig)}`);
 if (problems().length) {
   const reason = `the chain does not show the planned budget: ${problems().join("; ")}`;
   console.log(`REFUSED: ${reason}`);
-  finish?.({ outcome: "unknown", message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana.`, hash: sig });
+  finish?.({ outcome: "unknown", message: `The chain shows something other than planned (${problems().join("; ")}). Revoke it: superstables budget revoke --rail solana${CHAIN_FLAG}.`, hash: sig });
   await closeOwnerPage();
-  process.exit(result(3, { state: "mismatch", tx: sig, reason, next: "revoke (superstables budget revoke --rail solana), then grant again" }));
+  process.exit(result(3, { state: "mismatch", tx: sig, reason, next: `revoke (superstables budget revoke --rail solana${CHAIN_FLAG}), then grant again` }));
 }
 // Final: the signature reaches finalized and the endpoints agree at finalized that the account shows the plan.
 const fin = await finalizedOf(conn, sig);
@@ -187,6 +187,6 @@ writePublic({ GRANT_TX: sig, ...(fin.slot !== undefined ? { GRANT_SLOT: String(f
 const most = after.delegatedAmount < after.amount ? after.delegatedAmount : after.amount;
 console.log(`True maximum: ${formatUnits(most)} USDC in total (the smaller of the cap and the owner's balance ${formatUnits(after.amount)}). No expiry, no seller list: it lasts until spent or revoked.`);
 if (!final) console.log("The grant is in a block and the account shows it, but the transaction is not finalized yet.");
-finish?.({ outcome: "confirmed", message: final ? `Done. The chain shows a budget of ${formatUnits(cap)} USDC for your agent. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.` : LANDED_SOLANA_GRANT, hash: sig });
+finish?.({ outcome: "confirmed", message: final ? `Done. The chain shows a budget of ${formatUnits(cap)} USDC for your agent. You can close this page. To end it: superstables budget revoke --rail solana${CHAIN_FLAG}. You approve that in your wallet too.` : LANDED_SOLANA_GRANT, hash: sig });
 await closeOwnerPage();
-process.exit(result(0, { state: final ? "set" : "landed", final, tx: sig, cap: formatUnits(cap), remaining: formatUnits(after.delegatedAmount), maxMovable: formatUnits(most), enforcedOnChain: { expiry: false, period: false, sellers: false }, next: final ? "agent: buy" : "superstables budget status --rail solana later: the grant is final when status says so" }));
+process.exit(result(0, { state: final ? "set" : "landed", final, tx: sig, cap: formatUnits(cap), remaining: formatUnits(after.delegatedAmount), maxMovable: formatUnits(most), enforcedOnChain: { expiry: false, period: false, sellers: false }, next: final ? "agent: buy" : `superstables budget status --rail solana${CHAIN_FLAG} later: the grant is final when status says so` }));

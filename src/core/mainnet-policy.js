@@ -64,7 +64,7 @@ export function parseMainnetSwitch(raw) {
   if (raw === undefined || raw === "" || raw === "0" || raw === "false") return { enabled: false };
   if (raw === "1" || raw === "true") return { enabled: true };
   const shown = JSON.stringify(raw.length > 24 ? `${raw.slice(0, 24)}...` : raw);
-  return { error: `${MAINNET_ENV} is ${shown}, which is not a value: use 1 or true to allow mainnet, or 0, false or unset to keep it off` };
+  return { error: `${MAINNET_ENV} is ${shown}, a value it does not take, so mainnet stays off; stop and ask the owner to check it` };
 }
 
 /**

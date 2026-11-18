@@ -2,7 +2,7 @@
 
 An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (USDG on Robinhood Chain Testnet, pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
 
-**Testnet by default.** Test tokens, no real money. `superstables budget` refuses mainnet chains unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then the `evm` rail also takes the mainnets, where budgets hold real money. The `tempo` and `solana` rails stay on their testnets.
+**Testnet by default.** Test tokens, no real money. `superstables budget` refuses mainnet chains unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then every rail also takes its mainnets (the EVM mainnets, `--chain tempo` and `--chain solana`), where budgets hold real money.
 
 There are two ways to pay, and an agent can offer both:
 
@@ -314,7 +314,7 @@ Development runs have exercised these flows with wallet harnesses and chain read
 - `superstables budget find` lists the services superstables.com says a budget can pay, and whether each listing is marked as returning prepared sample output (`simulated`); `--chain C` or `--rail R` lists one chain or rail, such as `--chain moderato` or `--chain devnet`. `superstables budget find --once` lists the ones `buy-once` can buy. `buy-once` covers the services the site lists for it, on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato and Solana devnet; any other seller needs a budget. Any other seller works too: supply its URL and, when known, its address. `buy` does not use the client's `superstables find` or `superstables quote` records.
 - Budget commands need a shell.
 - Native Windows: refused, because owner approvals rely on POSIX process groups and the key files on file modes. Use WSL.
-- Mainnet is refused unless the operator has turned it on (SUPERSTABLES_ALLOW_MAINNET); then budgets on the `evm` rail's mainnets move real money. `tempo` and `solana` budgets pay on their testnets only. Stop and ask the owner.
+- Mainnet is refused unless the operator has turned it on (SUPERSTABLES_ALLOW_MAINNET); then budgets on every rail's mainnets move real money. Stop and ask the owner.
 - `evm` buys are GET only and need an EIP-3009 USDC option (no Circle Gateway batched option). `tempo` and `solana` buys can POST.
 - Expiry, period and seller list on `evm` and `solana`: the chain cannot enforce them, so `superstables budget grant` refuses them.
 - Tempo payment sessions, Solana Squads spending limits and Solana Subscriptions are not behind `superstables budget`: `buy` pays one charge or one transfer at a time.

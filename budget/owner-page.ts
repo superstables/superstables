@@ -259,7 +259,7 @@ export function ownerPageFor(rail: OwnerRail) {
   /** What the link's sentence says about money: test tokens on a testnet; real money on a mainnet, which only the operator opens. */
   const moneyWords = rail.chain.testnet
     ? "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Test tokens, no real money."
-    : `This is ${rail.chain.chainName}, a mainnet: the money is real.\nSUPERSTABLES_ALLOW_MAINNET is on. Only the operator sets it; agents never set the variable.`;
+    : `This is ${rail.chain.chainName}, a mainnet: the money is real.\nOnly the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.`;
   const inMinutes = (expiresAt: number) => {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;

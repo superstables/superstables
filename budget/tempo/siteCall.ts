@@ -4,7 +4,7 @@
 // npx tsx budget/tempo/siteCall.ts --site <origin> --path /api/v1/budget/purchases --body <json> [--agent <label>] [--timeout-ms <n>]
 //   npx tsx budget/tempo/siteCall.ts --site <origin> --method GET --path /api/v1/budget/services
 import { labelCheck, parseCli } from './lib/args.mjs'
-import { loadAgentEnv, resolveAgentKeys } from './lib/common.ts'
+import { CHAIN, assertMainnetOpen, isKeyRefusal, isMainnetClosed, loadAgentEnv, oneLine, resolveAgentKeys } from './lib/common.ts'
 import { signedSitePost, siteCallArgs } from '../site-request.ts'
 
 const { values: args } = parseCli({
@@ -26,7 +26,19 @@ if (!call) {
   console.log(`RESULT ${JSON.stringify({ ok: false, command: 'siteCall', rail: 'tempo', state: 'refused_precheck', reason: 'needs --site, --path and a JSON --body for a POST, and --timeout-ms is 1 to 15000', next: 'nothing was signed or sent' })}`)
   process.exit(3)
 }
-const { privateKey } = resolveAgentKeys(loadAgentEnv(), typeof args.agent === 'string' ? args.agent : '')
-const reply = await signedSitePost(privateKey, call!.site, call!.path, call!.body, call!.method, { timeoutMs: call!.timeoutMs })
-console.log(`RESULT ${JSON.stringify({ ok: true, command: 'siteCall', rail: 'tempo', chain: 'moderato', state: 'ok', reply })}`)
+// A key that cannot be used (a keychain that is locked or holds another key, a plain key on a mainnet) or a mainnet closed since
+// this started ends with exit 3 and nothing signed.
+let reply
+try {
+  const { privateKey } = resolveAgentKeys(loadAgentEnv(), typeof args.agent === 'string' ? args.agent : '')
+  assertMainnetOpen('nothing was signed or sent')
+  reply = await signedSitePost(privateKey, call!.site, call!.path, call!.body, call!.method, { timeoutMs: call!.timeoutMs })
+} catch (err) {
+  if (!isKeyRefusal(err) && !isMainnetClosed(err)) throw err
+  const reason = oneLine((err as Error).message, 300)
+  console.log(`REFUSED: ${reason}. Nothing was signed or sent.`)
+  console.log(`RESULT ${JSON.stringify({ ok: false, command: 'siteCall', rail: 'tempo', chain: CHAIN.key, state: 'refused_precheck', reason, next: 'nothing was signed or sent' })}`)
+  process.exit(3)
+}
+console.log(`RESULT ${JSON.stringify({ ok: true, command: 'siteCall', rail: 'tempo', chain: CHAIN.key, state: 'ok', reply })}`)
 process.exit(0)

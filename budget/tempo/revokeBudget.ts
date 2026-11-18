@@ -25,7 +25,7 @@
 import { rpcPause } from "../rpc-pause.mjs";
 import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
+import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
 import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, type Simulated } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
@@ -79,7 +79,7 @@ async function main() {
   const agentAddress = (typeof args.key === 'string' ? args.key : pub[`AGENT${agentLabel}_ADDRESS`]) as Address | undefined
   if (!owner || !agentAddress) {
     console.log('REFUSED: the public file names no owner or no agent. Nothing was sent.')
-    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the public file names no owner or no agent', next: 'superstables budget setup --rail tempo' }))
+    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason: 'the public file names no owner or no agent', next: 'superstables budget setup --rail tempo' + CHAIN_FLAG }))
   }
   // The agent key file also records the owner. While it names another, this command (which acts for the public file's
   // owner) says nothing about either: "never authorized" on one could hide the other's live key. Read for that one public
@@ -90,7 +90,7 @@ async function main() {
   if (bound && bound.toLowerCase() !== owner.toLowerCase()) {
     const reason = `the owner files disagree: the public file records the owner ${owner}, and the agent key file is bound to ${bound}`
     console.log(`REFUSED: ${reason}. Nothing was sent.`)
-    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'superstables budget setup --rail tempo --new-owner checks both owners for a live budget and names the owner who must revoke it, and how' }))
+    process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'superstables budget setup --rail tempo' + CHAIN_FLAG + ' --new-owner checks both owners for a live budget and names the owner who must revoke it, and how' }))
   }
   console.log(`Revoking agent access key ${agentAddress} on owner ${owner}`)
 
@@ -112,7 +112,7 @@ async function main() {
     console.log(`FAILED: ${reason}`)
     finish?.({ outcome: "failed", proof: 'reverted', message: `The transaction reverted, so it revoked nothing. The key ${state}. ${now?.revoked ? 'Check that this is what you expect.' : 'Run the revoke again.'}`, hash: tx })
     await closeOwnerPage()
-    process.exit(emit('revokeBudget', 1, { state: 'failed', proof: 'reverted', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
+    process.exit(emit('revokeBudget', 1, { state: 'failed', proof: 'reverted', tx, revoked: now ? now.revoked : null, reason, next: now?.revoked ? `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(agentLabel)}: the key reads revoked, by another transaction` : 'run revoke again' }))
   }
 
   let alreadyRevoked = false
@@ -142,7 +142,7 @@ async function main() {
         ? `the key reads ${reads}, but ${sim.words}; whether the key is live is unknown`
         : 'the key reads never authorized, but the keychain refuses a revoke as already done; whether the key is live is unknown'
       console.log(`UNKNOWN: ${reason}. Nothing was sent.`)
-      process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: null, reason, next: `check the Moderato RPC (superstables budget doctor --rail tempo), then run revoke again${agentFlag(agentLabel)}` }))
+      process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: null, reason, next: `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then run revoke again${agentFlag(agentLabel)}` }))
     }
     if (before.revoked && sim.verdict !== 'sends') {
       alreadyRevoked = true
@@ -181,18 +181,18 @@ async function main() {
     } catch (err) {
       const reason = `could not read the owner's fee token from the FeeManager (${oneLine((err as Error)?.message ?? err, 120)})`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
-      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'check the Moderato RPC (superstables budget doctor --rail tempo), then revoke again' }))
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then revoke again` }))
     }
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
       const reason = `the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} the revoke's network fee may need`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
-      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: 'fund the owner (superstables budget setup --rail tempo --fund-only), then revoke again' }))
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: CHAIN.faucet ? 'fund the owner (superstables budget setup --rail tempo' + CHAIN_FLAG + ' --fund-only), then revoke again' : 'the owner adds pathUSD (the network fee is paid in it), then revoke again' }))
     }
     const data = revokeCalldata(agentAddress)
     useHostedAgent(agentAddress) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('revoke', owner, { to: KEYCHAIN, data }, revokeTerms({ owner, agent: agentAddress, remaining: before.remaining, expiry: before.expiry, feeToken, label: agentLabel }))
-    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) }, `superstables budget status --rail tempo${agentFlag(agentLabel)}`)
+    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('revokeBudget', outcome, { remaining: fromBaseUnits(before.remaining) }, `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(agentLabel)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
@@ -204,7 +204,7 @@ async function main() {
     if (!sent) {
       handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity.", hash: outcome.hash })
       await closeOwnerPage()
-      process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
+      process.exit(emit('revokeBudget', 5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(agentLabel)}` }))
     }
     hash = sent.hash
     console.log(`receipt: ${sent.status}, block ${sent.blockNumber}, transaction type ${sent.type}, fee payer ${sent.feePayer ?? 'n/a (the sender)'}, fee token ${sent.feeToken ?? 'n/a'}`)
@@ -215,7 +215,7 @@ async function main() {
       const now = await readKey(owner, agentAddress).catch(() => null)
       handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== 'success' ? 'reverted on chain' : undefined })} Check the key and revoke again.`, hash })
       await closeOwnerPage()
-      process.exit(emit('revokeBudget', 3, { state: 'mismatch', tx: hash, revoked: now ? now.revoked : null, reason, next: `revoke again (superstables budget revoke --rail tempo${agentFlag(agentLabel)}) and check superstables budget status --rail tempo${agentFlag(agentLabel)}` }))
+      process.exit(emit('revokeBudget', 3, { state: 'mismatch', tx: hash, revoked: now ? now.revoked : null, reason, next: `revoke again (superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(agentLabel)}) and check superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(agentLabel)}` }))
     }
     // Reverted: this transaction revoked nothing. The site's failed verdict travels in the problems above, or here.
     if (sent.status !== 'success') await revertedRevoke(hash, sent.problems)

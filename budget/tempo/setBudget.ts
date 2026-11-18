@@ -28,7 +28,7 @@
 import { Scopes } from 'viem/tempo'
 import type { Address, Hex } from 'viem'
 import { addressListCheck, decimalCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, makeClient, oneLine, ownerAccount, ownerPlanCtx, toBaseUnits } from './lib/common.ts'
+import { CHAIN, CHAIN_FLAG, TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, makeClient, oneLine, ownerAccount, ownerPlanCtx, toBaseUnits } from './lib/common.ts'
 import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import {
@@ -77,7 +77,7 @@ async function main() {
       before.revoked
         ? `agent key ${agent} is revoked, and a revoked key can never be authorized again`
         : `agent key ${agent} is already authorized (expiry ${new Date(before.expiry * 1000).toISOString()}, remaining ${fromBaseUnits(before.remaining)} ${TOKEN_LABEL}). Revoke it first, then grant a fresh key`,
-      before.revoked ? 'make a new agent key: superstables budget setup --rail tempo --agent LABEL, then grant with --agent LABEL' : `revoke first (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key`,
+      before.revoked ? 'make a new agent key: superstables budget setup --rail tempo' + CHAIN_FLAG + ' --agent LABEL, then grant with --agent LABEL' : `revoke first (superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(label)}), then grant a new key`,
     )
   }
 
@@ -115,16 +115,16 @@ async function main() {
     const receipt = sentOrReverted
     hash = receipt.transactionHash as Hex
     console.log(`\ntx hash: ${hash}\nexplorer: ${explorerTx(hash)}\nstatus: ${receipt.status}`)
-    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain; it granted nothing', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
+    if (receipt.status !== 'success') process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain; it granted nothing', next: `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(label)}` }))
     const block = await rpcRead('eth_getBlockByNumber', ['0x' + receipt.blockNumber.toString(16), false]).catch(() => null)
     authorizedAt = block?.timestamp ? parseInt(block.timestamp, 16) : undefined
   } else {
     // Refuse here, before any link exists, whatever would make the owner's approval fail or pointless.
     if (expirySeconds * 1000 <= OWNER_TIMEOUT_MS + 60_000) refuse(`the key would expire (in ${expirySeconds}s) before the approval link does (${Math.round(OWNER_TIMEOUT_MS / 1000)}s)`, 'grant with a later --expiry, or a shorter --timeout')
-    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${oneLine(err?.message ?? err, 120)})`, 'check the Moderato RPC (superstables budget doctor --rail tempo), then grant again'))
+    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${oneLine(err?.message ?? err, 120)})`, `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then grant again`))
     const feeBalance = await tokenBalance(feeToken, owner)
     if (feeBalance < MIN_FEE_BALANCE) {
-      refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, 'fund the owner (superstables budget setup --rail tempo --fund-only uses the Moderato faucet), then grant again')
+      refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, CHAIN.faucet ? 'fund the owner (superstables budget setup --rail tempo' + CHAIN_FLAG + ' --fund-only uses the Moderato faucet), then grant again' : 'the owner adds pathUSD (the network fee is paid in it), then grant again')
     }
     const held = await tokenBalance(TOKEN_ADDRESS, owner)
     const head = await chainHead()
@@ -133,7 +133,7 @@ async function main() {
     const data = grantCalldata(plan)
     useHostedAgent(agent) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('grant', owner, { to: KEYCHAIN, data }, grantTerms({ ...plan, owner, expirySeconds, held, feeToken, label }))
-    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount }, `superstables budget status --rail tempo${agentFlag(label)}`)
+    if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount }, `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(label)}`)
     if (outcome.status !== 'sent') throw new Error(`unexpected owner page outcome ${outcome.status}`)
     finish = handle.finish
     console.log(`the wallet reported transaction ${outcome.hash}; checking it on chain`)
@@ -149,7 +149,7 @@ async function main() {
     if (!sent) {
       handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash })
       await closeOwnerPage()
-      process.exit(result(5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${agentFlag(label)}: read the key before granting again` }))
+      process.exit(result(5, { state: 'unknown', tx: outcome.hash, reason: 'the wallet reported a transaction the chain does not show (replaced, dropped or still pending)', next: `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(label)}: read the key before granting again` }))
     }
     hash = sent.hash
     authorizedAt = sent.blockTimestamp
@@ -158,15 +158,15 @@ async function main() {
     if (sent.status !== 'success' && !differsFromRequest(sent.problems, sent.siteFailed)) {
       handle.finish({ outcome: "failed", proof: 'reverted', message: 'The transaction reverted. No access key was granted by it, but a network fee may have been charged.', hash })
       await closeOwnerPage()
-      process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${agentFlag(label)}` }))
+      process.exit(result(1, { state: 'failed', proof: 'reverted', tx: hash, reason: 'the authorizeKey transaction reverted on chain', next: `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(label)}` }))
     }
     // Any difference from the plan is a mismatch, whatever the key reads afterwards: the wallet already sent it.
     if (sent.problems.length) {
       const reason = mismatchReason(sent.problems, sent.siteFailed, sent.hash)
       console.log(`MISMATCH: ${reason}`)
-      handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== 'success' ? 'reverted on chain' : undefined })} Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+      handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== 'success' ? 'reverted on chain' : undefined })} Revoke it: superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(label)}.`, hash })
       await closeOwnerPage()
-      process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
+      process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(label)}), then grant a new key` }))
     }
   }
 
@@ -177,9 +177,9 @@ async function main() {
   if (problems.length) {
     const reason = `the key on chain is not the planned one: ${problems.join('; ')}`
     console.log(`REFUSED: ${reason}`)
-    finish?.({ outcome: "unknown", message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${agentFlag(label)}.`, hash })
+    finish?.({ outcome: "unknown", message: `The chain shows a different key than planned (${problems.join('; ')}). Revoke it: superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(label)}.`, hash })
     await closeOwnerPage()
-    process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${agentFlag(label)}), then grant a new key` }))
+    process.exit(result(3, { state: 'mismatch', tx: hash, reason, next: `revoke it (superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(label)}), then grant a new key` }))
   }
   let trueMax = max
   let trueWindows = windows

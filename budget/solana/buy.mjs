@@ -1,5 +1,5 @@
 // buy -- the agent, acting as the SPL-Token delegate on the owner's own USDC associated token
-// account, pays a real third-party x402 `exact` Solana-devnet offer. The amount and recipient come
+// account, pays a real third-party x402 `exact` offer on Solana (devnet, or mainnet while the operator's switch is on). The amount and recipient come
 // from the seller's live 402 challenge; the caller's policy (--max, optional --pay-to) is checked
 // before anything is signed.
 //
@@ -17,7 +17,7 @@
 //   2. An operation id (--op, or generated and printed). A journal file is written before the
 //      payment is submitted. An operation that is submitted or unknown is refused until
 //      `reconcile` has read the chain. One process per operation (lock).
-//   3. Prechecks on the challenge (price <= --max, devnet USDC mint, 6 decimals, precision,
+//   3. Prechecks on the challenge (price <= --max, this chain's USDC mint, 6 decimals, precision,
 //      recipient == --pay-to when given). A refusal exits 3 with state refused_precheck. The
 //      agent key file is not opened on a refusal.
 //   4. Only then the agent key is loaded, the owner's USDC account read, and the budget checked
@@ -48,8 +48,12 @@ import {
 import bs58 from "bs58";
 import { join } from "node:path";
 import {
+  CHAIN,
   CLUSTER_NEXT,
+  assertMainnetOpen,
+  CHAIN_FLAG,
   clusterProblem,
+  mainnetClosed,
   connection,
   loadAgent,
   readPublic,
@@ -80,7 +84,7 @@ import { RECOVERY_ORDER, collides, failureFact, otherOrder, readTerms, recordOwn
 
 const USAGE = `Usage: node budget/solana/buy.mjs --url <seller-url> --max <usdc> [options]
 
-Pay an x402 "exact" Solana-devnet offer as the agent (SPL delegate of the owner's USDC account).
+Pay an x402 "exact" offer on the chain this process runs on (SUPERSTABLES_BUDGET_CHAIN; devnet by default) as the agent (SPL delegate of the owner's USDC account).
 
 Required:
   --url <url>        the seller resource (the unpaid request must answer HTTP 402)
@@ -102,7 +106,7 @@ Options:
   -h, --help         show this help
 
 Files: opens only the agent key file, solana-agent.env (after the prechecks pass).
-Journal: $SUPERSTABLES_HOME/budget/ops/solana-devnet/<op>.json
+Journal: $SUPERSTABLES_HOME/budget/ops/solana-<chain>/<op>.json
 Last stdout line: RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}
 Exit: 0 settled/quoted, 1 failed, 2 bad flags, 3 refused before signing, 4 unknown (run reconcile).`;
 
@@ -128,7 +132,7 @@ const recoveryOrder = flags["recovery-order"];
 if (recoveryOrder !== undefined && !RECOVERY_ORDER.test(recoveryOrder)) usageError("--recovery-order is an order reference (letters, digits and -, at most 64)", USAGE);
 // An op an order registered as its attempt is reserved for that order: refused before any lock, journal or signature, journal or not
 {
-  const reserved = reservedNameProblem("solana", "devnet", opId, recoveryOrder);
+  const reserved = reservedNameProblem("solana", CHAIN.key, opId, recoveryOrder);
   if (reserved) {
     console.error(`Refused (nothing signed): ${reserved}`);
     console.log("RESULT " + JSON.stringify({ rail: "solana", op: opId, state: "refused_precheck", tx: null, debit: "0", remaining: null, delivered: null, reason: reserved, next: "use another --op" }));
@@ -179,15 +183,15 @@ let lock = { ok: true };
 {
   lock = acquireLock(opId);
   if (!lock.ok) {
-    finish("unknown", 5, { debit: null, reason: "op_in_progress", next: lockNext(lock, opId, "solana", "devnet") });
+    finish("unknown", 5, { debit: null, reason: "op_in_progress", next: lockNext(lock, opId, "solana", CHAIN.key) });
   }
   const existing = readOp(opId);
-  if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana --op ${opId}` });
+  if (checkOnly && existing) finish("refused_precheck", EXIT.REFUSED, { reason: "op_already_exists", next: `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId}` });
   // a journal for a different request at an attempt op's name is a collision, checked here under the record lock and left as it is
   if (recoveryOrder !== undefined && existing && collides(existing, url)) {
     const why = `operation ${opId} has a journal for a different request than this order's attempt, so its outcome is unknown`;
     console.error(`Refused (nothing signed): ${why}`);
-    finish("unknown", 5, { debit: null, reason: why, next: `superstables budget reconcile --rail solana --op ${opId} (never pay again for this order)` });
+    finish("unknown", 5, { debit: null, reason: why, next: `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId} (never pay again for this order)` });
   }
   // an op that belongs to an auto-recovered order is run only as that order's attempt
   if (recoveryOrder === undefined && existing?.recoveryOf) {
@@ -202,7 +206,7 @@ let lock = { ok: true };
     finish("refused_precheck", EXIT.REFUSED, { reason: why, next: "nothing was signed or paid" });
   }
   // INVARIANT 1, also when the op's journal (and its mark) is gone: an op whose recovery record owns it is never bought here
-  const ownedWords = !existing?.supersededBy ? recordOwnsWords("solana", "devnet", opId) : ""; // whatever the flag says
+  const ownedWords = !existing?.supersededBy ? recordOwnsWords("solana", CHAIN.key, opId) : ""; // whatever the flag says
   if (ownedWords) {
     console.error(`Refused (nothing signed): ${ownedWords}`);
     finish("refused_precheck", EXIT.REFUSED, { reason: ownedWords, next: "rerun the original buy through superstables budget buy with the same --op" });
@@ -210,7 +214,7 @@ let lock = { ok: true };
   const gate = gateExistingOp(existing);
   if (!gate.allow) {
     console.error(`Refused (nothing signed): ${gate.reason}`);
-    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "superseded" ? supersededNext(existing.supersededBy) : gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_precheck", EXIT.REFUSED, { tx: gate.tx, reason: gate.reason, next: gate.state === "superseded" ? supersededNext(existing.supersededBy) : gate.state === "settled" ? "none: already settled, do not pay again" : `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId}` });
   }
 }
 
@@ -293,12 +297,12 @@ const amountUi = formatUnits(amountBase);
 console.log(`\nSelected offer: ${amountUi} USDC (${amountBase} base units) to ${payToPk.toBase58()}`);
 console.log(`Mint: ${USDC_MINT.toBase58()} (${USDC_DECIMALS} decimals)`);
 console.log(`Facilitator-sponsored fee payer: ${feePayerStr ? oneLine(feePayerStr, 100) : "(none offered, agent pays its own fee)"}`);
-console.log(`Prechecks passed: price <= ${maxBase === null ? "(no --max, --check only)" : formatUnits(maxBase) + " USDC"}, devnet USDC, 6 decimals${payToFlag ? ", recipient matches --pay-to" : ""}.`);
+console.log(`Prechecks passed: price <= ${maxBase === null ? "(no --max, --check only)" : formatUnits(maxBase) + " USDC"}, ${CHAIN.label} USDC, 6 decimals${payToFlag ? ", recipient matches --pay-to" : ""}.`);
 
 if (checkOnly) {
   console.log("\n--check: stopping before opening any key or signing anything.");
-  result = { ...result, next: `superstables budget buy --rail solana --url ${url} --max ${amountUi}` };
-  finish("quoted", EXIT.OK, { price: amountUi, payTo: payToPk.toBase58(), offer: { network: "solana-devnet", feePayer: !!feePayerStr } });
+  result = { ...result, next: `superstables budget buy --rail solana${CHAIN_FLAG} --url ${url} --max ${amountUi}` };
+  finish("quoted", EXIT.OK, { price: amountUi, payTo: payToPk.toBase58(), offer: { network: CHAIN.v1Name, feePayer: !!feePayerStr } });
 }
 
 // --- 4. the agent key, chain reads, intent journal ------------------------------------------------
@@ -314,7 +318,7 @@ const pub = readPublic();
 const ownerPk = ownerFlag ?? pub.owner ?? agentInfo.owner;
 if (!ownerPk) {
   updateOp(opId, { state: "refused_precheck", reasons: ["owner address unknown"] });
-  refuse("owner address unknown: pass --owner or run superstables budget setup --rail solana");
+  refuse(`owner address unknown: pass --owner or run superstables budget setup --rail solana${CHAIN_FLAG}`);
 }
 // the step 3 check used the owner and agent the public file records; these are the ones this purchase really runs with
 const sameKey = payToPk.equals(ownerPk) ? "the owner's wallet, which funds this budget" : payToPk.equals(agent.publicKey) ? "this agent's own key" : null;
@@ -414,10 +418,24 @@ const builtBlockhash = await retryRead(() => conn.getLatestBlockhashAndContext("
 const { blockhash, lastValidBlockHeight } = builtBlockhash.value;
 const message = new TransactionMessage({ payerKey: feePayerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
 const tx = new VersionedTransaction(message);
+// The mainnet boundary: the operator's switch, the manifest and the pause are read again right before the agent key signs,
+// and again after, right before the payment leaves for the seller. A signature kept back is never sent or written down.
+const closedWords = (what) => { const closed = mainnetClosed(); return closed ? `${closed}; ${what}` : ""; };
+const closedBeforeSigning = closedWords("nothing was signed");
+if (closedBeforeSigning) {
+  updateOp(opId, { state: "refused_precheck", reasons: [closedBeforeSigning] });
+  refuse(closedBeforeSigning);
+}
 tx.sign([agent]); // partial when the fee payer is a facilitator key: it adds its signature at /settle
 const agentSig = bs58.encode(tx.signatures[message.staticAccountKeys.findIndex((k) => k.equals(agent.publicKey))]);
 const base64Tx = Buffer.from(tx.serialize()).toString("base64");
 
+const closedAfterSigning = closedWords("the signed payment was kept on this computer, not journaled and not sent");
+if (closedAfterSigning) {
+  updateOp(opId, { state: "refused_precheck", reasons: [closedAfterSigning] });
+  console.error(`Refused (signed, not sent): ${oneLine(closedAfterSigning, 1000)}`);
+  finish("refused_precheck", EXIT.REFUSED, { reason: closedAfterSigning, next: "nothing was paid; the signed transaction was not kept or sent. Ask the owner whether mainnet is open again" });
+}
 // The intent is on disk with the signature BEFORE the payment leaves this process.
 let rec = updateOp(
   opId,
@@ -446,6 +464,7 @@ console.log(`\nSending payment via ${paymentHeaderName} header (payload ${paymen
 let paid = null;
 let paidError = null;
 try {
+  assertMainnetOpen("the signed payment was kept on this computer and not sent", true); // the seller's request is the broadcast
   paid = await fetchOnce(url, method, bodyText, { [paymentHeaderName]: paymentHeaderValue, ...paidReferralHeaders(referral, opId, memoReferral(identity.memo)) }, 90_000);
   console.log(`Paid request: HTTP ${paid.res.status}`);
 } catch (e) {
@@ -513,12 +532,12 @@ if (own && !own.err) {
   updateOp(opId, { state: "settled", final: own.final !== false, inclusionObserved: true, tx: own.sig, debit: amountUi, delivered: deliveredHttp, movement }, "own transaction succeeded");
   console.log(`\n=> Our transfer LANDED: ${explorerTx(own.sig)}`);
   console.log(`   ${deliveredHttp ? "Delivered (seller answered 2xx)." : `NOT delivered (seller answered ${httpStatus ?? paidError}). The payment is settled; do not pay again, ask the seller to honour tx ${own.sig}.`}`);
-  result = { ...result, tx: own.sig, debit: amountUi, chain_final: own.final !== false, next: own.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana --op ${opId} later. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
+  result = { ...result, tx: own.sig, debit: amountUi, chain_final: own.final !== false, next: own.final === false ? `the payment landed, but is not final on chain yet. Run superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId} later. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : `settled but not delivered: do not pay again; contact the seller with tx ${own.sig}` };
   finish("settled", EXIT.OK);
 }
 if (own && own.err && own.final === false) {
   updateOp(opId, { state: "unknown", tx: own.sig, error: own.err, delivered: false }, "own transaction landed and failed; waiting for finality");
-  finish("unknown", EXIT.UNCERTAIN, { tx: own.sig, delivered: false, reason: "the transaction landed and failed, but is not final on chain yet", next: `superstables budget reconcile --rail solana --op ${opId}. Do not pay again.` });
+  finish("unknown", EXIT.UNCERTAIN, { tx: own.sig, delivered: false, reason: "the transaction landed and failed, but is not final on chain yet", next: `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId}. Do not pay again.` });
 }
 if (own && own.err && own.final !== false) {
   updateOp(opId, { state: "failed", tx: own.sig, error: own.err, delivered: false }, "own transaction failed on chain");
@@ -542,7 +561,7 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   const assessment = await assessAgreed(conn, rec).catch(() => ({ verdict: "pending" }));
   if (assessment.verdict === "settled") {
     updateOp(opId, { state: "settled", final: assessment.final !== false, inclusionObserved: true, tx: assessment.tx, delivered: deliveredHttp, debit: amountUi }, "own transaction landed while checking the refusal");
-    finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, chain_final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
+    finish("settled", EXIT.OK, { tx: assessment.tx, debit: amountUi, delivered: deliveredHttp, chain_final: assessment.final !== false, next: assessment.final === false ? `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId} later to check finality. Do not pay again.${deliveredHttp ? "" : " Contact the seller."}` : deliveredHttp ? "none" : "paid but not delivered; do not pay again; contact the seller" });
   }
   if (assessment.verdict === "failed") {
     updateOp(opId, { state: "failed", tx: assessment.tx, error: assessment.err, delivered: false }, "own transaction landed and failed");
@@ -550,12 +569,12 @@ if (sim?.value?.err && !String(sim.value.err).startsWith("simulation unavailable
   }
   if (assessment.verdict === "not_found") {
     updateOp(opId, { state: "refused_chain", chainError: sim.value.err, chainLog: failLine, delivered: false }, "chain refuses the transaction (simulation), and its blockhash has expired");
-    finish("refused_chain", EXIT.FAILED, { delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana --op ${opId}` });
+    finish("refused_chain", EXIT.FAILED, { delivered: false, ...(assessment.agreement ? { agreement: assessment.agreement } : {}), chainError: sim.value.err, next: `run reconcile before reusing this --op: superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId}` });
   }
   updateOp(opId, { state: "unknown", chainError: sim.value.err, chainLog: failLine, delivered: deliveredHttp }, `chain refuses the transaction now (simulation), but it can land until block height ${lastValidBlockHeight}`);
   console.log(`   The seller holds the signed transaction, which stays valid until block height ${lastValidBlockHeight}: a later grant or deposit could still let it land. Outcome unknown. Do not pay again.`);
-  finish("unknown", EXIT.UNCERTAIN, { delivered: deliveredHttp, chainError: sim.value.err, reason: `the chain refuses this payment now (simulation), but the signed transaction can land until block height ${lastValidBlockHeight}`, next: `superstables budget reconcile --rail solana --op ${opId} once the block height is past ${lastValidBlockHeight}` });
+  finish("unknown", EXIT.UNCERTAIN, { delivered: deliveredHttp, chainError: sim.value.err, reason: `the chain refuses this payment now (simulation), but the signed transaction can land until block height ${lastValidBlockHeight}`, next: `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId} once the block height is past ${lastValidBlockHeight}` });
 }
 updateOp(opId, { state: "unknown", delivered: deliveredHttp }, readError ? `could not read the chain: ${readError}` : "own transaction not found yet");
 console.log(readError ? `\n=> Could not read the chain (${readError}). Outcome unknown; it may land. Do not pay again.` : "\n=> Our transaction was NOT found on chain yet. Outcome unknown; it may still land. Do not pay again.");
-finish("unknown", EXIT.UNCERTAIN, { next: `superstables budget reconcile --rail solana --op ${opId}`, ...(readError ? { reason: `could not read the chain: ${String(readError).slice(0, 160)}` } : {}) });
+finish("unknown", EXIT.UNCERTAIN, { next: `superstables budget reconcile --rail solana${CHAIN_FLAG} --op ${opId}`, ...(readError ? { reason: `could not read the chain: ${String(readError).slice(0, 160)}` } : {}) });

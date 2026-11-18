@@ -70,8 +70,8 @@ For one purchase instead, ask it to find a service, check the price and request 
 The agent starts the request; you approve in your wallet.
 
 Keep budgets small. A stolen agent key can spend the remaining budget.
-Mainnet is off in this build, and the operator's `SUPERSTABLES_ALLOW_MAINNET` does not turn it on by itself; leave it unset. Which site and which RPCs your approvals use is set in your own terminal with `superstables owner settings`.
-Read the [security model](docs/security.md) before granting a budget: it says what each way of paying protects and what it doesn't, and what mainnet would still need.
+Mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then budgets and single purchases on mainnet spend real money. Agents never set it. Which site and which RPCs your approvals use is set in your own terminal with `superstables owner settings`.
+Read the [security model](docs/security.md) before granting a budget: it says what each way of paying protects and what it doesn't, and what mainnet needs.
 
 ## Use the CLI
 

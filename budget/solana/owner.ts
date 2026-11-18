@@ -21,29 +21,28 @@ import type { OwnerChain, OwnerTerms, SolanaTransactionPort } from "../../src/co
 import { verifyEd25519 } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor } from "../owner-page.ts";
 import { DEFAULT_SITE } from "../site.mjs";
-import { DEFAULT_RPC, ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
+import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { rpcFacts } from "../page-facts.mjs";
-import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
-import { AGENT_KEY_PATH, PUBLIC_PATH, USDC_MINT, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
+import { CHAIN_FLAG, AGENT_KEY_PATH, CHAIN, PUBLIC_PATH, assertMainnetOpen, mainnetClosed, TESTNET, USDC_MINT, plainKeyProblem, agentKeyFileValues, agreedAccount, clusterProblem, formatUnits, USDC_DECIMALS, oneLine, parseEnvFile, retryRead, sleep } from "./lib.mjs";
 
 export { closeOwnerPage };
 
 export const SOLANA_OWNER_CHAIN: OwnerChain = {
   family: "solana",
   chainId: 0,
-  chainName: "Solana devnet",
-  rpcUrl: DEFAULT_RPC.solana,
-  explorer: "https://explorer.solana.com",
-  explorerQuery: "?cluster=devnet",
-  walletChain: "solana:devnet",
-  genesis: SOLANA_DEVNET_GENESIS,
+  chainName: CHAIN.label,
+  rpcUrl: CHAIN.rpc,
+  explorer: CHAIN.explorer,
+  explorerQuery: CHAIN.explorerQuery,
+  walletChain: CHAIN.walletChain,
+  genesis: CHAIN.genesis,
   nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 },
-  testnet: true,
+  testnet: TESTNET,
 };
 
 /** One RESULT line, last on stdout (CLI.md), the same shape as the evm scripts. Returns `exit`. */
 export function emit(command: string, exit: number, o: Record<string, unknown>): number {
-  console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: "solana", chain: "devnet", ...o })}`);
+  console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command, rail: "solana", chain: CHAIN.key, ...o })}`);
   return exit;
 }
 
@@ -51,11 +50,11 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
 // refused here, before this script reads a key, asks the owner or sends anything. The dispatcher refuses it earlier; this
 // covers a script run directly. (src/core/owner-settings.js)
 {
-  const problem = ownerRpcProblem("solana", "devnet");
+  const problem = ownerRpcProblem("solana", CHAIN.key);
   if (problem) {
     const command = String(process.argv[1] ?? "").split(/[\\/]/).pop()!.replace(/\.(?:ts|mjs)$/, "") || "owner";
     console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
-    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("solana", "devnet") }));
+    process.exit(emit(command, 3, { state: "refused_precheck", reason: problem, next: ownerRpcNext("solana", CHAIN.key) }));
   }
 }
 
@@ -79,21 +78,27 @@ export function approvalSite(): string | null {
 function revokeWithoutAgentKey(site: string, reason: string): never {
   const host = new URL(site).host.replace(/^www\./, "");
   const owner = (parseEnvFile(PUBLIC_PATH) as Record<string, string>).SOLANA_OWNER_ADDRESS ?? "on record";
-  const next = `revoke without the agent key: with Revoke on the owner's account page on ${host}, or ask the owner ${owner} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction. Then restore ${AGENT_KEY_PATH} (a regular file only you can read) before any other hosted request`;
+  const next = `revoke without the agent key: with Revoke on the owner's account page on ${host}, or ask the owner ${owner} to sign a transaction in their wallet on ${CHAIN.label} that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction. Then restore ${AGENT_KEY_PATH} (a regular file only you can read) before any other hosted request`;
   console.log(`REFUSED: ${reason}; a hosted revoke is signed by the agent key, so nothing was requested.`);
   process.exit(emit("revokeBudget", 3, { state: "refused_precheck", reason: `${reason}; a hosted revoke is signed by the agent key, so nothing was requested`, next }));
 }
 
 export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved } = ownerPageFor({
   chain: SOLANA_OWNER_CHAIN,
-  pageFacts: () => ({ rpc: rpcFacts("solana", "devnet") }),
+  pageFacts: () => ({ rpc: rpcFacts("solana", CHAIN.key) }),
   walletWords: "any Solana wallet, such as Phantom, Solflare or Backpack",
   hostedWalletWords: "a Solana wallet such as Phantom, held by their account, to add this agent; an account admin adds wallets on the account page",
-  statusCommand: "superstables budget status --rail solana",
+  statusCommand: `superstables budget status --rail solana${CHAIN_FLAG}`,
   emit,
-  railFlag: "--rail solana",
+  railFlag: `--rail solana${CHAIN_FLAG}`,
   hostedSite: approvalSite,
   hosted: (action) => {
+    // the site builds and sends what the owner's wallet signs: nothing is requested from it once a mainnet has closed
+    const closed = mainnetClosed();
+    if (closed) {
+      console.log(`REFUSED: ${closed}. Nothing was requested.`);
+      process.exit(emit("owner", 3, { state: "refused_precheck", reason: closed, next: "nothing was requested; ask the operator whether mainnet is open again" }));
+    }
     const site = approvalSite()!;
     let agentFile: ReturnType<typeof agentKeyFileValues>;
     try {
@@ -101,6 +106,9 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
     } catch (err) {
       agentFile = { problem: `${AGENT_KEY_PATH} cannot be read (${(err as NodeJS.ErrnoException).code ?? (err as Error).message})` };
     }
+    // a request to the site is signed with the agent key: on a mainnet a plain-text key does not sign it (a hosted revoke goes on without it)
+    const plain = plainKeyProblem();
+    if (plain) agentFile = { problem: plain };
     if (agentFile.problem !== undefined) {
       if (action === "revoke") revokeWithoutAgentKey(site, agentFile.problem);
       console.log(`REFUSED: ${agentFile.problem}. Nothing was requested.`);
@@ -125,7 +133,8 @@ export const { askConnect, askSolanaTransaction, askSolanaIntent, endUnapproved 
       console.log(`REFUSED: ${reason}. Nothing was requested.`);
       process.exit(emit("owner", 3, { state: "refused_precheck", reason, next: "restore the agent key file, or set this chain up again" }));
     }
-    return { site, rail: "solana" as const, chain: "devnet", agentKey: { ed25519: keypair.secretKey, address: address! } };
+    // and again right before each agent-key signature on a request to the site
+    return { site, rail: "solana" as const, chain: CHAIN.key, agentKey: { ed25519: keypair.secretKey, address: address! }, beforeSign: () => assertMainnetOpen("nothing was signed or sent") };
   },
 });
 
@@ -283,6 +292,12 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
   const refused = (reason: string) => ({ status: "refused" as const, reason });
   const port: SolanaTransactionPort = {
     async prepare() {
+      // the mainnet boundary: read again before the wallet is offered anything (a testnet always passes)
+      const closed = mainnetClosed();
+      if (closed) {
+        log(`REFUSED: ${closed}. Nothing was built.`);
+        throw new Error(`${closed}; nothing was built or sent`);
+      }
       const cluster = await clusterProblem(conn);
       if (cluster) {
         log(`REFUSED: ${cluster}. Nothing was built.`);
@@ -325,6 +340,13 @@ export function transactionPort(conn: Connection, owner: PublicKey, instructions
         return refused("That took too long: the transaction expired before it was signed.");
       }
       if (!broadcasting()) return refused("The approval link expired while the wallet was signing.");
+      // and again right before the signed transaction leaves: it stays on this computer and is never sent by this client
+      const closed = mainnetClosed();
+      if (closed) {
+        issued = null;
+        log(`REFUSED: ${closed}. The signed transaction was kept on this computer and not sent.`);
+        return refused(`${closed}, so the command did not send the signed transaction.`);
+      }
       const sig = bs58.encode(signature);
       last = { signature: sig, blockhash: want.blockhash, lastValidBlockHeight: want.lastValidBlockHeight };
       issued = null;
@@ -432,7 +454,7 @@ export async function agreedFinalAccount(ata: string, slot: number | undefined, 
 }
 
 export const LANDED_SOLANA_REVOKE = "Sent and included on Solana. Your USDC account shows no delegate, but the transaction is not finalized yet. Until then, check superstables budget status before you rely on it. This does not recover tokens already transferred. You can close this page.";
-export const LANDED_SOLANA_GRANT = "Sent and included on Solana. The chain shows your budget, but the transaction is not finalized yet. You can close this page. To end it: superstables budget revoke --rail solana. You approve that in your wallet too.";
+export const LANDED_SOLANA_GRANT = `Sent and included on Solana. The chain shows your budget, but the transaction is not finalized yet. You can close this page. To end it: superstables budget revoke --rail solana${CHAIN_FLAG}. You approve that in your wallet too.`;
 export const LANDED_SOLANA_FUND = "Sent and included on Solana. Your agent's balance shows the transfer, but the transaction is not finalized yet. You can close this page.";
 
 // ── terms ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -469,7 +491,7 @@ export function grantTerms(p: { owner: string; agent: string; ata: string; cap: 
     notes: [
       walletNote,
       "A delegate is a key allowed to spend from your token account. There is one delegate slot. Revoke a live delegation before granting another.",
-      "To end the budget at any time: superstables budget revoke --rail solana. You approve that in your wallet too.",
+      `To end the budget at any time: superstables budget revoke --rail solana${CHAIN_FLAG}. You approve that in your wallet too.`,
       "This grants permission; it does not transfer USDC now. You pay a network fee, typically 0.000005 SOL for this transaction. Check the wallet fee and grant only an amount you accept putting at risk.",
     ],
     walletShows: [

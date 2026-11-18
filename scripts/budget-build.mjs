@@ -51,7 +51,7 @@ const RUNNABLE = {
 const LIBRARIES = {
   evm: ["chains", "cli-guard", "delegation", "lib", "ops", "owner", "purchase"],
   tempo: ["owner"], // and tempo/lib/, a folder of libraries
-  solana: ["lib", "ops", "owner", "precheck", "token"],
+  solana: ["chains", "lib", "ops", "owner", "precheck", "token"],
 };
 // The letters budget/cli.mjs uses for each rail's script lines: T("buy", ...) is tempo/buy, E("setBudget", ...) evm/setBudget.
 const DISPATCH = { T: "tempo", S: "solana", O: "solana", E: "evm" };

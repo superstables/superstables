@@ -11,14 +11,15 @@ Testnet by default. `SUPERSTABLES_ALLOW_MAINNET=1`, set by the operator, opens m
 
 ### Added
 
-- **Mainnet:** `SUPERSTABLES_ALLOW_MAINNET=1` opens every supported mainnet at once: Base, Arc, Arbitrum One, Polygon, SKALE Base, Ethereum and Robinhood Chain for x402, Tempo for MPP and Solana for x402 with `pay`, and the EVM mainnets for `superstables budget --rail evm`. Agents never set it. The approval pages say when the money is real. Each chain's facts, with their sources, are in `src/core/mainnet-manifest.js`. On SKALE Base and Robinhood Chain, name your own node with `superstables owner settings rpc` first. A mainnet agent key must be in the OS keychain (`setup --key-store os-keychain`). See [Mainnet](docs/security.md#mainnet).
+- **Mainnet:** `pay` and Budgets on every rail support the mainnets listed in [Mainnet](docs/security.md#mainnet): Base, Arc, Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain, Tempo and Solana. The approval pages say when the money is real. A mainnet agent key must be in the OS keychain (`setup --key-store os-keychain`).
 - **Purchase reports:** The client can now report settled budget purchases to the linked site when it supports reports. A failed report leaves the purchase result unchanged. Set `SUPERSTABLES_PURCHASE_REPORTS=off` to stop reporting. See [what is sent](docs/budget.md#approve-on-superstablescom-instead).
 - **Tempo:** The Tempo budget can sign requests to the site with its agent key, as the EVM and Solana budgets do.
 
 ### Changed
 
 - **Mainnet checks:** The operator's switch is the only thing that opens mainnet. The per-chain approval in the manifest, the mainnet caps and the chain list in the owner's signed settings no longer apply. The chain gate still checks the chain id, the token's facts, a finality profile, RPCs that can decide a verdict, and the pause.
-- **Budgets on Tempo and Solana, and `buy-once`:** These stay on their testnets, whatever the switch says.
+- **Budgets on Tempo and Solana mainnet:** With the switch on, `--rail tempo --chain tempo` and `--rail solana --chain solana` hold budgets in real pathUSD and USDC. A Tempo mainnet agent key lives only in the OS keychain: `setup --rail tempo --chain tempo --key-store os-keychain` creates it there and records its address in a separate file, so a Tempo Moderato key file is not touched. Mainnet has no faucet: the owner adds the tokens to their wallet.
+- **Single purchase on mainnet:** With the switch on, `buy-once` also pays on Base, Arc and Robinhood Chain when superstables.com lists a service there. A pause stops a new one before the site is asked. A mainnet purchase read after the switch is turned off still shows its own chain, and is reported paid only when this client reads the payment on that chain.
 
 ## [1.3.0] - Setup and status commands, update guidance
 

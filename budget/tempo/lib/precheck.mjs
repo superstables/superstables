@@ -1,7 +1,11 @@
 // Pre-signing checks for a purchase (contract rule 4). Pure: no network, no keys. A refusal here means
 // nothing was signed, pulled or sent.
-import { CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
+import { CHAIN, CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
 import { mainnetSwitchRefusal } from '../../../src/core/chain-gate.js'
+import { mainnetEntry } from '../../../src/core/mainnet-policy.js'
+
+// The Tempo mainnet's chain id, from the mainnet manifest: a seller that offers it while the switch is off is told so.
+const MAINNET_CHAIN_ID = mainnetEntry('tempo')?.chainId
 
 /** mppx's payment-memo tag: the first 4 bytes of keccak256("mpp"). Every purchase memo starts with it (chain.ts mppMemo). */
 export const MPP_MEMO_TAG = '0xef1ed712'
@@ -25,7 +29,7 @@ function badRecipient(who, to, opts) {
 }
 
 /**
- * The seller's tempo.charge challenge request must be: pathUSD on Moderato, whole base units (no more
+ * The seller's tempo.charge challenge request must be: pathUSD on this chain (Moderato, or Tempo mainnet), whole base units (no more
  * precision than the token has), at most `maxBase`, paid to `payTo` when one is given, and never to the zero address,
  * the token itself, the agent or the owner (the same for each split). `request.amount`
  * is in base units on the wire; any `decimals` field must match the token.
@@ -53,11 +57,11 @@ export function precheckCharge(request, opts) {
     return refuse('wrong_token', `currency ${request.currency} is not ${TOKEN_LABEL} (${TOKEN_ADDRESS})`)
   }
   if (Number(details.chainId) !== CHAIN_ID) {
-    if (Number(details.chainId) === 4217) {
+    if (MAINNET_CHAIN_ID !== undefined && Number(details.chainId) === MAINNET_CHAIN_ID && CHAIN.testnet) {
       const off = mainnetSwitchRefusal()
       if (off) return refuse('wrong_chain', off)
     }
-    return refuse('wrong_chain', `chainId ${details.chainId} is not Tempo Moderato (${CHAIN_ID})`)
+    return refuse('wrong_chain', `chainId ${details.chainId} is not ${CHAIN.label} (${CHAIN_ID})`)
   }
   if (!isAddr(request.recipient)) return refuse('bad_challenge', 'the challenge has no valid recipient address')
   const badTo = badRecipient('the recipient', request.recipient, opts)

@@ -3,7 +3,7 @@
 import { finalityFor } from "../../../src/core/finality-policy.js";
 import { decodeErrorResult, decodeFunctionResult, encodeFunctionData, keccak256, toBytes, type Address, type Hex } from 'viem'
 import { Abis, Addresses, createClient, http } from 'viem/tempo'
-import { CHAIN_ID, RPC_URL, TOKEN_ADDRESS, fromBaseUnits, makeClient, oneLine } from './common.ts'
+import { CHAIN, CHAIN_ID, RPC_URL, TOKEN_ADDRESS, VIEM_CHAIN, fromBaseUnits, makeClient, oneLine } from './common.ts'
 import { TESTNET } from './constants.mjs'
 import { RPC_MAX_BYTES, budgetCall, cappedRpcFetch, readRpcAnswer } from '../../rpc.mjs'
 import { endpointSet } from '../../../src/core/rpc-endpoints.mjs'
@@ -70,35 +70,40 @@ export async function rpcReadAt(url: string, method: string, params: unknown[]):
 /** The RPC's host, for words: a replacement's path or query can carry an access key, so never the whole URL. */
 const RPC_HOST = (() => { try { return new URL(RPC_URL).host } catch { return 'the Tempo RPC' } })()
 /** What to do when the RPC is on another chain. */
-export const RPC_CHAIN_NEXT = 'unset SUPERSTABLES_TEMPO_RPC, or set it to a Tempo Moderato RPC'
+export const RPC_CHAIN_NEXT = `unset SUPERSTABLES_TEMPO_RPC, or set it to a ${CHAIN.label} RPC`
 /**
- * Why RPC_URL must not be used for a purchase, in words, or '' when it answers Tempo Moderato's chain id. A payment is signed
- * for Moderato whatever the RPC is: viem and mppx never ask the RPC its chain before a push-mode broadcast, so one on another
+ * Why RPC_URL must not be used for a purchase, in words, or '' when it answers this chain's id. A payment is signed
+ * for this chain whatever the RPC is: viem and mppx never ask the RPC its chain before a push-mode broadcast, so one on another
  * chain would be handed the signed payment, and every outcome read there would be another chain's. Unreadable is a reason too.
  */
 export async function rpcChainProblem(): Promise<string> {
   const id = await rpcRead('eth_chainId', []).catch((err: Error) => err)
   if (id instanceof Error) return `could not read which chain the Tempo RPC ${RPC_HOST} is on (${oneLine(id.message, 160)})`
-  return Number(id) === CHAIN_ID ? '' : `the Tempo RPC ${RPC_HOST} is not on Tempo Moderato (its chain id is ${oneLine(String(id), 40)}, expected ${CHAIN_ID})`
+  return Number(id) === CHAIN_ID ? '' : `the Tempo RPC ${RPC_HOST} is not on ${CHAIN.label} (its chain id is ${oneLine(String(id), 40)}, expected ${CHAIN_ID})`
 }
 
 /** The endpoints that confirm a verdict that lets an agent pay again: the table's, or the owner's. RPC_URL joins only when it is one of them. */
 export function tempoVerdictSet() {
-  return endpointSet('tempo-moderato', 'verdict', { envUrl: RPC_URL, envName: 'SUPERSTABLES_TEMPO_RPC', testnet: TESTNET })
+  return endpointSet(CHAIN.gateKey, 'verdict', { envUrl: RPC_URL, envName: 'SUPERSTABLES_TEMPO_RPC', testnet: TESTNET })
 }
 
 /** One attempt, with a timeout, for the agreement engine: plain data in and out. */
 const callAt = (url: string, method: string, params: unknown[]): Promise<unknown> => budgetCall(url, method, params, 10_000)
 
+/** How this chain's blocks become final: Moderato's are final the moment a block is canonical ('instant'); the mainnet's are read at `finalized`. */
+export const FINALITY = finalityFor('tempo', CHAIN.key) as 'instant' | 'finalized'
+/** The tag of the block whose state is final on this chain. */
+export const FINAL_TAG = FINALITY === 'instant' ? 'latest' : 'finalized'
+
 /**
- * `read(url, blockHex, blockHash)` on every confirming endpoint at one block both name (Tempo's finality is instant, so the
- * latest block is final), agreed when they all return the same plain data. A verdict of ABSENCE must pass `atLeast`.
+ * `read(url, blockHex, blockHash)` on every confirming endpoint at one block both name (on Moderato the latest block is final;
+ * on the mainnet the finalized one), agreed when they all return the same plain data. A verdict of ABSENCE must pass `atLeast`.
  */
 export const agreedAtBlock = (read: (url: string, block: string, hash: string) => Promise<unknown>, atLeast?: bigint) =>
-  agreeAtFinalEvm({ set: tempoVerdictSet(), call: callAt, chainId: CHAIN_ID, finality: 'instant', read, atLeast })
+  agreeAtFinalEvm({ set: tempoVerdictSet(), call: callAt, chainId: CHAIN_ID, finality: FINALITY, read, atLeast })
 
 /** A client bound to one endpoint, for a simulation whose revert data is read. */
-const clientAt = (url: string) => createClient({ testnet: true, transport: http(url, { fetchFn: cappedRpcFetch(RPC_MAX_BYTES), maxResponseBodySize: RPC_MAX_BYTES, timeout: 10_000, retryCount: 0 }) })
+const clientAt = (url: string) => createClient({ chain: VIEM_CHAIN, transport: http(url, { fetchFn: cappedRpcFetch(RPC_MAX_BYTES), maxResponseBodySize: RPC_MAX_BYTES, timeout: 10_000, retryCount: 0 }) })
 
 /** The keychain error a failed eth_call names: decoded from its revert data, else named in the RPC's words; null if neither. */
 export function keychainError(err: unknown): string | null {
@@ -133,14 +138,14 @@ export function feeOf(r: { gasUsed?: unknown; effectiveGasPrice?: unknown }): bi
   return (n + 10n ** 12n - 1n) / 10n ** 12n
 }
 
-/** Tempo has instant BFT finality. A receipt still needs canonical committed inclusion. */
+/** A receipt needs canonical inclusion in a block that is final on this chain (instant on Moderato, `finalized` on the mainnet). */
 export async function getReceipt(hash: string): Promise<ChainReceipt | null> {
   const r = await rpcRead('eth_getTransactionReceipt', [hash])
   if (!r) return null
   const quantity = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]+$/.test(v)
   const blockHash = (v: unknown): v is string => typeof v === 'string' && /^0x[0-9a-fA-F]{64}$/.test(v)
   if (!blockHash(r.transactionHash) || r.transactionHash.toLowerCase() !== hash.toLowerCase() || !quantity(r.blockNumber) || !blockHash(r.blockHash) || !Array.isArray(r.logs) || r.logs.some((l: { removed?: boolean }) => l?.removed) || !['0x0', '0x1'].includes(r.status)) throw new Error('transaction inclusion unreadable')
-  const head = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
+  const head = await rpcRead('eth_getBlockByNumber', [FINAL_TAG, false])
   if (!quantity(head?.number) || BigInt(r.blockNumber) > BigInt(head.number)) throw new Error('transaction is not in a committed block')
   const block = await rpcRead('eth_getBlockByNumber', [r.blockNumber, false])
   if (!quantity(block?.number) || BigInt(block.number) !== BigInt(r.blockNumber) || !blockHash(block?.hash) || block.hash.toLowerCase() !== r.blockHash.toLowerCase()) throw new Error('transaction canonical inclusion unreadable')
@@ -178,7 +183,7 @@ export async function getTxSigner(hash: string): Promise<{ from?: Address; keyId
 }
 
 export async function chainHead(): Promise<{ number: bigint; timestamp: number }> {
-  const b = await rpcRead('eth_getBlockByNumber', [finalityFor('tempo', 'moderato') === 'instant' ? 'latest' : 'finalized', false])
+  const b = await rpcRead('eth_getBlockByNumber', [FINAL_TAG, false])
   return { number: BigInt(b.number), timestamp: parseInt(b.timestamp, 16) }
 }
 
@@ -386,8 +391,9 @@ export async function findByMemo(owner: Address, recipient: Address, memo: Hex, 
   return hashes
 }
 
-/** JSON-RPC write (eth_sendRawTransaction, the faucet's tempo_fundAddress). NEVER retried: a resend could pay twice. */
+/** JSON-RPC write (the faucet's tempo_fundAddress, which a mainnet does not have). NEVER retried: a resend could pay twice. */
 export async function rpcWrite(method: string, params: unknown[]): Promise<any> {
+  if (method === 'tempo_fundAddress' && !CHAIN.faucet) throw new Error(`${CHAIN.label} has no faucet`)
   const answer = await exchange(method, params, 30_000)
   if (answer.error) throw new Error(answer.error.message)
   return answer.result

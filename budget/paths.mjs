@@ -4,7 +4,8 @@
 //
 //   No owner key file on any rail: the owner approves in their own wallet. (ownerKeyFile names the old path, which doctor
 //   fails when it finds one, from its metadata, without opening it; owner commands read an owner key only from --owner-key-file, in tests.)
-//   $SUPERSTABLES_HOME/keys/budget/<rail>-agent.env    agent key (mode 600). Agent commands only.
+//   $SUPERSTABLES_HOME/keys/budget/<rail>-agent.env    agent key (mode 600). Agent commands only. Tempo mainnet has its own,
+//                                                      tempo-<chain>-agent.env, which names the OS keychain and holds no key.
 //   $SUPERSTABLES_HOME/budget/public/<rail>-<chain>.env   public addresses and budget terms, no secret.
 //   $SUPERSTABLES_HOME/budget/ops/<rail>-<chain>/<id>.json   one journal per purchase.
 //   $SUPERSTABLES_HOME/budget/owner-approvals.jsonl          one line per owner page state change (no signatures).
@@ -27,7 +28,13 @@ export const HOME = resolve(expandHome(process.env.SUPERSTABLES_HOME) ?? join(ho
 export const KEYS_DIR = join(HOME, "keys", "budget");
 export const STATE_DIR = join(HOME, "budget");
 export const ownerKeyFile = (rail) => join(KEYS_DIR, `${rail}-owner.env`);
-export const agentKeyFile = (rail) => join(KEYS_DIR, `${rail}-agent.env`);
+/**
+ * The agent key file of a rail. One per rail on evm and solana, whose agent keys work on every chain. On tempo the file
+ * also binds its keys to one owner, so a Tempo chain other than Moderato (the mainnet) has its own file.
+ * @param {string} rail
+ * @param {string} [chain]  the --chain key; only tempo looks at it
+ */
+export const agentKeyFile = (rail, chain) => join(KEYS_DIR, rail === "tempo" && chain && chain !== "moderato" ? `tempo-${chain}-agent.env` : `${rail}-agent.env`);
 export const publicFile = (rail, chain) => join(STATE_DIR, "public", `${rail}-${chain}.env`);
 export const opsDir = (rail, chain) => join(STATE_DIR, "ops", `${rail}-${chain}`);
 export const ownerApprovalsLog = () => join(STATE_DIR, "owner-approvals.jsonl");

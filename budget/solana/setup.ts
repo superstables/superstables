@@ -5,7 +5,7 @@
 //      message (solana:signMessage, checked as an ed25519 signature): it proves the address is theirs and sends nothing. With
 //      --owner-key-file <path> the address comes from that key instead (tests and automation only).
 //   3. The public file: owner and agent addresses, no secret.
-// Then it prints the next steps: fund the owner (devnet SOL and USDC), fund-agent, doctor, grant. Never prints a key.
+// Then it prints the next steps: fund the owner (SOL and USDC), fund-agent, doctor, grant. Never prints a key.
 //
 // Setup is a trusted step: the signature proves control of the connected address, not that it is the intended owner, so
 // the owner runs it or watches it run, and an agent must not complete it. A recorded owner never changes silently:
@@ -25,7 +25,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import bs58 from "bs58";
-import { AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, U64_MAX, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, writePublic } from "./lib.mjs";
+import { CHAIN, CHAIN_FLAG, AGENT_KEY_PATH, PUBLIC_PATH, agentKeyFileValues, agreedAccount, agreementLine, USDC_DECIMALS, USDC_MINT, U64_MAX, CLUSTER_NEXT, clusterProblem, connection, explorerTx, formatUnits, loadOwner, oneLine, parseEnvFile, parseStrict, parseUnits, readPublic, replaceKeyFile, retryRead, parseEnvText, writePublic } from "./lib.mjs";
 import { UNSAFE_SECRET_FILE, readSecretFile, prepareSecretFile } from "../secret-file.mjs";
 import { retiredProblem } from "../retired.mjs";
 import { HOME, ensurePrivateDir } from "../paths.mjs";
@@ -160,7 +160,7 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
     // the replacement is written beside the file first; the old bytes are overwritten only once it exists
     let swap: ReturnType<typeof prepareSecretFile>;
     try {
-      swap = prepareSecretFile(AGENT_KEY_PATH, `# Solana devnet AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n${rest.map(([k, v]) => `${k}=${v}\n`).join("")}`);
+      swap = prepareSecretFile(AGENT_KEY_PATH, `# Solana AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n${rest.map(([k, v]) => `${k}=${v}\n`).join("")}`);
     } catch (err) {
       const reason = `the replacement for ${AGENT_KEY_PATH} could not be written (${(err as Error).message}); the key file was not changed`;
       console.log(`REFUSED: ${reason}. The keychain entry made for the key is harmless and is overwritten on the next run.`);
@@ -194,7 +194,7 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
       keychainRefusal(err);
     }
     try {
-      writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
+      writeFileSync(AGENT_KEY_PATH, `# Solana AGENT key, kept in the OS keychain. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
     } catch (err) {
       try { deleteAgentSecret("solana", agent); } catch { /* the entry belongs to a key nothing else knows */ }
       throw err;
@@ -202,7 +202,7 @@ if (existing.SOLANA_AGENT_SECRET_BASE58) {
     keyStore = "os-keychain";
     console.log(`created the agent key in the OS keychain (service superstables-budget-agent, account solana:${agent}); ${AGENT_KEY_PATH} (mode 600) holds only its address`);
   } else {
-    writeFileSync(AGENT_KEY_PATH, `# Solana devnet AGENT key. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_SECRET_BASE58=${bs58.encode(kp.secretKey)}\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
+    writeFileSync(AGENT_KEY_PATH, `# Solana AGENT key. Only buy opens this file. No owner secret here.\nSOLANA_AGENT_SECRET_BASE58=${bs58.encode(kp.secretKey)}\nSOLANA_AGENT_ADDRESS=${agent}\n`, { mode: 0o600, flag: "wx" });
     console.log(`created the agent key file ${AGENT_KEY_PATH} (mode 600): agent ${agent}`);
   }
 }
@@ -211,7 +211,7 @@ const keyWhere = keyStore === "os-keychain" ? "in its OS keychain (only its addr
 const retired = retiredProblem("solana", agent);
 if (retired) {
   console.log(`REFUSED: ${retired}. Nothing was changed.`);
-  process.exit(result(3, { state: "refused_precheck", reason: retired, next: "move the agent key file away (superstables budget rotate --rail solana does this), then run setup again" }));
+  process.exit(result(3, { state: "refused_precheck", reason: retired, next: `move the agent key file away (superstables budget rotate --rail solana${CHAIN_FLAG} does this), then run setup again` }));
 }
 const pub = readPublic();
 if (pub.agent && pub.agent.toBase58() !== agent) {
@@ -221,7 +221,8 @@ if (pub.agent && pub.agent.toBase58() !== agent) {
 
 // The setup command that replaces the owner. On a hosted chain it names --hosted and the exact site: without them, setup
 // would ask on the page on this computer and move the chain's approvals there, or take SUPERSTABLES_SITE.
-const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail solana${site ? ` --hosted --site ${site}` : ""} --new-owner`;
+const CHAIN_WORDS = CHAIN.testnet ? `${CHAIN.label} (testnet)` : CHAIN.label;
+const newOwnerCmd = (site: string | null | undefined) => `superstables budget setup --rail solana${CHAIN_FLAG}${site ? ` --hosted --site ${site}` : ""} --new-owner`;
 
 // 2. the owner address
 // The owner is on record when either file names it: the public file (for this agent, or with no agent named), or the
@@ -255,7 +256,7 @@ if (newOwner && recorded) {
       // in their own wallet
       const viaRevoke = was === publicOwner && !(bound && bound !== publicOwner);
       console.log(`REFUSED: ${reason}. Nothing was changed.`);
-      process.exit(result(3, { state: "refused_precheck", reason, owner: was, next: live === null ? `superstables budget doctor --rail solana, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke first (superstables budget revoke --rail solana, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }));
+      process.exit(result(3, { state: "refused_precheck", reason, owner: was, next: live === null ? `superstables budget doctor --rail solana${CHAIN_FLAG}, then ${newOwnerCmd(SITE)} again` : viaRevoke ? `revoke first (superstables budget revoke --rail solana${CHAIN_FLAG}, approved by ${was}), then ${newOwnerCmd(SITE)}` : `ask the owner ${was} to sign a transaction in their wallet on ${CHAIN.label} that removes the agent's spending permission from their associated USDC token account (mint ${USDC_MINT.toBase58()}), using a tool that supports the SPL Token Revoke instruction; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then ${newOwnerCmd(SITE)}` }));
     }
   }
   console.log(`replacing the recorded owner ${recorded} (no budget is live): the new owner connects on the page`);
@@ -288,11 +289,11 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
         !recorded
           ? "this agent key existed before this setup, and no owner is recorded for it here, so whether an older delegate is live cannot be read. Set up first (link), then grant"
           : "this agent key existed before this setup, and this setup replaces the owner, so whether the new owner already has this agent as its delegate cannot be read before the link. Set up first (link), then grant",
-        `superstables budget setup --rail solana${HOSTED ? " --hosted" : ""}${newOwner ? " --new-owner" : ""}, then superstables budget grant --rail solana --amount A`,
+        `superstables budget setup --rail solana${CHAIN_FLAG}${HOSTED ? " --hosted" : ""}${newOwner ? " --new-owner" : ""}, then superstables budget grant --rail solana${CHAIN_FLAG} --amount A`,
       );
       const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded!)).toBase58();
       const at = await agreedAccount(ownerAta, { purpose: "owner" });
-      if (!at.agreed) refuseGrant(`the owner's USDC account at finalized could not be confirmed (${agreementLine(at)})`, "superstables budget doctor --rail solana, then run setup again");
+      if (!at.agreed) refuseGrant(`the owner's USDC account at finalized could not be confirmed (${agreementLine(at)})`, `superstables budget doctor --rail solana${CHAIN_FLAG}, then run setup again`);
       if (at.value && at.value.delegate !== null && at.value.delegatedAmount > 0n) {
         const latest = await retryRead(() => getAccountOrNull(connection("owner"), getAssociatedTokenAddressSync(USDC_MINT, new PublicKey(recorded!)))).catch(() => null);
         const quiet = !latest?.delegate || latest.delegatedAmount === 0n;
@@ -300,13 +301,13 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
           quiet
             ? `the previous revoke is not finalized yet: the account shows no live delegate on the latest read but delegate ${at.value.delegate} with ${formatUnits(at.value.delegatedAmount)} USDC at finalized. Grant again once it is finalized`
             : `a budget is live: the owner on record ${recorded} has delegate ${at.value.delegate} with ${formatUnits(at.value.delegatedAmount)} USDC left. A grant overwrites it, so it is not asked for here`,
-          quiet ? "superstables budget status --rail solana, then grant again once the revoke is finalized" : "revoke first (superstables budget revoke --rail solana), then superstables budget grant --rail solana --amount A",
+          quiet ? `superstables budget status --rail solana${CHAIN_FLAG}, then grant again once the revoke is finalized` : `revoke first (superstables budget revoke --rail solana${CHAIN_FLAG}), then superstables budget grant --rail solana${CHAIN_FLAG} --amount A`,
         );
       }
       const rec = parseEnvFile(PUBLIC_PATH);
       if (rec.REVOKED_AT !== undefined && /^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(rec.REVOKED_TX ?? "") && !(await finalizedOf(connection("owner"), rec.REVOKED_TX!, 0)).final) refuseGrant(
         `the previous revoke is not finalized yet: ${rec.REVOKED_TX} has not reached finalized. Grant again once it is finalized, or run revoke again if that signature can never be found`,
-        "superstables budget status --rail solana, then grant again once the revoke is finalized (or superstables budget revoke --rail solana again)",
+        `superstables budget status --rail solana${CHAIN_FLAG}, then grant again once the revoke is finalized (or superstables budget revoke --rail solana${CHAIN_FLAG} again)`,
       );
     }
     then.push({ kind: "grant", solana: { amount_atomic: String(CAP) } });
@@ -315,9 +316,9 @@ if (CAP !== undefined || LAMPORTS !== undefined) {
     startSlot = await retryRead(() => connection("owner").getSlot("confirmed"));
     agentHad = BigInt(await retryRead(() => connection("owner").getBalance(new PublicKey(agent), "confirmed")));
   } catch (e) {
-    const reason = `could not read Solana devnet before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
+    const reason = `could not read ${CHAIN.label} before asking (${oneLine((e as Error).message, 300)}); the transactions could not be checked afterwards`;
     console.log(`REFUSED: ${reason}. Nothing was requested.`);
-    process.exit(result(3, { state: "refused_precheck", reason, next: "superstables budget doctor --rail solana checks the RPC; then run the same command again" }));
+    process.exit(result(3, { state: "refused_precheck", reason, next: `superstables budget doctor --rail solana${CHAIN_FLAG} checks the RPC; then run the same command again` }));
   }
   console.log(`one approval link: the owner adds this agent, then their Solana wallet ${[LAMPORTS !== undefined ? `sends it ${sol(LAMPORTS)} SOL for fees` : "", CAP !== undefined ? `approves a budget of ${formatUnits(CAP)} USDC` : ""].filter(Boolean).join(", then ")}. Signatures are checked from slot ${startSlot + 1} on.`);
 }
@@ -336,14 +337,14 @@ if (OWNER_KEY_FILE) {
   const ownerKeypair = loadOwner(OWNER_KEY_FILE).keypair;
   owner = ownerKeypair.publicKey.toBase58();
   console.log(`owner address from --owner-key-file: ${owner}`);
-  binding = await signLocalBinding("solana", ownerKeypair.secretKey, agent, "Solana devnet (testnet)");
+  binding = await signLocalBinding("solana", ownerKeypair.secretKey, agent, CHAIN_WORDS);
 } else if (reuse) {
   owner = publicOwner!;
   console.log(`${PUBLIC_PATH} already records owner ${owner} for this agent; not asking again. If this isn't your wallet, stop: ${newOwnerCmd(recordedSite)} replaces it`);
-  if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail solana --hosted --site ${recordedSite} records it from the site's owner proof`);
+  if (recordedSite && heldBinding?.state !== "signed") console.log(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail solana${CHAIN_FLAG} --hosted --site ${recordedSite} records it from the site's owner proof`);
 } else if (HOSTED) {
   // the owner links this agent on the site with their Solana wallet; that address becomes the owner on record
-  const what = [LAMPORTS !== undefined ? "send it SOL for fees" : "", CAP !== undefined ? `approve a budget of ${formatUnits(CAP)} test USDC` : ""].filter(Boolean);
+  const what = [LAMPORTS !== undefined ? "send it SOL for fees" : "", CAP !== undefined ? `approve a budget of ${formatUnits(CAP)} ${CHAIN.testnet ? "test " : ""}USDC` : ""].filter(Boolean);
   const r = await askConnect("setup", {
     title: what.length ? `Add this agent${what.length === 2 ? `, ${what[0]} and ${what[1]}` : ` and ${what[0]}`}` : `Add this agent to your ${HOST} account`,
     ...(CAP !== undefined ? { amount: formatUnits(CAP), unit: "USDC" } : LAMPORTS !== undefined ? { amount: sol(LAMPORTS), unit: "SOL" } : {}),
@@ -357,7 +358,7 @@ if (OWNER_KEY_FILE) {
       : `Sign in to ${HOST}, connect your Solana wallet and add this agent to your account. Your Solana address is recorded as the budget owner on the agent's machine. This does not grant a budget or send a transaction.`,
     rows: [
       { label: "Your agent", value: agent, mono: true },
-      { label: "Chain", value: "Solana devnet (testnet)" },
+      { label: "Chain", value: CHAIN_WORDS },
       ...(LAMPORTS !== undefined ? [{ label: "SOL for the agent", value: `a plain transfer of ${sol(LAMPORTS)} SOL` }] : []),
       ...(CAP !== undefined ? [{ label: "Transaction", value: `SPL Token ApproveChecked: delegate ${agent}, ${CAP} (${formatUnits(CAP)} USDC)`, mono: true }] : []),
     ],
@@ -365,7 +366,7 @@ if (OWNER_KEY_FILE) {
     notEnforced: CAP !== undefined ? ["No expiry. The budget stays until it is spent or you revoke it.", "No seller list. Whoever holds the agent key can transfer to any address, up to the cap."] : [],
     notes: [
       `You pick the match code your agent shows you before the agent is added or anything is sent. The agent key stays on the agent's machine; ${HOST} does not receive it.`,
-      ...(what.length ? ["You pay the network fee for each transaction, shown in your wallet. To end the budget at any time: superstables budget revoke --rail solana."] : [`Grants, revokes and SOL for this agent are then approved on ${HOST}, in your Solana wallet.`]),
+      ...(what.length ? [`You pay the network fee for each transaction, shown in your wallet. To end the budget at any time: superstables budget revoke --rail solana${CHAIN_FLAG}.`] : [`Grants, revokes and SOL for this agent are then approved on ${HOST}, in your Solana wallet.`]),
     ],
   }, "", newOwner ? recorded : undefined, then, { prior, newOwner, expectedOwner: newOwner ? undefined : recorded });
   bundle = r.bundle;
@@ -399,7 +400,7 @@ if (OWNER_KEY_FILE) {
       "You will review and approve any later budget grant separately.",
       ...(recorded && !newOwner ? ["Connect this wallet. Any other wallet is refused, and nothing changes."] : []),
     ],
-  }, `Superstables budget: record this wallet as the owner of agent ${agent} on Solana devnet (testnet).`, newOwner ? recorded : undefined);
+  }, `Superstables budget: record this wallet as the owner of agent ${agent} on ${CHAIN_WORDS}.`, newOwner ? recorded : undefined);
   if (outcome.status === "rejected" || outcome.status === "expired") await endUnapproved("setup", outcome, { agent });
   if (outcome.status !== "connected") throw new Error(`unexpected owner page outcome ${outcome.status}`);
   owner = outcome.address;
@@ -457,16 +458,16 @@ if (then) await finishBundle();
 
 const where = HOSTED || (pub.owner && !newOwner && (parseEnvFile(PUBLIC_PATH) as Record<string, string>).APPROVALS === "hosted") ? `on ${HOST || "the site"}, in your wallet` : "in your wallet";
 const steps = [
-  `Fund your wallet ${owner} with devnet SOL (faucet.solana.com; at least 0.01) and devnet USDC (faucet.circle.com, Solana devnet; at least 0.05).`,
-  `Give the agent SOL for fees: superstables budget fund-agent --rail solana sends 0.01 SOL from your wallet (you approve it ${where}).`,
-  "Check everything: superstables budget doctor --rail solana",
-  `Grant a budget: superstables budget grant --rail solana --amount 0.05 (you approve it ${where}).`,
+  `Fund your wallet ${owner} ${CHAIN.faucet ? "with devnet SOL (faucet.solana.com; at least 0.01) and devnet USDC (faucet.circle.com, Solana devnet; at least 0.05)" : "with SOL (at least 0.01) and USDC (at least 0.05): there is no faucet on mainnet, the owner adds them"}.`,
+  `Give the agent SOL for fees: superstables budget fund-agent --rail solana${CHAIN_FLAG} sends 0.01 SOL from your wallet (you approve it ${where}).`,
+  `Check everything: superstables budget doctor --rail solana${CHAIN_FLAG}`,
+  `Grant a budget: superstables budget grant --rail solana${CHAIN_FLAG} --amount 0.05 (you approve it ${where}).`,
 ];
 console.log("\nNext:");
 steps.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with devnet SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
+finish?.({ outcome: "confirmed", message: `Done. The owner on record is now ${owner}. Check that this is your own wallet's address: if it is not, someone else connected, so grant nothing. Agent: ${agent}. You can close this page. Next: fund your wallet with ${CHAIN.faucet ? "devnet " : ""}SOL and USDC, give the agent SOL for fees, then grant a budget (the terminal lists the commands).` });
 await closeOwnerPage();
-process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: "superstables budget fund-agent --rail solana (SOL for the agent's fees), then superstables budget doctor --rail solana (it says what the owner still needs), then superstables budget grant --rail solana --amount A" }));
+process.exit(result(0, { state: "ok", owner, ...(replaced ? { replacedOwner: replaced } : {}), agent, publicFile: PUBLIC_PATH, agentKeyFile: AGENT_KEY_PATH, steps, next: `superstables budget fund-agent --rail solana${CHAIN_FLAG} (SOL for the agent's fees), then superstables budget doctor --rail solana${CHAIN_FLAG} (it says what the owner still needs), then superstables budget grant --rail solana${CHAIN_FLAG} --amount A` }));
 
 /**
  * The steps after the link: each signature the site reports is read from the chain, with fund-agent's and grant's checks.
@@ -561,14 +562,14 @@ async function finishBundle(): Promise<never> {
   if (!first && reports.length === (then?.length ?? 0)) {
     if (notFinal.length) console.log(`\n${notFinal.map((r) => name(r.kind)).join(" and ")}: in a block as planned, but the transaction is not finalized yet`);
     console.log(`\nDone with one approval link: the agent was added to the account${funded ? ", has SOL for fees" : ""}${granted ? ` and has a budget of ${formatUnits(CAP!)} USDC` : ""}.`);
-    process.exit(result(0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". The SOL transfer is final once its transaction is finalized" : ""}` : "landed, not finalized yet: the SOL transfer is final once its transaction is finalized. Start the next owner command only then") : granted ? "none: the agent can buy under the budget. superstables budget status --rail solana shows what is left" : "superstables budget grant --rail solana --amount A, only when the owner asks for a budget" }));
+    process.exit(result(0, { state: "ok", ...base, steps: reports.map((r) => (r.state === "settled" && r.final === false ? { ...r, state: "landed" } : r)), ...(notFinal.length ? { final: false } : {}), next: notFinal.length ? (notFinal.some((r) => r.kind === "grant") ? `landed, not finalized yet: superstables budget status --rail solana${CHAIN_FLAG} later shows when the grant is final. Do not rely on the budget until then${notFinal.some((r) => r.kind !== "grant") ? ". The SOL transfer is final once its transaction is finalized" : ""}` : "landed, not finalized yet: the SOL transfer is final once its transaction is finalized. Start the next owner command only then") : granted ? `none: the agent can buy under the budget. superstables budget status --rail solana${CHAIN_FLAG} shows what is left` : `superstables budget grant --rail solana${CHAIN_FLAG} --amount A, only when the owner asks for a budget` }));
   }
   const f: Report = first ?? { kind: "grant", state: "unknown", reason: "superstables.com reported fewer steps than asked for" };
-  const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? "superstables budget grant --rail solana --amount A" : "superstables budget fund-agent --rail solana")).join(" and ");
+  const later = reports.filter((r) => r.state !== "settled").map((r) => (r.kind === "grant" ? `superstables budget grant --rail solana${CHAIN_FLAG} --amount A` : `superstables budget fund-agent --rail solana${CHAIN_FLAG}`)).join(" and ");
   const next = f.state === "unknown"
-    ? `superstables budget status --rail solana and the owner's wallet activity: read whether ${f.kind === "grant" ? "the grant" : "the SOL"} landed before running anything again. The agent has been added to the account`
+    ? `superstables budget status --rail solana${CHAIN_FLAG} and the owner's wallet activity: read whether ${f.kind === "grant" ? "the grant" : "the SOL"} landed before running anything again. The agent has been added to the account`
     : f.state === "mismatch"
-      ? f.kind === "grant" ? "the chain shows another delegation than planned: the owner revokes it (superstables budget revoke --rail solana); grant again only if the owner asks" : "check the owner's wallet activity, then superstables budget doctor --rail solana"
+      ? f.kind === "grant" ? `the chain shows another delegation than planned: the owner revokes it (superstables budget revoke --rail solana${CHAIN_FLAG}); grant again only if the owner asks` : `check the owner's wallet activity, then superstables budget doctor --rail solana${CHAIN_FLAG}`
       : `the agent has been added to the account${funded ? " and has SOL for fees" : ""}. Tell the owner what happened in one reply and end your turn. Later, only if the owner asks: ${later}`;
   process.exit(result(f.state === "unknown" ? 5 : f.state === "failed" ? 1 : 3, { state: f.state, proof: f.proof, ...base, reason: summary, next }));
 }

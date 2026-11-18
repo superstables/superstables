@@ -18,7 +18,8 @@ describe("message_for_owner", () => {
   it("on a mainnet budget says the money is real, never test tokens, even read while the operator's switch is off", () => {
     const grant = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "base", terms: { title: "Approve a budget", amount: "5", unit: "USDC" } })!;
     expect(grant).toContain("5 USDC on Base. This is Base, a mainnet: the money is real.");
-    expect(grant).toContain("Only the operator sets it; agents never set the variable.");
+    expect(grant).toContain("Only the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.");
+    expect(grant).not.toContain("SUPERSTABLES_ALLOW_MAINNET is on");
     expect(grant).not.toMatch(/test USDC|Test tokens|no real money|\(testnet\)/);
     const gas = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "polygon", terms: { title: "Send gas to the agent", amount: "0.2", unit: "POL" } })!;
     expect(gas).toContain("0.2 POL on Polygon. This is Polygon, a mainnet");

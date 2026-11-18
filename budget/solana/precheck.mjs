@@ -2,7 +2,7 @@
 // A purchase is refused, before anything is signed, when
 //   - the price is missing, not an integer number of base units (more precision than USDC allows), or zero;
 //   - the price exceeds --max;
-//   - the offered token is not the devnet USDC mint, or the offered decimals are not 6;
+//   - the offered token is not this chain's USDC mint, or the offered decimals are not 6;
 //   - the recipient is not a valid address, is the all-zero address, the USDC mint, the agent or the owner, or is not the
 //     --pay-to address when one is given.
 // and, once the owner's USDC token account has been read (checkDelegation), when
@@ -10,10 +10,10 @@
 //   - the agent is not its delegate (revoked, never granted, or granted to another key);
 //   - the delegated amount left, or the account's balance, is below the price.
 import { PublicKey } from "@solana/web3.js";
-import { USDC_MINT, USDC_DECIMALS, formatUnits } from "./lib.mjs";
+import { CHAIN, USDC_MINT, USDC_DECIMALS, formatUnits } from "./lib.mjs";
 
-export const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
-export const isSolanaDevnetNetwork = (n) => n === SOLANA_DEVNET_CAIP2 || n === "solana-devnet";
+/** Whether a seller names the chain this process runs on (CAIP-2, or the x402 v1 name): never the other Solana chain. */
+export const isChainNetwork = (n) => n === CHAIN.network || n === CHAIN.v1Name;
 
 function validKey(s) {
   try {
@@ -23,10 +23,10 @@ function validKey(s) {
   }
 }
 
-// Pick the accept entry to evaluate: exact + Solana devnet, preferring one that already offers
+// Pick the accept entry to evaluate: exact + this chain, preferring one that already offers
 // the USDC mint (a seller may list several tokens).
 export function selectRequirement(accepts) {
-  const cands = (accepts ?? []).filter((a) => a?.scheme === "exact" && isSolanaDevnetNetwork(a.network));
+  const cands = (accepts ?? []).filter((a) => a?.scheme === "exact" && isChainNetwork(a.network));
   return cands.find((a) => a.asset === USDC_MINT.toBase58()) ?? cands[0] ?? null;
 }
 
@@ -35,7 +35,7 @@ export function selectRequirement(accepts) {
 export function checkOffer(requirement, { maxBase, payTo, agent, owner }) {
   const reasons = [];
   if (!requirement) {
-    return { ok: false, reasons: ["no exact-scheme Solana devnet offer in the seller's challenge"], amountBase: null };
+    return { ok: false, reasons: [`no exact-scheme ${CHAIN.label} offer in the seller's challenge`], amountBase: null };
   }
 
   const raw = requirement.amount ?? requirement.maxAmountRequired;
@@ -55,7 +55,7 @@ export function checkOffer(requirement, { maxBase, payTo, agent, owner }) {
 
   const asset = requirement.asset;
   if (asset !== USDC_MINT.toBase58()) {
-    reasons.push(`offered token ${asset ?? "(none)"} is not the devnet USDC mint ${USDC_MINT.toBase58()}`);
+    reasons.push(`offered token ${asset ?? "(none)"} is not the ${CHAIN.label} USDC mint ${USDC_MINT.toBase58()}`);
   }
   const dec = requirement.extra?.decimals;
   if (dec !== undefined && Number(dec) !== USDC_DECIMALS) {
@@ -82,7 +82,7 @@ export function checkOffer(requirement, { maxBase, payTo, agent, owner }) {
 // { delegate: PublicKey|null, delegatedAmount: bigint, amount: bigint, isFrozen: boolean }), or
 // null when it does not exist. Returns { ok, reasons }.
 export function checkDelegation(account, { agent, amountBase }) {
-  if (!account) return { ok: false, reasons: ["the owner has no USDC token account on devnet"] };
+  if (!account) return { ok: false, reasons: [`the owner has no USDC token account on ${CHAIN.label}`] };
   const reasons = [];
   if (account.isFrozen) reasons.push("the owner's USDC token account is frozen");
   if (!account.delegate) {

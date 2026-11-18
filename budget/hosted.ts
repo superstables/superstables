@@ -321,6 +321,8 @@ export interface HostedSettings {
   chain: string;
   /** The agent key: it signs each request. */
   agentKey: AgentKey;
+  /** Called right before each agent-key signature; it throws to stop that signature (a mainnet the switch or the pause closed). */
+  beforeSign?: () => void;
   /** Optional label for a link, at most 40 characters. */
   label?: string;
   /** One JSON line per state change here (owner-approvals.jsonl). Never a token or a signature. */
@@ -631,6 +633,11 @@ type Basis = Confirmed | null;
 
 export class HostedApprovals {
   private readonly s: HostedSettings;
+  /** The agent proof for one request, made only once beforeSign lets it be signed. */
+  private proof(...args: Parameters<typeof agentProof>): ReturnType<typeof agentProof> {
+    this.s.beforeSign?.();
+    return agentProof(...args);
+  }
   private stopped = false;
   /** Requests created here without a final answer yet: close() cancels them. */
   private readonly open = new Map<string, { id: string; token: string }>();
@@ -958,7 +965,7 @@ export class HostedApprovals {
     const raw = JSON.stringify({ agent: agentAddressOf(this.s.agentKey) });
     let sent = false;
     try {
-      const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
+      const { headers } = await this.proof(this.s.agentKey, this.s.site, "POST", path, raw);
       sent = true;
       const res = await (this.s.fetchImpl ?? fetch)(`${this.s.site}${path}`, { method: "POST", redirect: "error", headers: { ...headers, "content-type": "application/json", accept: "application/json" }, body: raw, signal: AbortSignal.timeout(20_000) });
       const { bytes, truncated } = await readCapped(res, SITE_MAX_BYTES);
@@ -977,7 +984,7 @@ export class HostedApprovals {
   private async signOnly(path: string, raw: string, record: Omit<SignedRecord, "resumable" | "signed">): Promise<never> {
     const signedAt = Math.floor(Date.now() / 1000);
     const nonce = newNonce();
-    const { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw, signedAt, nonce);
+    const { headers } = await this.proof(this.s.agentKey, this.s.site, "POST", path, raw, signedAt, nonce);
     const request: SignedRequest = { method: "POST", path, headers: Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v])), body: raw };
     // recorded before it is shown, so a request the connector sends always has a record here to adopt it into
     this.s.signOnly!(request, { ...record, resumable: true, signed: { path, body: raw, nonce, signedAt } });
@@ -1060,7 +1067,7 @@ export class HostedApprovals {
     const idempotency = randomBytes(16).toString("hex");
     const f = this.s.fetchImpl ?? fetch;
     // proof v2: bound to this site's origin, with a fresh nonce
-    let { headers } = await agentProof(this.s.agentKey, this.s.site, "POST", path, raw);
+    let { headers } = await this.proof(this.s.agentKey, this.s.site, "POST", path, raw);
     const send = () => f(`${this.s.site}${path}`, {
       method: "POST",
       redirect: "error",
@@ -1099,7 +1106,7 @@ export class HostedApprovals {
     };
     let json: any = await answer(res);
     if (retried && res.status === 401 && proofReason(json) === "replayed") {
-      headers = (await agentProof(this.s.agentKey, this.s.site, "POST", path, raw)).headers;
+      headers = (await this.proof(this.s.agentKey, this.s.site, "POST", path, raw)).headers;
       try {
         res = await send();
       } catch (err) {

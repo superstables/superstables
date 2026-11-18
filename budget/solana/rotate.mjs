@@ -1,5 +1,5 @@
 // The Solana steps of `superstables budget rotate` that no other script does (the orchestration is budget/rotate.mjs, run by
-// budget/cli.mjs). Devnet only.
+// budget/cli.mjs). It signs on Solana devnet only: it refuses while a Solana mainnet budget is set up (see mainnetBudgetFiles).
 //   --address              the address of the agent key file (read only; the key is never printed)
 //   --balances             read only: the agent's SOL and USDC, and the operations still open or unreadable. The plan.
 //   --sweep                the agent key signs two transfers back to the owner on record: its whole USDC balance (transferChecked
@@ -11,8 +11,9 @@
 //   --clear-agent <addr>   remove that agent from the public file (the owner, the approvals mode and the site stay).
 // Exit codes: 0 done, 1 a transfer failed on chain, 2 bad flags, 3 refused before anything was sent, 5 a transfer's outcome is unknown.
 import { readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { SystemProgram, Transaction } from "@solana/web3.js";
-import { CLUSTER_NEXT, OPS_DIR, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, clusterProblem, connection, explorerTx, formatUnits, loadAgent, oneLine, parseEnvFile, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
+import { CHAIN, CHAIN_FLAG, CLUSTER_NEXT, OPS_DIR, PUBLIC_PATH, USDC_DECIMALS, USDC_MINT, clusterProblem, connection, explorerTx, formatUnits, loadAgent, oneLine, parseEnvFile, parseStrict, readPublic, retryRead, sleep, writePublic } from "./lib.mjs";
 import { createTransferCheckedInstruction, getAssociatedTokenAddressSync, getAccountOrNull } from "./token.mjs";
 import { OP_ID_RE } from "./ops.mjs";
 import { readRegularFile } from "../secret-file.mjs";
@@ -21,7 +22,7 @@ import { solanaOpProblem } from "../journal.mjs";
 
 const USAGE = `Usage: node budget/solana/rotate.mjs (--address | --balances | --sweep | --confirm <signatures> | --clear-agent <address>)
 
-Steps of superstables budget rotate. Devnet only.
+Steps of superstables budget rotate. Devnet only: refused while a Solana mainnet budget is set up.
 
   --address              print the address of the agent key file (read only)
   --balances             read only: the agent's SOL and USDC, and the operations still open
@@ -44,13 +45,38 @@ if ([flags.address, flags.balances, flags.sweep, flags.confirm !== undefined, fl
 }
 
 const result = (exit, o) => {
-  console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command: "rotate", rail: "solana", chain: "devnet", ...o })}`);
+  console.log(`RESULT ${JSON.stringify({ ok: exit === 0, command: "rotate", rail: "solana", chain: CHAIN.key, ...o })}`);
   return exit;
 };
 const refuse = (reason, next) => {
   console.log(`REFUSED: ${reason}. Nothing was sent.`);
   process.exit(result(3, { state: "refused_precheck", reason, next }));
 };
+
+/**
+ * The public files of Solana chains other than devnet that name an agent. Rotation replaces the one agent key on every chain, and
+ * its steps (revoke, sweep, set up) run on devnet here, so a mainnet budget would be left standing on the old key: rotate refuses
+ * while one is set up, and never skips it silently. Read whether or not the operator's switch is on.
+ */
+function mainnetBudgetFiles() {
+  let names;
+  try { names = readdirSync(dirname(PUBLIC_PATH)); } catch (err) { if (err?.code === "ENOENT") return []; throw err; }
+  return names
+    .filter((n) => /^solana-.+\.env$/.test(n) && n !== "solana-devnet.env")
+    .map((n) => join(dirname(PUBLIC_PATH), n))
+    .filter((f) => { try { return Boolean(parseEnvFile(f).SOLANA_AGENT_ADDRESS); } catch { return true; } });
+}
+
+// --address stays: every command that checks for a retired key reads it. Every step that plans or moves anything refuses first.
+if (!flags.address) {
+  const mainnet = mainnetBudgetFiles();
+  if (CHAIN.key !== "devnet" || mainnet.length) {
+    refuse(
+      CHAIN.key !== "devnet" ? `rotate does not run on ${CHAIN.label}` : `a Solana mainnet budget is set up (${mainnet.join(", ")}), and rotate would replace the agent key on devnet only, leaving the mainnet delegate on the old key`,
+      "the owner revokes the mainnet budget (superstables budget revoke --rail solana --chain solana, and waits until it is final) and moves that public file away, then runs rotate again; it then covers devnet. Nothing was changed",
+    );
+  }
+}
 
 if (flags.address) {
   let agent;
@@ -127,11 +153,11 @@ if (flags.confirm !== undefined) {
   if (!sigs.length || sigs.some((x) => !/^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(x))) refuse("--confirm takes the signatures of an earlier sweep, comma-separated", "pass the signatures the sweep reported");
   const state = await standing(sigs, 30_000);
   console.log(`sweep transfers: ${state}`);
-  process.exit(result(0, { state, final: state === "final", tx: sigs, next: state === "final" ? "none" : state === "pending" ? "superstables budget rotate --rail solana again once they are finalized" : "superstables budget rotate --rail solana again" }));
+  process.exit(result(0, { state, final: state === "final", tx: sigs, next: state === "final" ? "none" : state === "pending" ? `superstables budget rotate --rail solana${CHAIN_FLAG} again once they are finalized` : `superstables budget rotate --rail solana${CHAIN_FLAG} again` }));
 }
 
 const pub = readPublic();
-if (!pub.owner || !pub.agent) refuse("the public file names no owner or no agent", "superstables budget setup --rail solana");
+if (!pub.owner || !pub.agent) refuse("the public file names no owner or no agent", `superstables budget setup --rail solana${CHAIN_FLAG}`);
 const agentPk = pub.agent;
 const ownerAta = getAssociatedTokenAddressSync(USDC_MINT, pub.owner);
 const agentAta = getAssociatedTokenAddressSync(USDC_MINT, agentPk);
@@ -145,7 +171,7 @@ if (flags.balances) {
   console.log(`agent ${agentPk.toBase58()} holds ${formatUnits(lamports, 9)} SOL and ${formatUnits(usdc)} USDC; owner ${pub.owner.toBase58()}`);
   for (const id of open) console.log(`operation ${id} is not decided: reconcile reads it before the agent's funds move`);
   for (const u of unreadable) console.log(`journal ${u.file} cannot be read: ${u.why}`);
-  process.exit(result(0, { state: "planned", plan: { agent: agentPk.toBase58(), owner: pub.owner.toBase58(), lamports: String(lamports), usdc: String(usdc), openOps: open, unreadable }, next: "superstables budget rotate --rail solana" }));
+  process.exit(result(0, { state: "planned", plan: { agent: agentPk.toBase58(), owner: pub.owner.toBase58(), lamports: String(lamports), usdc: String(usdc), openOps: open, unreadable }, next: `superstables budget rotate --rail solana${CHAIN_FLAG}` }));
 }
 
 // --sweep: only the agent key on file, and only to the owner on record
@@ -155,7 +181,7 @@ try {
 } catch (err) {
   refuse(oneLine(err?.message ?? err, 300), "make the agent key file a regular file only you can read (chmod 600)");
 }
-if (!agent.publicKey.equals(agentPk)) refuse(`the agent key file holds ${agent.publicKey.toBase58()}, and the public file names ${agentPk.toBase58()}`, "the two files must name the same agent; run superstables budget doctor --rail solana");
+if (!agent.publicKey.equals(agentPk)) refuse(`the agent key file holds ${agent.publicKey.toBase58()}, and the public file names ${agentPk.toBase58()}`, `the two files must name the same agent; run superstables budget doctor --rail solana${CHAIN_FLAG}`);
 
 const sent = { usdc: null, sol: null };
 /** Signs with the agent key, sends, and reads the status until it is confirmed, failed or expired. `kind` names the signature in `tx`. */
@@ -173,13 +199,13 @@ async function send(tx, what, kind) {
     const st = (await retryRead(() => conn.getSignatureStatuses([sig], { searchTransactionHistory: true }))).value[0];
     if (st?.err) {
       console.log(`${what}: failed on chain (${oneLine(JSON.stringify(st.err), 200)})`);
-      process.exit(result(1, { state: "failed", proof: "reverted", tx: { ...sent }, reason: `the ${what} failed on chain (${oneLine(JSON.stringify(st.err), 200)})`, next: "superstables budget rotate --rail solana again" }));
+      process.exit(result(1, { state: "failed", proof: "reverted", tx: { ...sent }, reason: `the ${what} failed on chain (${oneLine(JSON.stringify(st.err), 200)})`, next: `superstables budget rotate --rail solana${CHAIN_FLAG} again` }));
     }
     if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return sig;
     await sleep(1000);
   }
   console.log(`${what}: ${sig} did not show up on chain in time`);
-  process.exit(result(5, { state: "unknown", tx: { ...sent }, reason: `the ${what} was sent but the chain does not show it yet`, next: `superstables budget doctor --rail solana reads the agent's balances; then superstables budget rotate --rail solana again (${explorerTx(sig)})` }));
+  process.exit(result(5, { state: "unknown", tx: { ...sent }, reason: `the ${what} was sent but the chain does not show it yet`, next: `superstables budget doctor --rail solana${CHAIN_FLAG} reads the agent's balances; then superstables budget rotate --rail solana${CHAIN_FLAG} again (${explorerTx(sig)})` }));
 }
 
 const tx = sent;
@@ -192,7 +218,7 @@ if (usdcBefore > 0n) {
 const usdcAfter = await usdcOf();
 if (usdcAfter > 0n) {
   console.log(`the agent still holds ${formatUnits(usdcAfter)} USDC`);
-  process.exit(result(5, { state: "unknown", tx: { ...tx }, reason: `the agent still holds ${formatUnits(usdcAfter)} USDC after the return`, next: "superstables budget doctor --rail solana, then rotate again" }));
+  process.exit(result(5, { state: "unknown", tx: { ...tx }, reason: `the agent still holds ${formatUnits(usdcAfter)} USDC after the return`, next: `superstables budget doctor --rail solana${CHAIN_FLAG}, then rotate again` }));
 }
 const lamports = await lamportsOf();
 let sol = 0n;
@@ -205,4 +231,4 @@ console.log(`agent ${agentPk.toBase58()} now holds ${formatUnits(await lamportsO
 const sigs = Object.values(tx).filter(Boolean);
 const where = sigs.length ? await standing(sigs) : "final";
 console.log(`transfers: ${where}`);
-process.exit(result(0, { state: "ok", final: where === "final", tx, returnedUsdc: formatUnits(usdcBefore), returnedSol: formatUnits(sol, 9), ...(sigs.length ? {} : { reason: "the sweep sent nothing: the agent held no USDC and too little SOL to move" }), next: where === "final" ? "none" : "superstables budget rotate --rail solana again once they are finalized" }));
+process.exit(result(0, { state: "ok", final: where === "final", tx, returnedUsdc: formatUnits(usdcBefore), returnedSol: formatUnits(sol, 9), ...(sigs.length ? {} : { reason: "the sweep sent nothing: the agent held no USDC and too little SOL to move" }), next: where === "final" ? "none" : `superstables budget rotate --rail solana${CHAIN_FLAG} again once they are finalized` }));

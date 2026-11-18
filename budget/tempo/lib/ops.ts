@@ -1,12 +1,13 @@
 // Operation journal (contract rule 5). One JSON file per operation under
-// $SUPERSTABLES_HOME/budget/ops/tempo-moderato/<id>.json (../../paths.mjs), outside the code folder. It is written
+// $SUPERSTABLES_HOME/budget/ops/tempo-<chain>/<id>.json (../../paths.mjs; tempo-moderato on Moderato), outside the code folder. It is written
 // BEFORE anything is signed or submitted (intent) and updated after (tx, state). It holds no key.
 import { readJournalFile, tempoOpProblem, writeJournalFile } from '../../journal.mjs'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { opsDir } from '../../paths.mjs'
+import { CHAIN } from './constants.mjs'
 
-export const OPS_DIR = opsDir('tempo', 'moderato')
+export const OPS_DIR = opsDir('tempo', CHAIN.key)
 
 export type OpState =
   | 'quoted'
@@ -100,5 +101,5 @@ export type ResultLine = {
 
 /** The final, machine-readable line of every purchase command. */
 export function printResult(r: ResultLine) {
-  console.log('RESULT ' + JSON.stringify({ rail: 'tempo', ...r, chain_final: r.state === 'settled' ? r.chain_final ?? null : null }))
+  console.log('RESULT ' + JSON.stringify({ rail: 'tempo', ...(CHAIN.testnet ? {} : { chain: CHAIN.key }), ...r, chain_final: r.state === 'settled' ? r.chain_final ?? null : null }))
 }

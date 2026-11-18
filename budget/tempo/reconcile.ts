@@ -19,7 +19,7 @@
 import type { Address } from 'viem'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
-import { explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
+import { CHAIN_FLAG, explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
 import { RPC_CHAIN_NEXT, readKey, rpcChainProblem } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
 import { failedNext, feeSentence, notFoundFee, notFoundNext } from './lib/words.ts'
@@ -90,7 +90,7 @@ async function main() {
   const wrongChain = await rpcChainProblem()
   if (wrongChain) {
     console.log(`UNKNOWN: ${wrongChain}. Nothing was read for this purchase; the journal is unchanged.`)
-    printResult({ op: opId, state: 'unknown', tx: op.tx ?? null, debit: null, remaining: null, delivered: op.delivered ?? null, next: `${RPC_CHAIN_NEXT}, then run superstables budget reconcile --rail tempo --op ${opId} again; never pay again for this op`, reason: `wrong_rpc_chain: ${wrongChain}` })
+    printResult({ op: opId, state: 'unknown', tx: op.tx ?? null, debit: null, remaining: null, delivered: op.delivered ?? null, next: `${RPC_CHAIN_NEXT}, then run superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId} again; never pay again for this op`, reason: `wrong_rpc_chain: ${wrongChain}` })
     process.exit(5)
   }
 
@@ -120,7 +120,7 @@ async function main() {
     return done('not_found', { debit: 0n, reason: 'signed payment expired; nothing on chain for its memo', next: notFoundNext(0n, op.intent.mode), exit: 1 })
   }
   console.log('UNKNOWN: nothing on chain yet, and the signed payment may still land. Run reconcile again after its validBefore has passed.')
-  return done('unknown', { reason: 'not on chain yet', next: `superstables budget reconcile --rail tempo --op ${opId}`, exit: 5 })
+  return done('unknown', { reason: 'not on chain yet', next: `superstables budget reconcile --rail tempo${CHAIN_FLAG} --op ${opId}`, exit: 5 })
 }
 
 main().catch((err) => {

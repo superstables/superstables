@@ -1,5 +1,5 @@
 // The few SPL Token calls the solana rail makes, built directly on @solana/web3.js (no
-// @solana/spl-token). Classic Token program only: devnet USDC is a classic SPL token.
+// @solana/spl-token). Classic Token program only: USDC is a classic SPL token on devnet and mainnet.
 //
 // Layouts and instruction encodings follow the SPL Token program
 // (https://github.com/solana-program/token): a token account is 165 bytes, a mint 82 bytes,
