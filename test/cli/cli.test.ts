@@ -924,6 +924,17 @@ describe("find against a local index", () => {
       testnet: true,
       mock: true,
     },
+    {
+      // It lists its parameters, but has no payout address: hidden by default for that, not for missing parameters.
+      id: "unpaid.example",
+      name: "Unpaid qqzv",
+      description: "A catalogue listing with no payout address.",
+      endpoint: `${index.url}/paid/unpaid`,
+      method: "GET",
+      params: [{ name: "asset", in: "query", required: true, example: "BTC" }],
+      payment: { rail: "x402", scheme: "exact", network: "eip155:84532", asset: "USDC", configured: false },
+      testnet: true,
+    },
   ];
 
   beforeAll(async () => {
@@ -1018,6 +1029,15 @@ describe("find against a local index", () => {
     expect(all.stdout).not.toMatch(/matching listings? (is|are) not shown/);
     const allJson = JSON.parse((await find("--all", "--json")).stdout) as { warnings: string[] };
     expect(allJson.warnings.some((w) => /not shown because/.test(w))).toBe(false);
+  });
+
+  it("does not blame missing parameters for a catalogue listing hidden for another reason", async () => {
+    const r = await run(["find", "qqzv", "--demo"], { SUPERSTABLES_INDEX_URL: "off", SUPERSTABLES_CATALOGUE_URL: `${index.url}/catalogue` });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain(
+      "note: 1 matching listing is not shown because `superstables pay` cannot call it (for example on a mainnet while the operator's switch is off, or not https); `find --all` lists it with the reason.",
+    );
+    expect(r.stdout).not.toContain("pay: with params");
   });
 
   it("with the operator's switch on, hides a mainnet listing without parameters as a testnet one is hidden, and says why", async () => {

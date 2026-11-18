@@ -439,8 +439,8 @@ function unreachableNext(err: unknown): never {
 }
 
 /**
- * Why the default filter (or --budget) hid some matching listings, in the client's words only. A listing pay could call
- * once its request parameters are known (pay: with params) is named as such, on a testnet or a mainnet alike; the
+ * Why the default filter (or --budget) hid some matching listings, in the client's words only. An index listing pay could
+ * call once its request parameters are known (pay: with params) is named as such, on a testnet or a mainnet alike; the
  * operator's switch is given as an example only while it is off.
  */
 function hiddenListingsNote(hidden: ServiceListing[], budget: boolean): string {
@@ -451,7 +451,8 @@ function hiddenListingsNote(hidden: ServiceListing[], budget: boolean): string {
     : "for example not https, or on a chain or token this client does not pay";
   const all = `\`find --all\` lists ${them(hidden.length)} with the reason`;
   if (budget) return `${shown(hidden.length)} because no \`superstables budget\` rail could pay ${them(hidden.length)} (${example}); ${all}.`;
-  const params = hidden.filter((s) => s.routes?.pay === true).length;
+  // Only index rows go without parameters; a catalogue row pay could take is hidden for another reason (its payout, asset or scheme).
+  const params = hidden.filter((s) => s.source === "superstables-index" && s.routes?.pay === true).length;
   const other = hidden.length - params;
   const unlisted = "the index does not record the request parameters `superstables pay` needs (pay: with params)";
   if (other === 0) return `${shown(params)} because ${unlisted}; \`find --all\` lists ${them(params)}, with the command that quotes each once its parameters are filled in.`;
