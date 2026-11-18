@@ -11,7 +11,7 @@ afterAll(() => server.close?.());
 
 async function open() {
   await server.start();
-  const h = server.request({ kind: "evm-transaction", chain: "base-sepolia", terms: { title: "Grant", summary: "s", enforced: [], notEnforced: [] }, account: OWNER, timeoutMs: 60_000, transaction: { to: TO, data: "0x", value: "0x0" } } as any);
+  const h = server.request({ kind: "evm-transaction", chain: { chainId: 84532, chainName: "Base Sepolia", rpcUrl: "http://127.0.0.1:1", explorer: "https://sepolia.basescan.org", nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 }, testnet: true }, terms: { title: "Grant", summary: "s", enforced: [], notEnforced: [] }, account: OWNER, timeoutMs: 60_000, transaction: { to: TO, data: "0x", value: "0x0" } } as any);
   const u = new URL(h.url);
   const post = async (leaf: string, body: unknown) => {
     const r = await fetch(`${u.origin}${u.pathname}/${leaf}${u.search}`, { method: "POST", headers: { "content-type": "application/json", origin: u.origin }, body: JSON.stringify(body) });
