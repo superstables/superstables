@@ -92,14 +92,14 @@ Agents never set the variable. In the index, `base`, `arc`, `arbitrum`, `polygon
 | Listing chain | `pay` | Budget `--rail` and `--chain` |
 | --- | --- | --- |
 | `base-sepolia` (`eip155:84532`) | yes (x402) | `evm`, `base-sepolia` |
-| `arc-testnet` (`eip155:5042002`) | no | `evm`, `arc-testnet` |
-| `arbitrum-sepolia` (`eip155:421614`) | no | `evm`, `arbitrum-sepolia` |
-| `polygon-amoy` (`eip155:80002`) | no | `evm`, `polygon-amoy` |
-| `skale-base-sepolia` (`eip155:324705682`) | no | `evm`, `skale-base-sepolia` |
-| `ethereum-sepolia`, `sepolia` (`eip155:11155111`) | no | `evm`, `ethereum-sepolia` |
+| `arc-testnet` (`eip155:5042002`) | yes (x402) | `evm`, `arc-testnet` |
+| `arbitrum-sepolia` (`eip155:421614`) | yes (x402) | `evm`, `arbitrum-sepolia` |
+| `polygon-amoy` (`eip155:80002`) | yes (x402) | `evm`, `polygon-amoy` |
+| `skale-base-sepolia` (`eip155:324705682`) | yes (x402) | `evm`, `skale-base-sepolia` |
+| `ethereum-sepolia`, `sepolia` (`eip155:11155111`) | yes (x402) | `evm`, `ethereum-sepolia` |
 | `robinhood-testnet` (`eip155:46630`) | yes (x402, USDG) | `evm`, `robinhood-testnet` |
-| `solana-devnet` | no | `solana`, `devnet` (x402) |
-| `tempo-moderato`, `moderato` (`eip155:42431`) | no | `tempo`, `moderato` (MPP only) |
+| `solana-devnet` | yes (x402) | `solana`, `devnet` (x402) |
+| `tempo-moderato`, `moderato` (`eip155:42431`) | yes (MPP) | `tempo`, `moderato` (MPP only) |
 
 While the operator's switch is on, the mainnets route too, each by its key or its CAIP-2 id, and `pay` pays each of them:
 
