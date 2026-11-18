@@ -45,6 +45,7 @@ import { purchaseReportsOn, reportSettled } from "./purchase-report.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
 import { mainnetSwitchRefusal } from "../src/core/chain-gate.js";
+import { shippedManifest } from "../src/core/mainnet-policy.js";
 import { finalWords } from "../src/core/finality-policy.js";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
 import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
@@ -141,7 +142,8 @@ const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
           The budget is USDC (USDG on Robinhood Chain and its testnet). Sellers: x402.
   tempo   ${TEMPO_CHAIN_KEYS.map((k) => `${k} (${TEMPO_CHAINS[k].label}${k === TEMPO_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is pathUSD.
           Sellers: MPP (tempo.charge).
-  solana  ${SOLANA_CHAIN_KEYS.map((k) => `${k} (${SOLANA_CHAINS[k].label}${k === SOLANA_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is USDC. Sellers: x402.
+  solana  ${SOLANA_CHAIN_KEYS.map((k) => `${k} (${SOLANA_CHAINS[k].label}${k === SOLANA_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is USDC. Sellers: x402.${mainnetSwitchRefusal() ? `
+  Mainnets, while the operator's switch is on (the money is real): ${["evm", "tempo", "solana"].map((r) => `${r} ${Object.entries(shippedManifest().chains).filter(([, c]) => c.rail === r).map(([k]) => k).join(", ")}`).join("; ")}.` : ""}
   Chain to rail: ${Object.values(EVM_CHAINS).map((c) => c.label).slice(0, -1).join(", ")} and ${Object.values(EVM_CHAINS).at(-1).label} are evm;
   ${TEMPO_CHAIN_KEYS.map((k) => TEMPO_CHAINS[k].label).join(" and ")} ${TEMPO_CHAIN_KEYS.length > 1 ? "are" : "is"} tempo; ${SOLANA_CHAIN_KEYS.map((k) => SOLANA_CHAINS[k].label).join(" and ")} ${SOLANA_CHAIN_KEYS.length > 1 ? "are" : "is"} solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
@@ -557,7 +559,7 @@ Adopt that request with --site-request; only if it was never sent, run the owner
     flags: { service: "v", param: "m", params: "v", max: "v", wait: "b", detach: "b", replace: "b" }, required: ["service", "max"],
     help: helpText({
       usage: "superstables budget buy-once --service ID --max M [--param K=V ...] [--params JSON] [--site URL] [--wait|--detach] [--replace]",
-      about: `Single purchase on superstables.com: the owner approves on superstables.com. No setup, no budget, no agent key. ${TESTNET_LINE}
+      about: `Single purchase on superstables.com: the owner approves on superstables.com. No setup, no budget, no agent key. On testnets: test tokens, no real money.
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on Base
 Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet, and, while the operator's switch is on,
 Base, Arc and Robinhood Chain, where the money is real: the chain comes from the listing. --max
@@ -3223,7 +3225,7 @@ const inMinutes = (iso) => { const m = Math.round((Date.parse(iso) - Date.now())
 
 async function buyOnce({ f, ctx }) {
   const detach = f.detach === true || (!f.wait && !process.stdout.isTTY);
-  log(`\nbuy-once on ${f.site}: one purchase of ${f.service}, at most ${f.max} in the service's token, approved by the owner on ${siteName(f.site)}. ${TESTNET_LINE}`);
+  log(`\nbuy-once on ${f.site}: one purchase of ${f.service}, at most ${f.max} in the service's token, approved by the owner on ${siteName(f.site)}. ${mainnetSwitchRefusal() ? TESTNET_LINE : MIXED_MONEY_LINE}`);
   const r = await startOnce({ site: f.site, service: f.service, params: f.params, max: f.max, chain: f.chain, rail: f.rail, replace: f.replace === true });
   if (!r.ok) {
     log(`superstables budget: ${r.code === 3 ? "refused: " : ""}${r.reason}`);
