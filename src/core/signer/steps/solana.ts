@@ -343,7 +343,7 @@ export const solanaStep: WalletStep = {
       `Signing approves this one transfer of ${facts.amountDecimal} ${facts.asset} and nothing else; the seller pays the network fee and sends it. ` +
       (facts.testnet !== false
         ? "Before you sign, switch your wallet to Solana devnet. For example, in Phantom: open Settings, Developer Settings, turn on Testnet Mode and pick Solana Devnet."
-        : `Before you sign, check that your wallet is on ${facts.networkLabel ?? "Solana"}, not a test network: the money is real.`),
+        : `Before you sign, check that your wallet is on ${facts.networkLabel ?? "Solana"}, not a test network.`),
     walletShows: (f) => [
       "A transaction to sign, not to send: the seller's fee payer signs it after you and sends it.",
       `A transfer of ${f.amountDecimal} ${f.asset} to ${f.recipient}. Wallets that simulate show it as −${f.amountDecimal} ${f.asset}.`,

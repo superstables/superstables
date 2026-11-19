@@ -3,7 +3,7 @@
 The Superstables client is a command, `superstables`, and the `superstables` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). No real money while mainnet is off: only the operator opens it, by setting `SUPERSTABLES_ALLOW_MAINNET`, which opens every supported mainnet at once.
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). Mainnet stays off until the operator opens it, by setting `SUPERSTABLES_ALLOW_MAINNET`, which opens every supported mainnet at once.
 
 ## What you need
 
@@ -322,7 +322,7 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the catalogue on superstables.com in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
 | `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. It counts only when the owner's settings allow it (`superstables owner settings`); `www.superstables.com` always does |
-| `SUPERSTABLES_ALLOW_MAINNET` | unset (off) | The operator's switch for mainnet. `1` or `true` opens every supported mainnet, where payments move real money; unset, empty, `0` or `false` keeps mainnet off, and any other value is an error that names the variable. Agents never set it. Each mainnet must still pass the chain gate's checks ([Mainnet](security.md#mainnet)) |
+| `SUPERSTABLES_ALLOW_MAINNET` | unset (off) | The operator's switch for mainnet. `1` or `true` opens every supported mainnet; unset, empty, `0` or `false` keeps mainnet off, and any other value is an error that names the variable. Agents never set it. Each mainnet must still pass the chain gate's checks ([Mainnet](security.md#mainnet)) |
 | `SUPERSTABLES_ALLOW_SITE` | unset | No longer read; a warning is printed when it is set. Use `superstables owner settings site <origin>` |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
 | `SUPERSTABLES_NO_UPDATE_CHECK` | unset | `1` skips the interactive doctor check for a newer client release |

@@ -108,7 +108,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with stablecoins from a wallet " +
-      "the owner controls. Testnet by default. Mainnet is open only when the operator turns it on, and then the money is real.",
+      "the owner controls. Testnet by default. Mainnet is open only when the operator turns it on.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -748,7 +748,7 @@ explain(
         "the request there, so approving it afterwards signs nothing.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
         "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
-        "pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets, where the money is real. The wallet signs on " +
+        "pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets. The wallet signs on " +
         "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
         "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
         "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +

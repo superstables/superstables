@@ -234,7 +234,7 @@ export interface FrameParts {
   lede?: string;
   /** Shows a Testnet pill in the bar. */
   testnet?: boolean;
-  /** Shows a Mainnet pill in the bar: the money is real. */
+  /** Shows a Mainnet pill in the bar. */
   mainnet?: boolean;
   /** A wider page (the wallet's history table). */
   wide?: boolean;
@@ -273,7 +273,7 @@ export function framePage(parts: FrameParts): string {
 <body${parts.wide ? ' class="wide"' : ""}>
 <header class="top"><div class="wrap">
   ${brand}
-  ${parts.testnet ? '<span class="pill">Testnet</span>' : ""}${parts.mainnet ? '<span class="pill real">Mainnet: real money</span>' : ""}
+  ${parts.testnet ? '<span class="pill">Testnet</span>' : ""}${parts.mainnet ? '<span class="pill real">Mainnet</span>' : ""}
 </div></header>
 <main class="wrap">
   <p class="eyebrow">${esc(parts.eyebrow)}</p>

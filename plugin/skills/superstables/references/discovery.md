@@ -77,7 +77,7 @@ When several listings can answer the request:
 | `routes.budget: [{rail, chain}]` | `superstables budget buy --rail RAIL --chain CHAIN --url URL --max CEILING`, when a budget is live there |
 | Neither | This client cannot pay it (a mainnet while the operator's switch is off, or a protocol it does not speak). Say so |
 
-With the switch on, a mainnet listing has `routes` like a testnet one, and `testnet: false`. Pay it only when the owner asked for that mainnet: the money is real.
+With the switch on, a mainnet listing has `routes` like a testnet one, and `testnet: false`. Pay it only when the owner asked for that mainnet, and name the mainnet and the amount before the owner approves.
 
 `routes` is a judgement from the listing's rails and chains. The seller still has to answer with an offer the payer accepts: `quote` or `preflight` confirms it.
 
@@ -86,7 +86,7 @@ With the switch on, a mainnet listing has `routes` like a testnet one, and `test
 ## Chain names
 
 Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
-When the operator turns it on, every supported mainnet is open and payments there move real money.
+When the operator turns it on, every supported mainnet is open.
 Agents never set the variable. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`, `tempo` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |

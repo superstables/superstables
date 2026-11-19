@@ -6,7 +6,7 @@
 
 <a id="buy-once"></a>
 
-Read this when the owner chose to approve one purchase. The owner approves this one payment on superstables.com, in their own wallet. There is no setup, no budget or agent key: nothing is spent until they approve, and they approve each purchase separately. Testnet-first. On a testnet: test tokens, no real money. It pays on the chain the service's listing names: Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet, and, with the operator's switch on, Base, Arc or Robinhood Chain, where the money is real. Buy on a mainnet only when the owner asked for it (SKILL.md's safety rule 7).
+Read this when the owner chose to approve one purchase. The owner approves this one payment on superstables.com, in their own wallet. There is no setup, no budget or agent key: nothing is spent until they approve, and they approve each purchase separately. Testnet-first. On a testnet: test tokens. It pays on the chain the service's listing names: Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato or Solana devnet, and, with the operator's switch on, the mainnets Base, Arc or Robinhood Chain. Buy on a mainnet only when the owner asked for it (SKILL.md's safety rule 7).
 
 ## What the owner needs
 

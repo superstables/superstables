@@ -890,7 +890,7 @@ describe("quote against a local seller on Base mainnet", () => {
   });
 
   it.each([["off", {}], ["on", { SUPERSTABLES_ALLOW_MAINNET: "1" }]] as const)(
-    "on a testnet, with the switch %s, says (testnet) and nothing about real money",
+    "on a testnet, with the switch %s, says (testnet) and nothing about mainnet",
     async (_label, env) => {
       const r = await run(["quote", `${testnet.url}/paid/intel`], env);
       expect(r.code).toBe(0);

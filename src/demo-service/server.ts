@@ -3,7 +3,7 @@
 //
 // It is a real x402 seller: it answers 402 with its terms, it checks the credential it is
 // handed against those terms, and it has a public facilitator verify and settle the transfer
-// before it answers. It charges test USDC on Base Sepolia, so no real money ever moves.
+// before it answers. It charges test USDC on Base Sepolia, a testnet.
 //
 // Two ordering rules matter and are load bearing:
 //   1. the request is validated BEFORE any payment is demanded, so a buyer never pays for a
@@ -45,9 +45,9 @@ export const DEFAULT_PRICE_DECIMAL = 0.01;
 
 export const SERVICE_NAME = "Superstables demo market data";
 export const SERVICE_DESCRIPTION =
-  "a controlled test service operated for the Superstables demo; it charges test USDC on Base Sepolia and moves no real money";
+  "a controlled test service operated for the Superstables demo; it charges test USDC on Base Sepolia (testnet)";
 export const RESOURCE_DESCRIPTION =
-  "Superstables demo market data: spot price and 24h change for one asset (testnet, no real money)";
+  "Superstables demo market data: spot price and 24h change for one asset (testnet, test USDC)";
 
 /** Everything the service needs to answer a request. No port: a handler does not listen. */
 export interface DemoHandlerOptions {

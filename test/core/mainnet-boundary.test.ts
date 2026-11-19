@@ -210,13 +210,14 @@ describe("the approval page (browser signer)", () => {
     }
   });
 
-  it("says on the page that the money is real", async () => {
+  it("names the mainnet on the page", async () => {
     const signer = pageSigner();
     try {
       const { links, endings } = await open(signer, request(1, 90));
       const html = await (await fetch(links[0])).text();
-      expect(html).toContain("Mainnet: real money");
-      expect(html).toMatch(/a mainnet: the money is real/);
+      expect(html).toContain('<span class="pill real">Mainnet</span>');
+      expect(html).toMatch(/This payment is on [^<]+ \(mainnet\)\. A payment cannot be undone\./);
+      expect(html).not.toMatch(/real money|money is real/);
       await postJson(`${links[0]}/reject`, {});
       await Promise.all(endings);
     } finally {

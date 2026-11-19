@@ -39,7 +39,7 @@ export interface ApprovalPageFacts {
   recipient: string;
   network: string;
   networkLabel: string;
-  /** Whether the chain is a testnet, from this client's chain table. False: a mainnet, where the money is real. */
+  /** Whether the chain is a testnet, from this client's chain table. False: a mainnet. */
   testnet?: boolean;
   assetAddress: string;
   expiresAt: number;
@@ -494,7 +494,7 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
     You can still reject the payment without one.
   </div>
 
-  ${facts.testnet !== false ? "" : `<div id="real-money" class="note bad">This payment is on ${esc(facts.networkLabel)}, a mainnet: the money is real, and a payment cannot be undone.</div>\n`}
+  ${facts.testnet !== false ? "" : `<div id="real-money" class="note bad">This payment is on ${esc(facts.networkLabel)} (mainnet). A payment cannot be undone.</div>\n`}
   <div class="card">
     <div class="amount">${esc(facts.amountDecimal)}<span>${esc(facts.asset)}</span></div>
     ${sellerLine(facts)}

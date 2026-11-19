@@ -16,6 +16,10 @@ Testnet by default. Only the operator opens mainnet, with `SUPERSTABLES_ALLOW_MA
 - **Mainnet quotes:** With the operator's switch on, `quote` names a mainnet's network with "(mainnet)", as it names a testnet's with "(testnet)". For example: `Base (mainnet)`.
 - **Hidden listings in `find`:** The note under `find` says why listings are not shown. When the index does not record the request parameters that `pay` needs (`pay: with params`), the note says so. It no longer blames the switch while the switch is on. A listing on a mainnet is shown or hidden by the same rule as a listing on a testnet. `find --all` lists every listing.
 
+### Changed
+
+- **Mainnet wording:** Messages to the owner, the approval pages, `--help` and the skill name a mainnet the way wallets do, with the amount and token: for example, `5 USDC on Base. This is on Base (mainnet).` The agent still names the mainnet and the amount before the owner approves. Testnets keep `(testnet)` and say they use test tokens.
+
 ## [1.4.0] - Mainnet behind the operator switch, purchase reports
 
 Testnet by default. Only the operator opens mainnet, with `SUPERSTABLES_ALLOW_MAINNET=1`; agents never set it. Payments there move real money, and this client's tests have made none on a mainnet yet.

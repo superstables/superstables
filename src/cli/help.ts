@@ -159,7 +159,7 @@ Discovery:
   switches it off with \`off\`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
   SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-  supported mainnet is open and payments there move real money. Agents never set it.
+  supported mainnet is open. Agents never set it.
 
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)

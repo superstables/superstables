@@ -84,7 +84,7 @@ export function onceClosed(net) {
 /** The rail and chain flags buy-once accepts: each names one of ONCE_NETWORKS. */
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
-export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Test tokens, no real money.";
+export const TESTNET_LINE = "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. This uses test tokens.";
 /**
  * The mainnet of the manifest a record is on (a budget command's, or buy-once's), or undefined on a testnet. Read from
  * the manifest, not the chain table, so a record made while the switch was on still says so once it is off.
@@ -95,10 +95,10 @@ const railMainnet = (rail, chain) => {
   const m = mainnetEntry(chain);
   return m && m.rail === rail ? m : undefined;
 };
-/** The money line for a record: real money on a mainnet, the testnet line elsewhere. */
+/** The network line for a record: the mainnet's name with (mainnet), or the testnet line. */
 export const moneyLineFor = (rec) => {
   const m = recordMainnet(rec);
-  return m ? `This is ${m.label}, a mainnet: the money is real.\nOnly the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.` : TESTNET_LINE;
+  return m ? `This is on ${m.label} (mainnet).\nOnly the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.` : TESTNET_LINE;
 };
 const SERVICES_API = "/api/v1/purchase/services";
 const PURCHASES_API = "/api/v1/purchases";

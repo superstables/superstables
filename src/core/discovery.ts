@@ -152,7 +152,7 @@ export function demoService(): ServiceListing {
     name: "Superstables demo market data",
     description:
       "Market data for BTC and ETH, priced per request and paid with test USDC on Base Sepolia. " +
-      "A controlled service that exists so a payment can be demonstrated end to end without spending real money.",
+      "A controlled service that exists so a payment can be demonstrated end to end with test tokens.",
     endpoint,
     method: "GET",
     params,

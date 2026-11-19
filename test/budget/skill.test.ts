@@ -35,13 +35,15 @@ describe("skill-source/cli.md", () => {
 
   it("states testnet at the top and asks the owner which way to pay before it points to a file", () => {
     const top = skill.split("\n").slice(0, 6).join("\n");
-    expect(top).toMatch(/Testnet-first\.\*\* On a testnet: test tokens, no real money\./);
+    expect(top).toMatch(/Testnet-first\.\*\* On a testnet: test tokens\./);
     expect(top).not.toMatch(/Stop and ask the owner/);
     const ask = skill.indexOf("## First, ask the owner what they would like to try");
     expect(ask).toBeGreaterThan(0);
-    expect(skill).toContain('"This uses test tokens, no real money. Would you like a budget or a single purchase you approve?"');
-    // the test-token sentence is said only on a testnet: an owner who asked for a mainnet hears that the money is real
-    expect(skill).toContain('If the owner asked for a mainnet (safety rule 7), the first sentence is instead "This is CHAIN, a mainnet: the money is real."');
+    expect(skill).toContain('"This uses test tokens. Would you like a budget or a single purchase you approve?"');
+    // the test-token sentence is said only on a testnet: an owner who asked for a mainnet hears which mainnet, before any approval
+    expect(skill).toContain('If the owner asked for a mainnet (safety rule 7), the first sentence is instead "This is on CHAIN (mainnet).", for example "This is on Base (mainnet)."');
+    expect(skill).toContain("Name the mainnet and the amount when you ask the owner to approve, and keep their ceiling.");
+    expect(skill).not.toMatch(/real money|money is real/i);
     expect(skill.indexOf("references/once.md", ask)).toBeGreaterThan(ask);
     expect(skill).toMatch(/superstables budget buy-once/);
     expect(skill).toMatch(/superstables budget find --once/);
@@ -97,7 +99,7 @@ describe("skill-source/cli.md", () => {
     const files = new Set([...skill.matchAll(/\]\(((?:references\/)[A-Za-z]+\.md)(?:#[^)]*)?\)/g)].map((m) => m[1]));
     for (const f of ["references/once.md", "references/budget.md", "references/pay.md", "references/discovery.md"]) expect(files).toContain(f);
     for (const f of files) expect(existsSync(resolve(SKILL, f)), f).toBe(true);
-    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet-first\. On a testnet: test tokens, no real money/);
+    for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f)).toMatch(/Testnet-first\. On a testnet: test tokens\./);
   });
 });
 
@@ -172,7 +174,7 @@ describe("skill-source: mainnet with the operator's switch on", () => {
 
   it("relays the mainnet line of message_for_owner word for word", () => {
     expect(skill).not.toMatch(/the testnet line(?! or mainnet)/);
-    expect(skill).toMatch(/On a mainnet, that line says the money is real: never drop or soften it/);
+    expect(skill).toMatch(/On a mainnet, that line names the mainnet: never drop or soften it/);
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f), f).not.toMatch(/the testnet line(?! or mainnet)/);
   });
 });
