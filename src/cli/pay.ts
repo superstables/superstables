@@ -82,7 +82,7 @@ export async function approveAndPay(deps: PaymentContext, quoteId: string, optio
     }
     throw badInput(
       quote
-        ? `${messageOf(err)}: \`${requoteCommand(quote)}\`, then \`${command} <new-quote-id>\`.`
+        ? `${messageOf(err)}: \`${requoteCommand(quote)}\`, then \`${command}${testnetArg()} <new-quote-id>\`.`
         : `${messageOf(err)}; \`superstables quote${testnetArg()} --service <id>\` or \`superstables quote${testnetArg()} <url>\` takes one.`,
     );
   }

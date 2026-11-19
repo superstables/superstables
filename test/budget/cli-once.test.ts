@@ -120,7 +120,7 @@ describe("buy-once: account refusals and read failures", () => {
     expect(r.result).toMatchObject({ state: "unknown", final: false, paid: null, delivered: null, amount: null });
     expect(r.result.reason).toContain(`HTTP ${status} ${code}`);
     expect(r.result.next).toMatch(guidance);
-    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown again`);
+    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown --testnet again`);
     expect(r.result.next).toMatch(/The payment outcome is unknown; do not start another purchase for this request/);
     expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|nothing was paid/);
     expect(reads).toBe(1);
@@ -471,7 +471,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "base-sepolia", service: "demo-market-data", state: "waiting_owner", matchCode: "KPT-RWD", url: first.approve.url });
     expect(first.result.id).toMatch(/^oa-\d{14}-[0-9a-f]{8}$/);
     expect(first.result.purchase).toBe(site.purchases[0].id);
-    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown\\. .*${TESTNET}$`));
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown --testnet\\. .*${TESTNET}$`));
     expect(first.stderr).toMatch(/match code: KPT-RWD/);
     expect(first.stderr).toMatch(/first approval link they open asks them to sign in with their wallet \(a message, no fee\)/);
     expect(first.stderr).toMatch(new RegExp(TESTNET));
@@ -490,7 +490,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
     expect(refused.code).toBe(2);
     expect(refused.result).toMatchObject({ ok: false, command: "wait", state: "show_owner_first", id, matchCode: "KPT-RWD", url: first.approve.url, service: "demo-market-data" });
-    expect(refused.result.next).toMatch(/^this wait did not read the approval, so whether the owner approved or paid is not known\. If you have not written the approval link for the owner yet, reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
+    expect(refused.result.next).toMatch(/^this wait did not read the approval, so whether the owner approved or paid is not known\. If you have not written the approval link for the owner yet, reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown --testnet\./);
     expect(site.purchases[0].polls).toBe(0);
 
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);

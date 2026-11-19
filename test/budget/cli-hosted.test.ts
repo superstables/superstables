@@ -409,7 +409,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown\\. .*${TESTNET}$`));
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown --testnet\\. .*${TESTNET}$`));
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
@@ -772,7 +772,7 @@ describe("find", () => {
     const hostile = { name: "Weather", price: "0.001", url: "https://seller.example/w" };
     // the client's own key list is in the placeholder; nothing the listing said is
     const PLACEHOLDER_NEXT =
-      "check the price with superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana). A row on any other chain cannot be bought with a budget";
+      "check the price with superstables budget preflight --rail R --testnet --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana). A row on any other chain cannot be bought with a budget";
     const cases: { rows: object[]; next: string; chain?: string; rail?: string }[] = [
       // an unknown network: the listing's chain and rail are data, so the command stays a placeholder
       { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: PLACEHOLDER_NEXT },
@@ -839,7 +839,7 @@ describe("find", () => {
       expect(none.code).toBe(0);
       expect(none.result.services).toEqual([]);
       expect(none.stdout).toMatch(/No services listed on polygon-amoy on /);
-      expect(none.result.next).toMatch(/run superstables budget find without --rail and --chain for every chain/);
+      expect(none.result.next).toMatch(/run superstables budget find --testnet without --rail and --chain for every chain/);
     }, 60_000);
 
     it("says yes or no for simulated, from the site's sample, simulated or mock flag, and explains the column", async () => {
@@ -851,7 +851,7 @@ describe("find", () => {
       expect(r.stdout).toMatch(/Market data on Solana\s+0\.01 USDC\s+devnet\s+no\s+/);
       expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output, no when it marks it as not sample output \(this does not verify that the data is real\)/);
       // several rails: next leaves the rail and chain to the listing
-      expect(r.result.next).toContain("--rail R --chain C --url U before you buy. C is a row's chain");
+      expect(r.result.next).toContain("--rail R --testnet --chain C --url U before you buy. C is a row's chain");
       expect(r.result.next).not.toContain("from the listing");
     }, 30_000);
 

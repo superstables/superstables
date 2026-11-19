@@ -153,7 +153,7 @@ async function topUpSteps(input: {
       amount,
       quote,
       message: `The payment was not started: ${messageOf(err)}. Nothing was paid.`,
-      next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again when the cause is fixed.`,
+      next: `Run \`${TOP_UP_COMMAND}${testnetArg()} ${amount.decimal}\` again when the cause is fixed.`,
       exitCode: err instanceof CliError ? err.exitCode : EXIT.failed,
     };
   }
@@ -232,7 +232,7 @@ async function prepare(input: {
       amount,
       quote,
       message: `The top-up's payment is not the one this command asked for: ${termsProblem}. Nothing was paid.`,
-      next: `Do not pay it. Run \`${TOP_UP_COMMAND} <amount>\` again for a new top-up, and report the pay link to Superstables.`,
+      next: `Do not pay it. Run \`${TOP_UP_COMMAND}${testnetArg()} <amount>\` again for a new top-up, and report the pay link to Superstables.`,
       exitCode: EXIT.refused,
     };
   }
@@ -343,7 +343,7 @@ export function printCredit(credit: SellerCredit): void {
     );
   }
   console.log("");
-  console.log(`A referred sale's fee comes out of this balance. \`${TOP_UP_COMMAND} <amount>\` adds to it.`);
+  console.log(`A referred sale's fee comes out of this balance. \`${TOP_UP_COMMAND}${testnetArg()} <amount>\` adds to it.`);
 }
 
 /** The same, as one JSON value, with the site's fields marked as its words. */
@@ -360,7 +360,7 @@ export function creditJson(credit: SellerCredit): Record<string, unknown> {
       ...(topUp.createdAt ? { created_at: topUp.createdAt } : {}),
     })),
     entries: credit.entries,
-    next: TOP_UP_COMMAND,
+    next: `${TOP_UP_COMMAND}${testnetArg()}`,
   });
 }
 
@@ -371,7 +371,7 @@ function refusal(topUp: TopUp, amount: TopUpAmount, message: string): TopUpResul
     topUp,
     amount,
     message,
-    next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again for a new top-up, or \`${CREDIT_COMMAND}\` to see the balance.`,
+    next: `Run \`${TOP_UP_COMMAND}${testnetArg()} ${amount.decimal}\` again for a new top-up, or \`${CREDIT_COMMAND}\` to see the balance.`,
     exitCode: EXIT.refused,
   };
 }
@@ -451,13 +451,13 @@ function readOutcome(word: SiteWord, status: number | undefined, amount: string)
     case "retired":
       return {
         message: `The site retired this top-up${http}, so it can no longer be paid. Nothing was paid.`,
-        next: `Ask for a new top-up: \`${TOP_UP_COMMAND} ${amount}\`.`,
+        next: `Ask for a new top-up: \`${TOP_UP_COMMAND}${testnetArg()} ${amount}\`.`,
         exitCode: EXIT.failed,
       };
     default:
       return {
         message: `The top-up's pay link answered${status === undefined ? "" : ` HTTP ${status}`}, not a payment request. This command signed nothing.`,
-        next: `\`${CREDIT_COMMAND}\` shows this top-up. If it is still open, run \`${TOP_UP_COMMAND} ${amount}\` again, and report the pay link to Superstables if it stays so.`,
+        next: `\`${CREDIT_COMMAND}\` shows this top-up. If it is still open, run \`${TOP_UP_COMMAND}${testnetArg()} ${amount}\` again, and report the pay link to Superstables if it stays so.`,
         exitCode: EXIT.failed,
       };
   }
@@ -475,7 +475,7 @@ function unreadablePayLink(topUp: TopUp, amount: TopUpAmount, err: unknown, apiK
       topUp,
       amount,
       message: `${err.message}. Nothing was paid; this command pays only Base Sepolia test USDC for the amount it asked for.`,
-      next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
+      next: `Run \`${TOP_UP_COMMAND}${testnetArg()} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
       exitCode: EXIT.failed,
     };
   }
@@ -483,7 +483,7 @@ function unreadablePayLink(topUp: TopUp, amount: TopUpAmount, err: unknown, apiK
     topUp,
     amount,
     message: `The top-up's pay link could not be read (${messageOf(err)}). Nothing was paid.`,
-    next: `Run \`${TOP_UP_COMMAND} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
+    next: `Run \`${TOP_UP_COMMAND}${testnetArg()} ${amount.decimal}\` again for a new top-up, and report the pay link to Superstables.`,
     exitCode: EXIT.failed,
   };
 }
@@ -542,7 +542,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
         message:
           `The payment for ${amount} was sent, but Superstables retired this top-up (HTTP ${status ?? "an error"}), so it ` +
           "will not be credited. Whether the money moved is unknown.",
-        next: `Do not pay this top-up again. \`${CREDIT_COMMAND}\` shows the balance; ask for a new top-up with \`${TOP_UP_COMMAND} <amount>\` once this one is clear.`,
+        next: `Do not pay this top-up again. \`${CREDIT_COMMAND}\` shows the balance; ask for a new top-up with \`${TOP_UP_COMMAND}${testnetArg()} <amount>\` once this one is clear.`,
         exitCode: EXIT.unknown,
       };
     }
@@ -573,7 +573,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
       ? policyRefusalHelp(attempt.reason)
       : attempt.transaction
         ? `Do not pay again yet: \`superstables status${testnetArg()} ${attempt.id}\` looks for this payment.`
-        : `Nothing was charged. Run \`${TOP_UP_COMMAND} <amount>\` again to ask for another top-up, or \`${CREDIT_COMMAND}\` to see this one.`,
+        : `Nothing was charged. Run \`${TOP_UP_COMMAND}${testnetArg()} <amount>\` again to ask for another top-up, or \`${CREDIT_COMMAND}\` to see this one.`,
     exitCode: exitCodeFor(attempt),
   };
 }

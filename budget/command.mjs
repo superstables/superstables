@@ -1377,7 +1377,7 @@ function handedOver(code, stdout, stderrTail) {
 }
 
 /** What to do with a signed request: send it through the connector before it expires, then adopt the request it returns. */
-const signedNext = (id, expires) => `send request unchanged with the connector's submit_budget_request tool before ${expires}; after that the site refuses its signature. The tool returns request_id, approval_link and match_code: then run superstables budget wait --id ${id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. This machine did not submit the signed approval request, but if submit_budget_request already sent it, the owner may be approving it now: adopt it with those values, and do not run another owner command on this chain`;
+const signedNext = (id, expires) => `send request unchanged with the connector's submit_budget_request tool before ${expires}; after that the site refuses its signature. The tool returns request_id, approval_link and match_code: then run superstables budget wait --id ${id}${testnetArg()} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. This machine did not submit the signed approval request, but if submit_budget_request already sent it, the owner may be approving it now: adopt it with those values, and do not run another owner command on this chain`;
 
 /**
  * The rail's error, for a reason when it printed no RESULT: its last "error: ..." line on stderr, or its last line. A rail
@@ -2768,8 +2768,8 @@ function refusePending(ctx, pending) {
   emit(3, {
     ...ctx, state: "refused_precheck", ...approvalFields(pending),
     next: onChain
-      ? `nothing was started. A transaction was reported for ${pending.id}; its outcome is still being checked. Run superstables budget wait --id ${pending.id} --shown later and follow its next step before starting another owner command on this chain`
-      : `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
+      ? `nothing was started. A transaction was reported for ${pending.id}; its outcome is still being checked. Run superstables budget wait --id ${pending.id} --shown${testnetArg()} later and follow its next step before starting another owner command on this chain`
+      : `nothing was started. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run superstables budget wait --id ${pending.id} --shown${testnetArg()}. Only if the owner asks to replace it and has cancelled any wallet prompt: rerun with --replace`,
     reason: onChain
       ? `owner approval ${pending.id} (${pending.command}) has a reported transaction; its command still holds the approval lock on this chain`
       : `owner approval ${pending.id} (${pending.command}) is still waiting for the owner on this chain; one owner approval at a time`,
@@ -2809,10 +2809,10 @@ async function ownerGate({ cmd, f, ctx }) {
   if (pending) {
     if (!f.replace) return refusePending(ctx, pending);
     if (cmd === "setup" && pending.command === "setup" && recordMayHaveSent(readApproval(pending.id))) {
-      return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: `the pending approval ${pending.id} is not replaced because the wallet may already be sending money` });
+      return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown${testnetArg()}`, reason: `the pending approval ${pending.id} is not replaced because the wallet may already be sending money` });
     }
     const r = await replacePending(pending, id);
-    if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown`, reason: r.reason });
+    if (!r.ok) return emit(3, { ...ctx, state: "refused_precheck", ...approvalFields(pending), next: `superstables budget wait --id ${pending.id} --shown${testnetArg()}`, reason: r.reason });
     log(`superstables budget: cancelled approval ${pending.id} before its wallet was asked. Check wallet activity before approving its replacement`);
   }
   const c = claim(f.rail, f.chain, id);
@@ -2854,7 +2854,7 @@ async function ownerGate({ cmd, f, ctx }) {
   }
   if (r.kind === "open") {
     // the rail asked the site and the worker went before it showed a link: the request may be open there, so it is neither failed nor refused
-    return emit(5, { ...ctx, state: "unknown", final: false, id, next: `the background approval stopped after it asked superstables.com, so the owner may still be able to approve it. Do not start another owner command on this chain. Run superstables budget wait --id ${id} --shown to finish it`, reason: "the background approval stopped before it showed an approval link" });
+    return emit(5, { ...ctx, state: "unknown", final: false, id, next: `the background approval stopped after it asked superstables.com, so the owner may still be able to approve it. Do not start another owner command on this chain. Run superstables budget wait --id ${id} --shown${testnetArg()} to finish it`, reason: "the background approval stopped before it showed an approval link" });
   }
   if (r.kind === "unstopped") {
     // a command in the worker's group may still broadcast, whatever the record holds now
@@ -2867,8 +2867,8 @@ async function ownerGate({ cmd, f, ctx }) {
   const rec = r.record;
   writeApprove(`APPROVE ${JSON.stringify({ action: rec.action, url: rec.url, expires: rec.expires, terms: rec.terms, ...(rec.matchCode ? { matchCode: rec.matchCode } : {}) })}`);
   log(rec.matchCode
-    ? `\nThe request waits on ${siteName(rec.hosted?.site ?? f.site ?? hostedSite(f) ?? DEFAULT_SITE)} until ${rec.expires}; this command keeps reading it in the background. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run: superstables budget wait --id ${id} --shown`
-    : `\nThe approval page stays open in the background until ${rec.expires}. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run: superstables budget wait --id ${id} --shown`);
+    ? `\nThe request waits on ${siteName(rec.hosted?.site ?? f.site ?? hostedSite(f) ?? DEFAULT_SITE)} until ${rec.expires}; this command keeps reading it in the background. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run: superstables budget wait --id ${id} --shown${testnetArg()}`
+    : `\nThe approval page stays open in the background until ${rec.expires}. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn. When they say they've approved, run: superstables budget wait --id ${id} --shown${testnetArg()}`);
   // never a link without the words for the owner, silently: the rail did not write them in time (a fault)
   const missing = rec.wordsMissing ? `the rail's instructions for the owner were not in its log when the approval link was recorded; read them in ${logFile(id)} before writing to the owner, and use message_for_owner and next from this result` : undefined;
   if (missing) log(`\nsuperstables budget: ${missing}.`);
@@ -2898,7 +2898,7 @@ async function finishHosted(f, record, timeoutMs) {
   // nothing decides the approval here: a worker that is not running now leaves it open for the next wait
   const stopped = (why) => {
     log(`superstables budget: ${why}`);
-    return emit(5, { command: record.command, rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, url: record.url, next: `${statusCommand({ rail: record.rail, chain: record.chain })}: read whether it landed before running this again. Run superstables budget wait --id ${record.id} --shown again`, reason: why });
+    return emit(5, { command: record.command, rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, url: record.url, next: `${statusCommand({ rail: record.rail, chain: record.chain })}: read whether it landed before running this again. Run superstables budget wait --id ${record.id} --shown${testnetArg()} again`, reason: why });
   };
   const now = readStrict(f.id, record);
   if (!now) return gone;
@@ -2934,11 +2934,11 @@ async function abandonOwnerApproval(record, f) {
   // A command that carries a worker's variable (set by hand) is refused as a command, not as an approval: the refusal says nothing about what the
   // approval did, so it is unknown (exit 5, not final) and written without emit, which would store a result for the approval the variable names.
   if (process.env[WORKER_ENV]) {
-    writeResult({ ok: false, ...base, command: "wait", state: "unknown", final: false, reason: `a worker's variable is set: only the owner gives up an approval, in their own terminal, so nothing was changed; whether the approval sent anything is unknown`, next: `run superstables budget wait --id ${id} --abandon in your own terminal without ${WORKER_ENV} set, or superstables budget wait --id ${id} --shown; the approval stays open` });
+    writeResult({ ok: false, ...base, command: "wait", state: "unknown", final: false, reason: `a worker's variable is set: only the owner gives up an approval, in their own terminal, so nothing was changed; whether the approval sent anything is unknown`, next: `run superstables budget wait --id ${id}${testnetArg()} --abandon in your own terminal without ${WORKER_ENV} set, or superstables budget wait --id ${id} --shown${testnetArg()}; the approval stays open` });
     process.exit(5);
   }
   if (!process.stdin.isTTY) {
-    return refuse("owner_terminal_required", `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
+    return refuse("owner_terminal_required", `only the owner gives up an approval, in their own terminal. Stop and ask the owner; nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown${testnetArg()}`);
   }
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
   let typed;
@@ -2951,7 +2951,7 @@ async function abandonOwnerApproval(record, f) {
   finally { terminal.close(); }
   if (typed.done || typed.value !== `${id} abandon`) {
     log("Confirmation did not match. Nothing was changed.");
-    return refuse("owner_confirmation_mismatch", `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown`);
+    return refuse("owner_confirmation_mismatch", `nothing was changed. The approval stays open for superstables budget wait --id ${id} --shown${testnetArg()}`);
   }
   const at = new Date().toISOString();
   let out;
@@ -2981,7 +2981,7 @@ async function abandonOwnerApproval(record, f) {
       return emit(5, stored.final.result);
     }
     const busy = err?.code === "RECORD_BUSY";
-    return emit(5, { ...base, state: "unknown", final: false, reason: busy ? `the approval's record is busy, so nothing was ended: ${clean(err.message)}` : `the approval's record could not be locked, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id} --abandon again in your own terminal in 30 seconds` });
+    return emit(5, { ...base, state: "unknown", final: false, reason: busy ? `the approval's record is busy, so nothing was ended: ${clean(err.message)}` : `the approval's record could not be locked, so nothing was ended: ${clean(err.message)}`, next: `run superstables budget wait --id ${id}${testnetArg()} --abandon again in your own terminal in 30 seconds` });
   }
   if (out.kind === "abandoned") {
     log(`superstables budget: ${id} (${record.command}) given up without a final result. The request${site ? ` on ${site}` : ""} was not cancelled and may still be open; whether the owner's wallet sent anything is unknown: check its activity.`);
@@ -2993,8 +2993,8 @@ async function abandonOwnerApproval(record, f) {
   if (!out.record) return emit(5, { ...base, state: "unknown", final: false, reason: `whether the approval sent anything is unknown: this command stored no give-up and changed no file, and the approval's processes may have been stopped; its record disappeared (or is no longer a record of this approval) while it was being given up, from ${approvalsDir()}`, next: `check which home this command ran under (${HOME}), check the wallet's activity, then read the chain with ${statusCommand({ rail: record.rail, chain: record.chain })}` });
   // a result stood when the record was read under the lock: that locked record is the answer, whatever happens to the file afterwards
   if (out.kind === "ended") return { ended: out.record };
-  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait 30 seconds, then run superstables budget wait --id ${id} --abandon again in your own terminal` });
-  return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id} --abandon again in your own terminal` });
+  if (out.kind === "starting") return emit(5, { ...base, state: "unknown", final: false, reason: "the approval's background worker was started a moment ago and is not recorded yet, so nothing was ended", next: `wait 30 seconds, then run superstables budget wait --id ${id}${testnetArg()} --abandon again in your own terminal` });
+  return emit(5, { ...base, state: "unknown", final: false, reason: "a process of the approval is still running and could not be stopped, so nothing was ended", next: `stop every process of approval ${id} (its worker and rail script), then run superstables budget wait --id ${id}${testnetArg()} --abandon again in your own terminal` });
 }
 
 /** What an unknown wait tells the owner to check: the approval on the site and the wallet, never a guess from the file. */
@@ -3090,7 +3090,7 @@ async function wait({ f }) {
   // adopted starts its worker and is answered with the link to show, as an owner command that returns waiting_owner is.
   const acted = once && (once.command === "buy-once" ? !mayBeUnpaid(once.seen) : recordMayHaveSent(once));
   if (once && !once.final && !f.shown && !once.cancelUnconfirmed && !acted && !adoptedNow) {
-    log(`superstables budget: wait refused without reading the approval: reply to the owner with message_for_owner first (word for word), then run: superstables budget wait --id ${f.id} --shown`);
+    log(`superstables budget: wait refused without reading the approval: reply to the owner with message_for_owner first (word for word), then run: superstables budget wait --id ${f.id} --shown${testnetArg()}`);
     return emit(2, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id, state: "show_owner_first", final: false, ...approvalFields(once), next: unshownNext(f.id, Boolean(once.matchCode), once), reason: "wait was run without --shown: nothing was polled" });
   }
   // the record is the agent's to write, and the site's "not paid" ends a purchase: a site the owner does not allow is not read
@@ -3098,7 +3098,7 @@ async function wait({ f }) {
   if (madeOnAllowed?.error) return emit(5, { command: "wait", rail: once.rail, chain: once.chain, service: once.service?.id,
     id: f.id, state: "unknown", paid: null, delivered: null, final: false,
     reason: `this purchase was made on ${siteText(once.hosted.site, 120)}, which is not an approval site the owner allows now; nothing was read from it`,
-    next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown` });
+    next: `do not buy this again. Ask the owner: ${madeOnAllowed.ownerCommand ?? "superstables owner settings show"} in their own terminal, then run superstables budget wait --id ${f.id} --shown${testnetArg()}` });
   if (once?.command === "buy-once") return waitBuyOnce(once, f);
   const timeoutMs = adoptedNow && !f.shown ? 0 : (f.timeout === undefined ? 30 : Number(f.timeout)) * 1000;
   let r = endedRecord?.final ? { final: true, code: endedRecord.final.code, result: endedRecord.final.result, record: endedRecord } : await waitFor(f.id, timeoutMs, { seen: once ?? false });
@@ -3129,10 +3129,10 @@ async function wait({ f }) {
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Approval link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
   if (!walletWasAsked(rec, r.page) && recordMayHaveSent(rec)) {
-    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, send the new message_for_owner first. Run superstables budget wait --id ${rec.id} --shown again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, send the new message_for_owner first. Run superstables budget wait --id ${rec.id} --shown${testnetArg()} again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
   }
   if (walletWasAsked(rec, r.page)) {
-    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${finalWait(rec)}Later, run superstables budget wait --id ${rec.id} --shown for the final result. Do not approve for the owner`, reason: words });
+    return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, id: rec.id, url: rec.url, next: `the owner's wallet may have sent the transaction. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${finalWait(rec)}Later, run superstables budget wait --id ${rec.id} --shown${testnetArg()} for the final result. Do not approve for the owner`, reason: words });
   }
   emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "waiting_owner", ...approvalFields(rec), next: adoptedNow && !f.shown ? showFirst(rec.id, true, rec) : stillWaiting(rec.id), reason: words });
 }
@@ -3152,7 +3152,7 @@ function signedWait(record) {
   emit(5, {
     ...fields, state: "unknown",
     reason: `the signed request expired: no request made from it was given to this machine within ${SIGNED_WINDOW_MS / 1000} seconds of signing, and the site no longer accepts its signature. This machine did not submit the signed approval request, but if submit_budget_request sent it in time, the owner may still approve that request on the site`,
-    next: `if submit_budget_request returned request_id, approval_link and match_code for this request, adopt it: superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. Only if the tool never sent it, sign a new request: ${again}. While a request for this agent is open, the site refuses a new one (request_open)`,
+    next: `if submit_budget_request returned request_id, approval_link and match_code for this request, adopt it: superstables budget wait --id ${record.id}${testnetArg()} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE. Only if the tool never sent it, sign a new request: ${again}. While a request for this agent is open, the site refuses a new one (request_open)`,
   });
 }
 
@@ -3167,8 +3167,8 @@ const unsettledNext = (record, requestId, fix) => {
   const s = record.hosted.signed;
   const marked = s.walletAsked || s.hashes?.length || s.mayHaveSent;
   const why = s.walletAsked || s.hashes?.length ? "the owner's wallet was asked for it" : s.mayHaveSent ? "an answer from the site about it could not be read, so the owner's wallet may have sent its transaction" : "the owner may still approve it on the site";
-  const out = marked ? ` No answer from the site can give ${requestId} up now: it stays unknown and holds this chain until it is adopted and final. To stop waiting for it without an outcome, only the owner runs superstables budget wait --id ${record.id} --abandon in their own terminal, after checking the request on the site and the wallet's activity; you must not run it.` : "";
-  return `${requestId} may be the request made from this signed one, and ${why}. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${fix ? `This machine could not check it: ${fix.replace(/[.\s]+$/, "")}. Fix that, then run` : "Later, run"} superstables budget wait --id ${record.id} --shown: it checks ${requestId} again.${out} Do not approve for the owner`;
+  const out = marked ? ` No answer from the site can give ${requestId} up now: it stays unknown and holds this chain until it is adopted and final. To stop waiting for it without an outcome, only the owner runs superstables budget wait --id ${record.id}${testnetArg()} --abandon in their own terminal, after checking the request on the site and the wallet's activity; you must not run it.` : "";
+  return `${requestId} may be the request made from this signed one, and ${why}. Tell the owner the outcome is unknown and end your turn; do not run this or another owner command on this chain. ${fix ? `This machine could not check it: ${fix.replace(/[.\s]+$/, "")}. Fix that, then run` : "Later, run"} superstables budget wait --id ${record.id} --shown${testnetArg()}: it checks ${requestId} again.${out} Do not approve for the owner`;
 };
 
 /**
@@ -3191,7 +3191,7 @@ async function adoptRequest(f, record) {
   try {
     mergeEvidence(record.id, nonce, given);
   } catch (e) {
-    return waitUnknown(record.id, record, `${clean(e.message)}; the approval changed while this command started`, `run superstables budget wait --id ${record.id} --shown again`);
+    return waitUnknown(record.id, record, `${clean(e.message)}; the approval changed while this command started`, `run superstables budget wait --id ${record.id} --shown${testnetArg()} again`);
   }
   if (findPending(record.rail, record.chain)?.id !== record.id) {
     const held = claim(record.rail, record.chain, record.id);
@@ -3209,7 +3209,7 @@ async function adoptRequest(f, record) {
   log(`superstables budget: ${given.requestId} was not adopted: ${reason}`);
   if (r.state === "refused_precheck" && r.notAdopted === true && dropUnsettled(record.id, nonce, given.requestId)) {
     release(record.rail, record.chain, record.id);
-    return emit(3, { ...ctx, state: "refused_precheck", final: false, id: record.id, next: `nothing was recorded, and ${record.id} still waits for its own request: run superstables budget wait --id ${record.id} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE with the values submit_budget_request returned for it. Adoption checks the agent and the request's terms; it does not verify that the request came from this particular signature.`, reason });
+    return emit(3, { ...ctx, state: "refused_precheck", final: false, id: record.id, next: `nothing was recorded, and ${record.id} still waits for its own request: run superstables budget wait --id ${record.id}${testnetArg()} --site-request REQUEST_ID --link APPROVAL_LINK --match MATCH_CODE with the values submit_budget_request returned for it. Adoption checks the agent and the request's terms; it does not verify that the request came from this particular signature.`, reason });
   }
   // a check that stopped on this machine names what to fix; one the site answered, or that crashed or hung, has nothing to fix here
   const local = r.state !== undefined && r.state !== "unknown" && !r.notAdopted;
@@ -3265,7 +3265,7 @@ async function buyOnce({ f, ctx }) {
   Object.assign(ctx, { rail: rec.rail, chain: rec.chain });
   writeApprove(`APPROVE ${JSON.stringify(r.approve)}`);
   const host = new URL(f.site).host.replace(/^www\./, "");
-  log(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn; the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet. The first approval link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${moneyLineFor(rec)} When they say they've approved, run: superstables budget wait --id ${rec.id} --shown. Do not approve for the owner.\n`);
+  log(`\nReply to the owner with message_for_owner from the RESULT, word for word (you may add one short line before it), and end your turn; the page asks them to pick the code. It opens on any device where the owner is signed in to ${host} with their wallet. The first approval link they open asks them to sign in with their wallet (a message, no fee).\n\n  ${rec.url}\n\n  match code: ${rec.matchCode}\n\nIt expires in ${inMinutes(rec.expires)}. ${moneyLineFor(rec)} When they say they've approved, run: superstables budget wait --id ${rec.id} --shown${testnetArg()}. Do not approve for the owner.\n`);
   if (detach) return emit(0, { ...ctx, service: f.service, state: "waiting_owner", purchase: rec.hosted.requestId, ...approvalFields(rec), next: showFirst(rec.id, true, rec) });
   // blocking: read the purchase until it ends
   const s = await waitOnce(rec, Math.max(60_000, Date.parse(rec.expires) + 25 * 60_000 - Date.now()));
@@ -3288,7 +3288,7 @@ async function waitBuyOnce(rec, f) {
     // not cancelled, not ended: still unknown, never "waiting for the owner" (they were never shown its link)
     const words = s.unreachable ? `${rec.hosted?.site} could not be read just now (${s.unreachable})` : s.words;
     log(`superstables budget: ${rec.id} (buy-once) could not be cancelled and has not ended: ${words}`);
-    return emit(5, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "unknown", final: false, id: rec.id, purchase: rec.hosted?.requestId, paid: null, delivered: null, amount: null, tx: {}, next: `never buy this again. Do not show an approval link for it; tell the owner the payment outcome is unknown. Run superstables budget wait --id ${rec.id} --shown again later; it ends when ${siteName(rec.hosted?.site ?? "")} cancels or expires it. If it never does, only the owner may give it up: superstables budget wait --id ${rec.id} --abandon`, reason: `${words}. Not cancelled earlier: ${rec.cancelUnconfirmed}` });
+    return emit(5, { command: "buy-once", rail: rec.rail, chain: rec.chain, service: rec.service?.id, state: "unknown", final: false, id: rec.id, purchase: rec.hosted?.requestId, paid: null, delivered: null, amount: null, tx: {}, next: `never buy this again. Do not show an approval link for it; tell the owner the payment outcome is unknown. Run superstables budget wait --id ${rec.id} --shown${testnetArg()} again later; it ends when ${siteName(rec.hosted?.site ?? "")} cancels or expires it. If it never does, only the owner may give it up: superstables budget wait --id ${rec.id}${testnetArg()} --abandon`, reason: `${words}. Not cancelled earlier: ${rec.cancelUnconfirmed}` });
   }
   const words = s.unreachable ? `waiting for the owner (${rec.hosted?.site} could not be read just now: ${s.unreachable})` : s.words;
   log(`superstables budget: ${rec.id} (buy-once) has no final result: ${words}. Approval link: ${rec.url} (match code ${rec.matchCode})`);
@@ -3345,7 +3345,7 @@ async function find({ f, ctx }) {
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const chainByNetwork = { ...Object.fromEntries(Object.entries(EVM_CHAINS).map(([k, c]) => [`eip155:${c.chainId}`, k])), ...Object.fromEntries(Object.values(TEMPO_CHAINS).map((c) => [`eip155:${c.chainId}`, c.key])), ...Object.fromEntries(Object.values(SOLANA_CHAINS).map((c) => [c.network, c.key])) };
   const r = await listSiteServices({ site: site.origin, chainByNetwork });
-  const any = "any seller URL works too: superstables budget preflight --rail R --url U reads its price, then buy";
+  const any = "any seller URL works too: superstables budget preflight --rail R${testnetArg()} --url U reads its price, then buy";
   if (!r.ok) {
     log(`superstables budget: ${r.reason}`);
     return emit(1, { ...ctx, state: "failed", site: site.origin, services: r.absent ? [] : undefined, next: r.absent ? `no list to show; ${any}` : `check the network and ${site.origin}, or ${any}`, reason: r.reason });
@@ -3371,8 +3371,8 @@ async function find({ f, ctx }) {
   const one = key && services.every((s) => keyOf(s) === key) ? key : null;
   const preflight = one
     ? `superstables budget preflight --rail ${shellWord(RAIL_OF_CHAIN[one])}${testnetFlag({ rail: RAIL_OF_CHAIN[one], chain: one })} --chain ${shellWord(one)} --url U before you buy`
-    : `superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: ${FIND_CHAINS_LINE}. A row on any other chain cannot be bought with a budget`;
-  emit(0, { ...ctx, state: "ok", site: site.origin, services, next: services.length ? `check the price with ${preflight}` : f.rail ? `nothing listed${where}; run superstables budget find without --rail and --chain for every chain, or ${any}` : any });
+    : `superstables budget preflight --rail R${testnetArg()} --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: ${FIND_CHAINS_LINE}. A row on any other chain cannot be bought with a budget`;
+  emit(0, { ...ctx, state: "ok", site: site.origin, services, next: services.length ? `check the price with ${preflight}` : f.rail ? `nothing listed${where}; run superstables budget find${testnetArg()} without --rail and --chain for every chain, or ${any}` : any });
 }
 
 // ---- main -------------------------------------------------------------------------------------------

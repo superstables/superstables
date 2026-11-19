@@ -179,7 +179,7 @@ const shown = (result: TopUpResult, lines: string[] = []) => `${JSON.stringify(t
 function expectUnknown(result: TopUpResult) {
   expect(result.exitCode).toBe(5);
   expect(result.next).toContain("superstables seller credit");
-  expect(result.next).not.toContain("superstables seller top-up");
+  expect(result.next).not.toContain("superstables seller top-up --testnet");
   expect(result.message).not.toMatch(/nothing was (paid|charged)/i);
   expect(result.next).not.toMatch(/nothing was (paid|charged)/i);
 }
@@ -231,7 +231,7 @@ describe("a payment that may be in flight, read before the owner is asked", () =
       const result = await topUp(context());
       expect(result.exitCode, `read ${read}`).toBe(0);
       expect(result.next).toContain("superstables seller credit");
-      expect(result.next).not.toContain("superstables seller top-up");
+      expect(result.next).not.toContain("superstables seller top-up --testnet");
       expect(result.message).toContain("already paid");
       expect(result.message).toContain("did not pay it");
       expect(result.next).toContain("Confirm with `superstables seller credit`");
@@ -245,7 +245,7 @@ describe("a payment that may be in flight, read before the owner is asked", () =
       const result = await topUp(context());
       expect(result.exitCode, `read ${read}`).toBe(1);
       expect(result.message).toContain("retired");
-      expect(result.next).toContain("superstables seller top-up 10");
+      expect(result.next).toContain("superstables seller top-up --testnet 10");
     }
   });
 

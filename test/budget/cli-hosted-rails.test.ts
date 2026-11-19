@@ -183,7 +183,7 @@ describe("tempo, hosted", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ state: "waiting_owner", final: false });
     expect(r.result.reason).toBe("the owner tried to approve from an account that holds no Ethereum wallet, and this chain needs one; the request is still open: ask the owner to approve from an account that holds an Ethereum wallet (an account admin adds one on the account page), then retry");
-    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown`);
+    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown --testnet`);
     expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|rm -rf/);
     // an Ethereum account then adds the agent: the same wait ends it
     Object.assign(site.requests[0], { state: "linked", owner: OWNER, reason_code: null, reason: null });
