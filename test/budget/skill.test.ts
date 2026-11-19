@@ -41,7 +41,7 @@ describe("skill-source/cli.md", () => {
     expect(ask).toBeGreaterThan(0);
     expect(skill).toContain('"This uses test tokens. Would you like a budget or a single purchase you approve?"');
     // the test-token sentence is said only on a testnet: an owner who asked for a mainnet hears which mainnet, before any approval
-    expect(skill).toContain('If the owner asked for a mainnet (safety rule 7), the first sentence is instead "This is on CHAIN (mainnet).", for example "This is on Base (mainnet)."');
+    expect(skill).toContain('If the owner asked for a mainnet (safety rule 7), replace the first sentence with "This is on CHAIN (mainnet)." For example: "This is on Base (mainnet)."');
     expect(skill).toContain("Name the mainnet and the amount when you ask the owner to approve, and keep their ceiling.");
     expect(skill).not.toMatch(/real money|money is real/i);
     expect(skill.indexOf("references/once.md", ask)).toBeGreaterThan(ask);

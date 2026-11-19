@@ -8,7 +8,7 @@
 //   Robinhood Chain Testnet (eip155:46630) x402: the same, in Paxos's test USDG; the seller settles it and pays the gas.
 //   Tempo Moderato (eip155:42431) MPP: the owner's wallet sends the pathUSD transfer the seller's challenge asks for.
 //   Solana devnet (solana:EtWT...) x402: the owner's Solana wallet signs the USDC transfer; the facilitator pays the fee.
-//   Base, Arc and Robinhood Chain (eip155:8453, 5042, 4663), the mainnets of the first three: the same payments in real
+//   Base, Arc and Robinhood Chain (eip155:8453, 5042, 4663), the mainnets of the first three: the same payments in
 //   USDC and USDG, offered only while the operator's switch (SUPERSTABLES_ALLOW_MAINNET) opens the chain gate. A site that
 //   does not serve one refuses the purchase itself.
 //
