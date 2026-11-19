@@ -7,9 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.5] - Smart-account budgets and Base lookups
+
 ### Fixed
 
 - **Smart-account budget steps:** Accept MetaMask delegated calls on Base, Arc, Arbitrum One, Polygon, Ethereum and Robinhood Chain with each chain's pinned contract code.
+- **Base payment lookups:** `status` and budget steps can again search up to a day of Base and Base Sepolia blocks. After the move to 0.2-second blocks, the limit had fallen to about 2 hours 24 minutes.
 
 ## [1.4.4] - Mainnet chains
 
@@ -429,7 +432,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.4...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/superstables/superstables/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/superstables/superstables/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/superstables/superstables/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/superstables/superstables/compare/v1.4.1...v1.4.2
