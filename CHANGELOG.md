@@ -11,7 +11,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Tempo mainnet:** No longer offered. `--chain tempo` is refused like any other chain the client does not support. Tempo Moderato with `--testnet` works as before.
+- **Tempo mainnet:** No longer offered. Tempo Moderato with `--testnet` is unchanged.
 
 ## [1.4.3] - Budget steps waiting for finality
 

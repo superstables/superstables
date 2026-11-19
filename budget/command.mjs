@@ -116,7 +116,7 @@ function chainFacts(rail, chain) {
   return { label: c?.label ?? chain, testnet: c?.testnet === true, unit: c?.token.symbol ?? "USDC" };
 }
 // A chain name that is a mainnet's, or a chain id, in a --chain value. In a testnet-only run it is refused as a mainnet.
-const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
+const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find and buy-once name the kind of chain this run uses, without naming one: mainnets by default, testnets with --testnet. */
 const RUN_NETWORK_LINE = () => (mainnetOffReason() ? "This run is testnet-only: payments use test tokens." : `Mainnet by default; testnets need ${TESTNET_FLAG}.`);
 /** Every chain key the budget commands take, and its rail. */
@@ -142,7 +142,7 @@ const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   tempo   ${TEMPO_CHAIN_KEYS.map((k) => `${k} (${TEMPO_CHAINS[k].label}${k === TEMPO_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is pathUSD.
           Sellers: MPP (tempo.charge).
   solana  ${SOLANA_CHAIN_KEYS.map((k) => `${k} (${SOLANA_CHAINS[k].label}${k === SOLANA_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is USDC. Sellers: x402.${mainnetOffReason() ? `
-  Mainnets, without ${TESTNET_FLAG}: ${["evm", "tempo", "solana"].map((r) => `${r} ${Object.entries(shippedManifest().chains).filter(([, c]) => c.rail === r).map(([k]) => k).join(", ")}`).join("; ")}.` : ""}
+  Mainnets, without ${TESTNET_FLAG}: ${["evm", "tempo", "solana"].filter((r) => Object.values(shippedManifest().chains).some((c) => c.rail === r)).map((r) => `${r} ${Object.entries(shippedManifest().chains).filter(([, c]) => c.rail === r).map(([k]) => k).join(", ")}`).join("; ")}.` : ""}
   Chain to rail: ${Object.values(EVM_CHAINS).map((c) => c.label).slice(0, -1).join(", ")} and ${Object.values(EVM_CHAINS).at(-1).label} are evm;
   ${TEMPO_CHAIN_KEYS.map((k) => TEMPO_CHAINS[k].label).join(" and ")} ${TEMPO_CHAIN_KEYS.length > 1 ? "are" : "is"} tempo; ${SOLANA_CHAIN_KEYS.map((k) => SOLANA_CHAINS[k].label).join(" and ")} ${SOLANA_CHAIN_KEYS.length > 1 ? "are" : "is"} solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
@@ -1046,7 +1046,7 @@ function parse(argv) {
   }
   if (f["key-store"] !== undefined) {
     if (cmd !== "setup") badInput(ctx, "--key-store goes with setup");
-    if (f.rail === "tempo" && chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--key-store on tempo is for its mainnet; on Tempo Moderato the agent keys stay in the key file (they are limited on chain)");
+    if (f.rail === "tempo" && chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--key-store goes with evm and solana; on Tempo Moderato the agent keys stay in the key file (they are limited on chain)");
     if (f["key-store"] !== "file" && f["key-store"] !== "os-keychain") badInput(ctx, "--key-store must be file or os-keychain");
   }
   if (f["fund-only"]) {

@@ -87,7 +87,7 @@ Commands:
   help [command]                 display help for command
 
 What this is:
-  A client for paying per request with stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain):
+  A client for paying per request with stablecoins (USDC; USDG on Robinhood Chain):
   find a paid service, quote it, and pay it. Mainnet by default. --testnet (or SUPERSTABLES_TESTNET=1)
   uses the testnets and test tokens instead, for that run.
   The agent can ask for a payment but cannot approve one.
@@ -101,7 +101,7 @@ Two ways to pay: Budgets or Single purchase
   pay      Single purchase on your machine. The owner approves each payment in their own wallet:
            a browser wallet such as MetaMask (Phantom on Solana) on a page `pay` serves on
            127.0.0.1 (the default), or the local wallet process (--wallet local, EVM chains only).
-           x402 on the EVM chains above and Solana, MPP on Tempo, and with --testnet their testnets.
+           x402 on the EVM chains above and Solana, and with --testnet their testnets.
            Use it when the owner is there to approve.
            Or `budget buy-once`: Single purchase on superstables.com, approved from any
            device (needs an account there), for the services `superstables budget find --once` lists.

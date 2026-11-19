@@ -70,12 +70,12 @@ describe("Tempo mainnet is not a chain the client holds", () => {
     expect(existsSync(keysDir())).toBe(false);
   }, 60_000);
 
-  it.each(COMMANDS)("with --testnet, the dispatcher refuses --chain tempo for %s as it refuses another mainnet's name", (_name, args) => {
+  it.each(COMMANDS)("with --testnet, the dispatcher refuses --chain tempo for %s as it refuses a chain it does not know", (_name, args) => {
     const tempo = budget([...args("tempo"), "--testnet"]);
-    const other = budget([...args("optimism"), "--testnet"]);
-    expect(tempo.code).toBe(3);
-    expect(tempo.result).toMatchObject({ ok: false, state: "refused_precheck" });
-    expect(reasonOf(tempo)).toBe(reasonOf(other).replace('"optimism"', '"tempo"'));
+    const unknown = budget([...args("bogus"), "--testnet"]);
+    expect(tempo.code).toBe(2);
+    expect(reasonOf(tempo)).toBe("--chain for tempo must be one of: moderato");
+    expect({ code: tempo.code, result: tempo.result }).toEqual({ code: unknown.code, result: unknown.result });
     expect(existsSync(keysDir())).toBe(false);
   }, 60_000);
 

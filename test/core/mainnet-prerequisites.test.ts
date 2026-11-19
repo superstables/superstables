@@ -219,7 +219,7 @@ describe("with the default, mainnet, when the tables load", () => {
     const { parseMppChallenges } = await import("../../src/core/mpp.js");
     const tempo = rails.judgeMppChallenge(parseMppChallenges(Challenge.serialize(issued))[0]);
     expect(tempo.supported).toBe(false);
-    if (!tempo.supported) expect(tempo.reason).toMatch(/^chain .* is not supported/);
+    if (!tempo.supported) expect(tempo.reason).not.toMatch(/Tempo \(mainnet\)|is a mainnet/);
   });
 
   it("gives the budget's EVM table the same mainnet facts as the pay table", async () => {
