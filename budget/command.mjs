@@ -30,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOME, KEYS_DIR, STATE_DIR, agentKeyFile, approvalsDir, ensurePrivateDir, opsDir, publicFile } from "./paths.mjs";
 import { spawnIdentified } from './child-identity.mjs';
-import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, awaitingChain, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
+import { ADOPT_ENV, ADOPT_REQUEST_ENV, HOLDER_ENV, RESUME_ENV, RESUME_GENERATION_ENV, RESUME_WAIT_MS, SIGNED_WINDOW_MS, SIGN_ONLY_ENV, WORKER_ENV, awaitingAdoption, dropUnsettled, mergeEvidence, release, signedExpired, startSigning, unsettledRequest, recordFinalAsRestart, resumeGeneration, adoptWorker, approvalRecoveryTargetExists, recoverApprovalLocks, abandonApproval, spawnRail, readApprovalFile, readStrict, sameApproval, claim, findPending, forget, isApprovalId, linkGate, logFile, pageWords, pageStateOf, readApproval, canResume, hasTakenOver, processesAlive, recordFinal, recordMayHaveSent, awaitingChain, replacePending, finishExpiredSetup, restartWorker, setRailGroup, startDetached, startForeground, stopGroup, waitFor, walletWasAsked, workerDeadlineMs, newApprovalId } from "./approvals.mjs";
 import { abandonedBreaker, lockFile, lockRecord, lockNext, operationBusy } from "./op-lock.mjs";
 import { paymentBusy, readRecoveryAttempt, recoverCap, recoverAttempt } from '../src/core/owner-recovery.mjs';
 import { lockOp, railResult } from "./buy-guard.mjs";
@@ -2897,9 +2897,12 @@ async function finishHosted(f, record, timeoutMs) {
     log(`superstables budget: could not start the background approval ${f.id} again: ${siteText(err.message, 200)}`);
   }
   if (started.gone) return gone;
-  // nothing decides the approval here: a worker that is not running now leaves it open for the next wait
-  const stopped = (why) => {
+  // nothing decides the approval here: a worker that is not running now leaves it open for the next wait. A transaction the site
+  // reports in a block that is not final yet is answered landed, as wait answers it while the worker runs
+  const stopped = async (why, rec = record) => {
     log(`superstables budget: ${why}`);
+    const page = await pageStateOf(rec).catch(() => null);
+    if (page?.landed) return emitLanded(rec, page.landed);
     return emit(5, { command: record.command, rail: record.rail, chain: record.chain, state: "unknown", final: false, id: record.id, url: record.url, next: `${statusCommand({ rail: record.rail, chain: record.chain })}: read whether it landed before running this again. Run superstables budget wait --id ${record.id} --shown${testnetArg()} again`, reason: why });
   };
   const now = readStrict(f.id, record);
@@ -2913,7 +2916,7 @@ async function finishHosted(f, record, timeoutMs) {
   // the owner already acted: the restarted worker is checking the chain, which can outlast --timeout
   const acted = (p) => p && (p.walletAsked || p.linked || /^hosted:(linked|queued|sending|sent|confirmed|failed|unknown)$/.test(p.status));
   if (!r?.final && !r?.resume && acted(r?.page)) r = await waitFor(f.id, Math.max(RESUME_WAIT_MS - timeoutMs, 0), { seen: record });
-  if (r?.resume) return stopped(`the restarted background approval ${f.id} stopped before it had a result`);
+  if (r?.resume) return stopped(`the restarted background approval ${f.id} stopped before it had a result`, r.record ?? record);
   return r;
 }
 
@@ -3131,7 +3134,7 @@ async function wait({ f }) {
     : pageWords(r.page, rec.rail);
   log(`superstables budget: ${rec.id} (${rec.command}) has no final result: ${words}. Approval link: ${rec.url}${rec.matchCode ? ` (match code ${rec.matchCode})` : ""}`);
   // superstables.com reports the transaction in a block that is not final yet: not unknown, and nothing for the owner to do
-  if (r.page?.landed) return emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "landed", final: false, id: rec.id, url: rec.url, next: landedWaitNext(rec, r.page.landed), reason: landedWords(rec, r.page.landed) });
+  if (r.page?.landed) return emitLanded(rec, r.page.landed);
   if (!walletWasAsked(rec, r.page) && recordMayHaveSent(rec)) {
     return emit(5, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "unknown", final: false, ...approvalFields(rec), next: `${OWN_SEND} Its approval link is still open for the owner: if the url is not the one you showed, send the new message_for_owner first. Run superstables budget wait --id ${rec.id} --shown${testnetArg()} again when the owner says they've approved; do not run another owner command on this chain. Do not approve for the owner`, reason: words });
   }
@@ -3173,9 +3176,11 @@ function landedWords(rec, landed) {
   const usually = landed.minutes ? `about ${landed.minutes} minute${landed.minutes === 1 ? "" : "s"}` : finalWords(rec.rail, rec.chain);
   return `in ${rec.rail === "solana" ? "slot" : "block"} ${landed.block} on ${chain}, waiting for finality${usually ? `: ${chain} usually takes ${usually} after inclusion to make it final` : ""}`;
 }
+/** wait's answer while superstables.com reports the approval's transaction in a block that is not final yet: landed, exit 0, not final. */
+const emitLanded = (rec, landed) => emit(0, { command: rec.command, rail: rec.rail, chain: rec.chain, state: "landed", final: false, id: rec.id, url: rec.url, next: landedWaitNext(rec, landed), reason: landedWords(rec, landed) });
 /** What the agent does while that transaction waits for finality: tell the owner, start nothing, and wait again later. */
 function landedWaitNext(rec, landed) {
-  const grants = rec.command === "grant" || (rec.hosted?.then ?? []).some((t) => t?.kind === "grant");
+  const grants = rec.command === "grant" || (Array.isArray(rec.hosted?.then) && rec.hosted.then.includes("grant"));
   const budget = rec.command === "revoke" ? " Count the budget as live until it is final." : grants ? " Do not rely on the budget until it is final." : "";
   return `the transaction is ${landedWords(rec, landed)}. Tell the owner so in one line and end your turn. The owner has nothing to do and does not need to approve again.${budget} Do not run this or another owner command on this chain. Later, run superstables budget wait --id ${rec.id} --shown${testnetArg()} for the final result. Do not approve for the owner`;
 }

@@ -40,19 +40,22 @@ function budget(args: string[]): Promise<Run> {
   });
 }
 
-/** An open hosted grant whose worker is this test process, and the site's request for it, in `state`. */
-async function openGrant(id: string, request: Record<string, unknown>) {
+/**
+ * An open hosted approval whose worker is this test process, and the site's request for it, in `state`. `over` changes the record
+ * (`hosted` is merged into the one made here).
+ */
+async function openGrant(id: string, request: Record<string, unknown>, over: { command?: string; hosted?: Record<string, unknown>; record?: Record<string, unknown> } = {}) {
   mkdirSync(join(home, "budget"), { recursive: true, mode: 0o700 });
   chmodSync(join(home, "budget"), 0o700);
   process.env.SUPERSTABLES_HOME = home;
   const approvals = await import("../../budget/approvals.mjs");
-  approvals.startForeground({ id, command: "grant", rail: "evm", chain: "base-sepolia" });
+  approvals.startForeground({ id, command: over.command ?? "grant", rail: "evm", chain: "base-sepolia" });
   const requestId = `ba_${id.slice(-8)}`;
   const token = `ssbt_test_${requestId}`;
   site.requests.push({ id: requestId, kind: "grant", token, body: {}, owner: null, polls: 0, cancels: 0, tx_hash: null, state: "awaiting_owner", ...request } as any);
   const file = join(home, "budget", "approvals", `${id}.json`);
   const record = JSON.parse(readFileSync(file, "utf8"));
-  writeFileSync(file, JSON.stringify({ ...record, url: `${site.url}/approve/budget/${requestId}`, hosted: { site: site.url, requestId, token, kind: "grant" } }), { mode: 0o600 });
+  writeFileSync(file, JSON.stringify({ ...record, url: `${site.url}/approve/budget/${requestId}`, hosted: { site: site.url, requestId, token, kind: "grant", ...over.hosted }, ...over.record }), { mode: 0o600 });
 }
 
 const sent = { state: "sent", tx_hash: HASH, wallet_asked: true };
@@ -126,6 +129,38 @@ describe("wait on a budget step that is in a block but not final", () => {
     const run = await budget(["wait", "--shown", "--id", id, "--timeout", "1"]);
     expect(run.result).not.toMatchObject({ state: "landed" });
     expect(run.result.next).not.toMatch(/nothing to do/);
+  }, 60_000);
+
+  it("a setup with a grant on superstables.com says not to rely on the budget until it is final", async () => {
+    const id = "oa-20261119000009-00000009";
+    // the record keeps a link's wallet steps as their kinds (hosted.ts)
+    await openGrant(id, sent, { command: "setup", hosted: { kind: "link", then: ["fund_agent", "grant"] } });
+    const landed = { block: BLOCK, at: new Date().toISOString(), final_in: "in about 20 minutes" };
+    site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, owner: "0x" + "22".repeat(20), landed, steps: [
+      { index: 0, kind: "fund_agent", state: "confirmed", tx_hash: HASH, wallet_asked: true },
+      { index: 1, kind: "grant", state: "sent", tx_hash: HASH, wallet_asked: true, landed },
+    ] } });
+    const run = await budget(["wait", "--shown", "--id", id, "--timeout", "1"]);
+    expect(run.code, run.stderr).toBe(0);
+    expect(run.result).toMatchObject({ command: "setup", state: "landed", final: false });
+    expect(run.result.next).toMatch(/Do not rely on the budget until it is final/);
+  }, 60_000);
+
+  it("answers landed, not unknown, when the stopped worker cannot be started again", async () => {
+    const id = "oa-20261119000010-00000010";
+    const holder = "oa-20261119000011-00000011";
+    // the worker is gone (no pid) and can be resumed; another approval of this process holds the chain, so the restart is refused
+    await openGrant(id, sent, { hosted: { resumable: true }, record: { foreground: false, pid: undefined, pidStart: undefined, workerArgs: ["grant"] } });
+    const approvals = await import("../../budget/approvals.mjs");
+    approvals.startForeground({ id: holder, command: "grant", rail: "evm", chain: "base-sepolia" });
+    expect(approvals.claim("evm", "base-sepolia", holder).ok).toBe(true);
+    site.readAnswer = (_r, v) => ({ status: 200, body: { ...v, landed: { block: BLOCK, at: new Date().toISOString() } } });
+    const run = await budget(["wait", "--shown", "--id", id, "--timeout", "1"]);
+    approvals.release("evm", "base-sepolia", holder);
+    expect(run.stderr).toMatch(/holds this chain, so the background approval/);
+    expect(run.code, run.stderr).toBe(0);
+    expect(run.result).toMatchObject({ state: "landed", final: false, chain_final: false });
+    expect(run.result.reason).toMatch(new RegExp(`^in block ${BLOCK} on Base Sepolia, waiting for finality`));
   }, 60_000);
 
   it("stays unknown when the step was sent and the site names no block", async () => {
