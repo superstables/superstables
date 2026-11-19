@@ -16,8 +16,7 @@ class LongestFirst extends BaseSequencer {
 }
 
 // Test files that start the CLI or other processes and take ten seconds or more on the CI runner.
-// `npm run test:fast` (the CI workflow, started by hand) skips them; `npm test` and the
-// CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
+// `npm run test:fast` skips them; `npm test` and the CI full workflow (nightly and on demand) run everything. A new test file is fast until it is listed here.
 const SLOW = [
   "test/budget/agent-binding.test.ts",
   "test/budget/agent-key-store.test.ts",
