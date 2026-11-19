@@ -278,7 +278,7 @@ export async function findAuthorization(input: AuthorizationToFind, options: { r
         );
         return Array.isArray(logs) ? logs : [];
       },
-      { from: start, to: head.number, window: network.logRange, blockSeconds: network.blockSeconds },
+      { from: start, to: head.number, window: network.logRange, blockSeconds: network.blockSeconds, chainId: network.chainId },
       async (logs) => {
         for (const log of logs) {
           if (!same(log.topics?.[2], nonce) || !same(log.topics?.[1], topicOf(input.payer))) continue;

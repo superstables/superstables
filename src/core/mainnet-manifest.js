@@ -37,7 +37,7 @@ export const MAINNET_MANIFEST = {
       label: "Base",
       v1Name: "base",
       explorer: "https://basescan.org",
-      blockSeconds: 2,
+      blockSeconds: 0.2,
       // mainnet.base.org rate-limits eth_getLogs; Base Sepolia's public RPC takes 200 blocks at most.
       logRange: 200,
       nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },

@@ -44,7 +44,7 @@ export const EVM_CHAINS = {
     rpc: "https://sepolia.base.org", explorer: "https://sepolia.basescan.org",
     token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
     // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
-    legacy: ["base-sepolia"], logRange: 200, blockSeconds: 2,
+    legacy: ["base-sepolia"], logRange: 200, blockSeconds: 0.2,
     gas: { symbol: "ETH", decimals: 18, isToken: false, limits: FIAT_TOKEN_GAS, minAgent: "0.000002", topUp: "0.00003" },
     doctor: { minOwnerToken: "0.01", minOwnerGas: "0.00003", minAgentGas: "0.00003", fundAgent: "0.0001", tokenFaucet: "faucet.circle.com, Base Sepolia", gasFaucet: "a Base Sepolia ETH faucet" },
   },

@@ -139,7 +139,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Base Sepolia",
   nativeCurrency: ETHER,
-  blockSeconds: 2,
+  blockSeconds: 0.2,
   // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
   logRange: 200,
 });

@@ -74,6 +74,14 @@ describe("findApproval (a replaced grant or revoke)", () => {
 });
 
 describe("readSettlement (reconcile's settlement lookup)", () => {
+  it("finds settlement 5000 seconds back when an older journal has no pull block", async () => {
+    const block = HEAD - 25_000n;
+    logs.AuthorizationUsed = [{ blockNumber: block, transactionHash: SETTLE }];
+    rpc.getTransactionReceipt.mockImplementationOnce(async ({ hash }) => ({ transactionHash: hash, blockNumber: block, blockHash: BLOCK_HASH, status: "success", logs: settlementLogs }));
+    expect(await (await ops()).readSettlement(journal({ pullBlock: undefined }))).toMatchObject({ kind: "used", settleTx: SETTLE, transferOk: true });
+    expect(Math.max(...widths)).toBeLessThanOrEqual(200);
+  });
+
   it("finds the settlement through an RPC that caps eth_getLogs below 100 blocks", async () => {
     limit = 50;
     logs.AuthorizationUsed = [{ blockNumber: HEAD - 2_000n + 450n, transactionHash: SETTLE }];
@@ -82,9 +90,9 @@ describe("readSettlement (reconcile's settlement lookup)", () => {
     expect(widths.slice(0, 3)).toEqual([200, 100, 50]);
   });
   it("is unread, not pending, when the span is more than a day of blocks", async () => {
-    const s = await (await ops()).readSettlement(journal({ pullBlock: String(HEAD - 100_000n) }));
+    const s = await (await ops()).readSettlement(journal({ pullBlock: String(HEAD - 500_000n) }));
     expect(s).toMatchObject({ kind: "unread", used: false, reason: expect.stringMatching(/could not be read/) });
-    expect(widths.reduce((a, b) => a + b, 0)).toBe(2 * 43_200);
+    expect(widths.reduce((a, b) => a + b, 0)).toBe(2 * 432_000);
   });
 });
 
