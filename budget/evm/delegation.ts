@@ -38,6 +38,14 @@ export const DELEGATION_DEPLOYMENTS: Record<string, { manager: Hex; implementati
   // Base Sepolia's code byte for byte, but for the chain id and the EIP-712 domain separator.
   "ethereum-sepolia": { manager: "0x49c7f94924ffb53300b7e8ee613814d5ba587fd886177f1e72b3203bf17da673", implementation: "0x9270f73d98e7ed6978677bf0550038289efd510e67e700d024502d62510fc1e4" },
   moderato: { manager: "0x02e62098c4ad8843a4e80427a6f3fb586673e25245b8214547b3fd5dca6bc981", implementation: "0x18ca952e6ac1c28e535ab18e8403c9e3fcb4e7ecf7eaf4f3bf451c18f51af7d4" },
+  // Mainnets checked with eth_getCode on two RPC operators per chain on 19 November 2026, matching the website pins.
+  // MetaMask v1.3.0 deployments: https://github.com/MetaMask/delegation-framework/blob/main/documents/Deployments.md
+  base: { manager: "0x7c4661fe830df0bb9354f85a6a478882e436b7a234a0cf1f8206ce6753925670", implementation: "0x6af675ac126c441bec5d5013da3331a52e7465fc0d5a662a8708a9f33ce497ba" },
+  arc: { manager: "0xf31f55d3b03ac54546c7c2ed505e3980021a807527d89adf40ebcc1e67ca375a", implementation: "0x1c0797b26f6c20595f3021b7f7e02006ab5fb9fbc482dbcfeec5570949a654a7" },
+  arbitrum: { manager: "0xf97be22889657b7488c1e41994a763cee2d347200de980b01a19ce0cc743edc1", implementation: "0xa6603bc6f9f203be551ce8fcfe13b7802e3b6574828780b4c4fe05d1768d17de" },
+  polygon: { manager: "0x9e840526200d6736573e6f71bf8b80f618f0825075b7e3587924f81f50b534dd", implementation: "0x0a0b90e8b2bb4701283c0b44939f18a5292af9ab58e0f1f4a3413fdbdbebcc35" },
+  ethereum: { manager: "0x762a7ccac3fba1fce7751870298c097c0d050451d9b4a1f0935e65dc4078d1d3", implementation: "0x0b77e469f5603ed1e9ff0e7ee56238b61a8cf7cb3185b33e53e2eeaad50109ab" },
+  robinhood: { manager: "0xe45747f90ecec2ba96ae9f4a15c36289653efdfef7690bcfb90a1945bb0fe207", implementation: "0xa06befcb6f1d7b6c566a607d9d5d932f9b267f3470e55940225c6ee9c4c5e6b0" },
 };
 
 /** The code an EIP-7702 account carries when it points to MetaMask's implementation. */

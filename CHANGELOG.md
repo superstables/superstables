@@ -7,11 +7,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Smart-account budget steps:** Accept MetaMask delegated calls on Base, Arc, Arbitrum One, Polygon, Ethereum and Robinhood Chain with each chain's pinned contract code.
+
 ## [1.4.4] - Mainnet chains
 
 ### Changed
 
-- **Tempo mainnet:** No longer offered. Tempo Moderato with `--testnet` is unchanged.
+- **Tempo mainnet:** Temporarily disabled; it will be turned back on soon. Tempo Moderato with `--testnet` is unchanged.
 
 ## [1.4.3] - Budget steps waiting for finality
 
