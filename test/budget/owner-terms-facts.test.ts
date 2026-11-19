@@ -111,6 +111,14 @@ describe("tempo: the owner's fee token, as Tempo picks it", () => {
     expect(neither.token).toBeUndefined();
   });
 
+  it("compares against the estimated maximum fee: pathUSD that covers it is used, as Tempo would", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    const balances = held({ [PATH.toLowerCase()]: 50_000n, [OUSD.toLowerCase()]: 5_000_000n });
+    expect(t.chooseOwnerFee(null, balances, 9_000n)).toEqual({ token: PATH, balance: 50_000n, problem: "" });
+    expect(t.chooseOwnerFee(null, balances, 60_000n).token).toBe(OUSD);
+    expect(t.chooseOwnerFee(OTHER, held({ [OTHER.toLowerCase()]: 10_000n }), 9_000n).problem).toBe("");
+  });
+
   it("with a preference: that token only, since Tempo does not fall back from it", async () => {
     const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
     expect(t.chooseOwnerFee(OUSD, held({ [OUSD.toLowerCase()]: 100_000n }))).toEqual({ token: OUSD, balance: 100_000n, problem: "" });

@@ -27,6 +27,7 @@ import { rpcFacts } from '../page-facts.mjs'
 import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, agentFileText, assertMainnetOpen, fromBaseUnits, inKeychain, loadPublicEnv, makeClient, parseEnvFile } from './lib/common.ts'
 import { FINAL_TAG, chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
 import { OUSD, PATH_USD } from './lib/constants.mjs'
+import { maxFeeUnits } from './lib/precheck.mjs'
 import { LABEL } from './lib/args.mjs'
 
 export { closeOwnerPage }
@@ -232,20 +233,38 @@ export type OwnerFee = { token: Address; balance: bigint; problem: '' } | { toke
 
 /**
  * The token the owner's plain transaction pays its fee in, as Tempo picks it (protocol/fees/spec-fee): the owner's FeeManager
- * preference when it set one; otherwise, from T13, pathUSD if it covers the fee, else OUSD (protocol/upgrades/t13: "Only an
- * insufficient balance moves on to OUSD"). A problem when the token Tempo would pick holds less than MIN_FEE_BALANCE. Pure.
+ * preference when it set one; otherwise, from T13, pathUSD if it covers the maximum fee, else OUSD (protocol/upgrades/t13:
+ * "Only an insufficient balance moves on to OUSD"; one token must cover the whole maximum fee). `need` is that maximum fee as
+ * this client estimates it (ownerFeeNeed). A problem when the token Tempo would pick holds less. Pure.
  */
-export function chooseOwnerFee(preference: Address | null, balances: (token: Address) => bigint): OwnerFee {
+export function chooseOwnerFee(preference: Address | null, balances: (token: Address) => bigint, need: bigint = MIN_FEE_BALANCE): OwnerFee {
   if (preference) {
     const balance = balances(preference)
-    if (balance >= MIN_FEE_BALANCE) return { token: preference, balance, problem: '' }
-    return { token: preference, balance, problem: `holds ${fromBaseUnits(balance)} of its fee token ${feeTokenWords(preference)} (its FeeManager preference), less than the ${fromBaseUnits(MIN_FEE_BALANCE)} the network fee may need`, next: `the owner adds ${feeTokenWords(preference)}, or sets another fee token in the wallet, then` }
+    if (balance >= need) return { token: preference, balance, problem: '' }
+    return { token: preference, balance, problem: `holds ${fromBaseUnits(balance)} of its fee token ${feeTokenWords(preference)} (its FeeManager preference), less than the ${fromBaseUnits(need)} the network fee may need`, next: `the owner adds ${feeTokenWords(preference)}, or sets another fee token in the wallet, then` }
   }
   for (const token of [PATH_USD, OUSD] as Address[]) {
     const balance = balances(token)
-    if (balance >= MIN_FEE_BALANCE) return { token, balance, problem: '' }
+    if (balance >= need) return { token, balance, problem: '' }
   }
-  return { balance: 0n, problem: `holds less than ${fromBaseUnits(MIN_FEE_BALANCE)} of pathUSD and of OUSD, the tokens Tempo pays the network fee in when the account sets none`, next: CHAIN.testnet ? `fund the owner (superstables budget setup --rail tempo${CHAIN_FLAG} --fund-only uses the Moderato faucet), then` : 'the owner adds OUSD (the network fee is paid in it), then' }
+  return { balance: 0n, problem: `holds less than ${fromBaseUnits(need)} of pathUSD and of OUSD, the tokens Tempo pays the network fee in when the account sets none`, next: CHAIN.testnet ? `fund the owner (superstables budget setup --rail tempo${CHAIN_FLAG} --fund-only uses the Moderato faucet), then` : 'the owner adds OUSD (the network fee is paid in it), then' }
+}
+
+/**
+ * The most the owner's keychain call may cost in fees, in base units: three times the node's estimate (gas times gas price),
+ * since the wallet picks its own gas limit and fee cap and Tempo checks the token against those. MIN_FEE_BALANCE when the
+ * node does not answer: the earlier fixed allowance, so nothing is guessed lower than before.
+ */
+export async function ownerFeeNeed(owner: Address, call: { to: Address; data: Hex }): Promise<bigint> {
+  try {
+    const gas = await rpcRead('eth_estimateGas', [{ from: owner, to: call.to, data: call.data }])
+    const price = await rpcRead('eth_gasPrice', [])
+    if (typeof gas !== 'string' || !/^0x[0-9a-fA-F]+$/.test(gas) || typeof price !== 'string' || !/^0x[0-9a-fA-F]+$/.test(price)) return MIN_FEE_BALANCE
+    const fee = maxFeeUnits(BigInt(gas), BigInt(price)) * 3n
+    return fee > 0n ? fee : MIN_FEE_BALANCE
+  } catch {
+    return MIN_FEE_BALANCE
+  }
 }
 
 /** The owner's FeeManager preference, or null when it set none (a zero answer). A failed read throws: nothing is guessed. */
@@ -256,13 +275,14 @@ export async function feePreferenceOf(owner: Address): Promise<Address | null> {
   return /^0x0{40}$/.test(token) ? null : getAddress(token)
 }
 
-/** The owner's fee token and whether it covers a grant's or revoke's fee (chooseOwnerFee), from the chain. A failed read throws. */
-export async function ownerFee(owner: Address): Promise<OwnerFee> {
+/** The owner's fee token and whether it covers this grant's or revoke's fee (chooseOwnerFee), from the chain. A failed read throws. */
+export async function ownerFee(owner: Address, call: { to: Address; data: Hex }): Promise<OwnerFee> {
+  const need = await ownerFeeNeed(owner, call)
   const preference = await feePreferenceOf(owner)
   const tokens = preference ? [preference] : [PATH_USD, OUSD] as Address[]
   const held = new Map<string, bigint>()
   for (const t of tokens) held.set(t.toLowerCase(), await tokenBalance(t, owner))
-  return chooseOwnerFee(preference, (t) => held.get(t.toLowerCase()) ?? 0n)
+  return chooseOwnerFee(preference, (t) => held.get(t.toLowerCase()) ?? 0n, need)
 }
 
 export async function tokenBalance(token: Address, holder: Address): Promise<bigint> {

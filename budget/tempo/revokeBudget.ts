@@ -25,7 +25,7 @@
 import { rpcPause } from "../rpc-pause.mjs";
 import type { Address, Hex } from 'viem'
 import { addressCheck, intCheck, labelCheck, parseCli } from './lib/args.mjs'
-import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
+import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, TOKEN_LABEL, explorerTx, fromBaseUnits, loadOwnerKeyFile, loadPublicEnv, makeClient, oneLine, ownerAccount, parseEnvFile } from './lib/common.ts'
 import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, type Simulated } from './lib/chain.ts'
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
@@ -68,7 +68,7 @@ async function residualScan(owner: Address, key: Address, fromBlock: bigint, gra
   }
   if (!channels.length) console.log('  no channel of this key holds a deposit: residual exposure 0')
   channels.forEach(row)
-  if (channels.length) console.log(`  RESIDUAL EXPOSURE (the seller can still settle up to this until the owner withdraws): ${fromBaseUnits(total)} pathUSD in ${channels.length} channel${channels.length === 1 ? '' : 's'}`)
+  if (channels.length) console.log(`  RESIDUAL EXPOSURE (the seller can still settle up to this until the owner withdraws): ${fromBaseUnits(total)} ${TOKEN_LABEL} in ${channels.length} channel${channels.length === 1 ? '' : 's'}`)
   console.log(`  Channels older than ${lookback} blocks are not visible to this scan (--lookback-blocks).`)
   return { unclosed, total }
 }
@@ -177,7 +177,7 @@ async function main() {
   } else {
     let fee: Awaited<ReturnType<typeof ownerFee>>
     try {
-      fee = await ownerFee(owner)
+      fee = await ownerFee(owner, { to: KEYCHAIN, data: revokeCalldata(agentAddress) })
     } catch (err) {
       const reason = `could not read the owner's fee token from the FeeManager (${oneLine((err as Error)?.message ?? err, 120)})`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)

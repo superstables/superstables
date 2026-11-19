@@ -9,7 +9,7 @@
 //   1. Parse flags. Bad or missing flags exit 2 before any file is read.
 //   2. Open tempo-agent.env only (access key + the owner's PUBLIC address; no owner key).
 //   3. Fetch the seller's challenge (an unpaid request) and run the pre-signing checks: price <= --max
-//      (required), token is pathUSD on the chain, whole base units, recipient == --pay-to when given, the
+//      (required), token is the chain's budget token (OUSD on Tempo, pathUSD on Moderato), whole base units, recipient == --pay-to when given, the
 //      challenge names a realm, stays open at most 600 s and does not turn on mppx's machine-token route.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
 //      The agent's payment pays its own network fee (when the seller does not) in the budget token, the one token its key
@@ -18,7 +18,7 @@
 //      the memo names through MPP's client id), then sign. In pull mode (the
 //      default for an access key) the signed payment is a bearer transaction that expires when mppx says, 25 s,
 //      read from the signed transaction. The challenge's memo is claimed for this op (lib/claim.ts) before signing;
-//      the signed payment is read back and leaves only if it is the quoted pathUSD transfers, valid at most 600 s. The
+//      the signed payment is read back and leaves only if it is the quoted budget-token transfers, valid at most 600 s. The
 //      memo mppx puts on it is known before signing and is an indexed topic of the on-chain
 //      TransferWithMemo event, so this one purchase can be found on chain even if its transaction hash
 //      is never learned (a sponsored transaction's final hash exists only after the seller adds the
@@ -28,7 +28,7 @@
 //      only when no broadcast request began; once one did, any error stays `unknown` (even a journal write that
 //      stopped the request), and a payment with a recorded expiry can be proven expired by reconcile.
 //   5. Send it. Whatever the seller answers (200, 402, 500, a dropped connection), the outcome is read
-//      from the chain: settled needs the payment's OWN transaction to have succeeded with a pathUSD
+//      from the chain: settled needs the payment's OWN transaction to have succeeded with a budget-token
 //      Transfer owner -> recipient of the price. The seller's HTTP status is recorded separately as
 //      `delivered`. A payment is never retried, and a delivery failure never causes a new payment.
 //   6. Final line: RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}.

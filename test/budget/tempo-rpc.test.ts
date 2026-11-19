@@ -121,7 +121,9 @@ describe("Tempo budget payment RPC", () => {
       expect(child.output).toContain('"state":"settled"');
       expect(paid).toBe(1);
       if (process.env.TEMPO_RPC_AUDIT) console.log(JSON.stringify({ mode, feePayer, feeToken: feeTokens[0] ?? "(absent)", hosts: [...new Set(hosts)], calls }));
-      expect(feeTokens).toEqual([undefined]);
+      // The agent's own fee is in the budget token (pathUSD on Moderato), which its key has the limit on; a sponsored payment
+      // leaves the fee token blank for the seller. Before, an unsponsored payment named none and fell to the owner's preference.
+      expect(feeTokens).toEqual([feePayer ? undefined : "0x20c0000000000000000000000000000000000000"]);
       expect(new Set(hosts)).toEqual(new Set([new URL(rpc.url).host]));
       if (mode === "pull") {
         expect(calls).toContain("eth_chainId");
