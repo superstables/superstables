@@ -117,7 +117,7 @@ function catalogueFor(variant, o) {
       ];
     case "mainnet":
       return [
-        listing("btc-price-mainnet", "BTC Price (Base mainnet)", "BTC spot price, 0.01 USDC per call on Base mainnet. Real USDC.", seller("mainnet"),
+        listing("btc-price-mainnet", "BTC Price (Base mainnet)", "BTC spot price, 0.01 USDC per call on Base mainnet.", seller("mainnet"),
           { rail: "x402", scheme: "exact", network: "eip155:8453", networkLabel: "Base", asset: "USDC", price: { amountDecimal: 0.01, asset: "USDC", display: "0.01 USDC per request" }, payTo: HONEST_PAY_TO }, { testnet: false }),
       ];
     case "plain-http":
@@ -141,7 +141,7 @@ function indexFor(variant, o) {
         indexRow("zero​width‮id", "Invisible​ tag\u{E0049}\u{E0067} text \u001b]0;pwned\u0007", "Plain looking, with hidden characters and a terminal escape.", "https://hidden.invalid/x", ["base-sepolia"]),
       ];
     case "mainnet":
-      return [indexRow("btc-price-mainnet-index", "BTC Price (Base mainnet)", "Real USDC on Base mainnet.", "https://btc-mainnet.invalid/v1/price", ["base"])];
+      return [indexRow("btc-price-mainnet-index", "BTC Price (Base mainnet)", "USDC on Base mainnet.", "https://btc-mainnet.invalid/v1/price", ["base"])];
     case "plain-http":
       return [indexRow("btc-price-offsite-index", "BTC Price (offsite)", "BTC spot price.", "http://203.0.113.9/v1/btc", ["base-sepolia"])];
     default:

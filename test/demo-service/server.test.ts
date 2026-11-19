@@ -83,7 +83,7 @@ describe("demo service: what costs nothing", () => {
 
     expect(res.status).toBe(200);
     expect(body.name).toBe(SERVICE_NAME);
-    expect(body.description).toContain("no real money");
+    expect(body.description).toContain("test USDC on Base Sepolia (testnet)");
     expect(body.endpoint).toBe(`${demo.url}/v1/market`);
     expect(body.params[0]).toMatchObject({ name: "asset", required: true, enum: ["BTC", "ETH"] });
     expect(body.price).toMatchObject({ amountDecimal: PRICE, asset: "USDC" });

@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.4.1 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once; payments there move real money. This page says what each way to pay protects
+Superstables client 1.4.1 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -251,7 +251,7 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 compromised machine are the ones inside what you sign — the amount and the recipient in the
 authorization — and the balance of the account. Testnet by default.
 SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-supported mainnet is open and payments there move real money.
+supported mainnet is open.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -291,7 +291,7 @@ matters is the one a wallet you keep apart from the agent makes.
 ## Testnet by default
 
 SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-supported mainnet is open and payments there move real money.
+supported mainnet is open.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -914,7 +914,7 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 
 - **The operator allows mainnet.** `SUPERSTABLES_ALLOW_MAINNET` is `1` or `true` in the environment (see
   [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it. It opens every mainnet in the
-  manifest at once; payments there move real money.
+  manifest at once.
 - **The mainnet manifest states the chain.** The manifest (`src/core/mainnet-manifest.js`) lists each mainnet with its chain
   id, its token's address, decimals and signing domain, its public RPCs and its finality, each fact with its source. The chain
   table entry must state the same facts, and a manifest with one malformed fact closes every mainnet. It lists Base, Arc,

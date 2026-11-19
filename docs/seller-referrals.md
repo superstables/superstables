@@ -6,7 +6,7 @@ verify that token with `@superstables/client/seller`, which uses Node built-ins 
 report sales to superstables.com.
 
 **Testnet by default.** SUPERSTABLES_ALLOW_MAINNET is off by default.
-When the operator turns it on, payments on a mainnet move real money.
+Only the operator turns it on.
 Purchases, fees and statements are kept by superstables.com. The client carries
 the token from the index to your service, and this helper checks it; neither computes a fee.
 

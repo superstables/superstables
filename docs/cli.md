@@ -34,7 +34,7 @@ Usage: superstables [options] [command]
 
 Find services that charge per request, quote them, and pay them with stablecoins
 from a wallet the owner controls. Testnet by default. Mainnet is open only when
-the operator turns it on, and then the money is real.
+the operator turns it on.
 
 Options:
   -V, --version                  print the version of this client and exit
@@ -164,7 +164,7 @@ Discovery:
   switches it off with `off`. Index listings show their payment protocols (rails) and chains, and
   whether pay or a budget rail could pay them. Testnet by default.
   SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-  supported mainnet is open and payments there move real money. Agents never set it.
+  supported mainnet is open. Agents never set it.
 
 Environment:
   SUPERSTABLES_HOME              where state lives (default ~/.superstables)
@@ -530,13 +530,13 @@ request there, so approving it afterwards signs nothing.
 
 Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base
 Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with
-test pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets, where the
-money is real. The wallet signs on the EVM chains and Solana, and pay submits what it signed. On
-Tempo the owner's wallet sends the payment itself: pay records that before the wallet is asked,
-reads the owner's transaction on chain, and only then calls the seller. Once the wallet has been
-asked to send, an attempt that ends without a transaction report is uncertain, a rejection the page
-reports from the wallet included, and `superstables status` searches the chain for it. --wallet
-local signs on the EVM chains only.
+test pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets. The wallet
+signs on the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet
+sends the payment itself: pay records that before the wallet is asked, reads the owner's transaction
+on chain, and only then calls the seller. Once the wallet has been asked to send, an attempt that
+ends without a transaction report is uncertain, a rejection the page reports from the wallet
+included, and `superstables status` searches the chain for it. --wallet local signs on the EVM
+chains only.
 
 How long it waits: with no --wait, until the attempt ends: the browser page gives the owner 5
 minutes; with --wallet local, pay gives the wallet 130 s (the wallet's own window is 120 s by

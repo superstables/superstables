@@ -1,6 +1,6 @@
 // buy-once on the mainnets the site's purchase API pays on (Base, Arc and Robinhood Chain), through the real dispatcher
 // against a fake superstables.com on 127.0.0.1. With SUPERSTABLES_ALLOW_MAINNET off, a mainnet listing or --chain is refused
-// before the site is asked for anything; with it on, the purchase is asked for and the owner is told the money is real. A
+// before the site is asked for anything; with it on, the purchase is asked for and the owner is told the amount and the mainnet. A
 // mainnet purchase read once the switch is off again is never called unpaid on the site's word and never read as Base
 // Sepolia. No network, no key, no transaction.
 import { spawn } from "node:child_process";
@@ -73,7 +73,7 @@ describe("buy-once on a mainnet, switch off", () => {
 });
 
 describe("buy-once on a mainnet, switch on", () => {
-  it.each(["base", "arc", "robinhood"] as const)("a %s purchase is asked for, in real money", async (key) => {
+  it.each(["base", "arc", "robinhood"] as const)("a %s purchase is asked for, naming the mainnet and the amount", async (key) => {
     const m = MAINNET_MANIFEST.chains[key];
     site.services.push(listing(key));
     const r = await buy(key, [], ON);
@@ -81,10 +81,10 @@ describe("buy-once on a mainnet, switch on", () => {
     expect(r.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: key, state: "waiting_owner" });
     expect(site.purchases).toHaveLength(1);
     expect(r.approve.terms.summary).toContain(`One payment of 0.01 ${m.token.symbol} on ${m.label} to ${SELLER}`);
-    expect(r.approve.terms.summary).toMatch(/a mainnet: the money is real/);
+    expect(r.approve.terms.summary).toContain(`This is on ${m.label} (mainnet).`);
     expect(r.result.message_for_owner).toMatch(new RegExp(`0\\.01 ${m.token.symbol} on ${m.label}\\b`));
-    expect(r.result.message_for_owner).toMatch(/the money is real/);
-    expect(r.result.message_for_owner).not.toMatch(/test USDC|test USDG|Test tokens, no real money/);
+    expect(r.result.message_for_owner).toContain(`This is on ${m.label} (mainnet).`);
+    expect(r.result.message_for_owner).not.toMatch(/test USDC|test USDG|Test tokens|real money/);
   }, 30_000);
 
   it("a pause stops a new mainnet purchase before the site is asked", async () => {
