@@ -1,8 +1,8 @@
 // Constants shared by the TypeScript scripts (through common.ts) and the plain .mjs helpers.
 //
-// The chain: Tempo mainnet (the default), which the table holds unless the run is testnet-only (--testnet,
+// The chain: a Tempo mainnet when the mainnet manifest lists one, which the table then holds unless the run is testnet-only (--testnet,
 // ../../../src/core/mainnet-policy.js) and which takes its facts from the mainnet manifest, or Tempo Moderato, the testnet
-// (the default in a testnet-only run). The dispatcher names the chain in SUPERSTABLES_BUDGET_CHAIN (--chain moderato or --chain tempo). A chain this
+// (the default in a testnet-only run). The dispatcher names the chain in SUPERSTABLES_BUDGET_CHAIN (--chain moderato). A chain this
 // table does not hold sets CHAIN_PROBLEM, and every Tempo script refuses on it as it loads (common.ts), before it reads a
 // key or asks an RPC anything. The dispatcher imports this file too, so a bad value never stops it here.
 import { DEFAULT_RPC, rpcFromEnv } from '../../rpc.mjs'
@@ -29,8 +29,8 @@ for (const [key, c] of mainnetChains('tempo')) {
   TEMPO_CHAINS[key] = { key, gateKey: key, label: c.label, short: c.label, binding: `${c.label} Mainnet`, chainId: c.chainId, testnet: false, rpc: c.rpc[0].url, explorer: c.explorer, faucet: false, token: { address: c.token.address, decimals: c.token.decimals, symbol: c.token.symbol } }
 }
 export const TEMPO_CHAIN_KEYS = Object.keys(TEMPO_CHAINS)
-/** The chain when --chain is not given: Tempo, or Moderato in a testnet-only run (--testnet). */
-export const TEMPO_DEFAULT_CHAIN = testnetRun() ? 'moderato' : 'tempo'
+/** The chain when --chain is not given: the first mainnet the table holds, or Moderato in a testnet-only run (--testnet) or when it holds none. */
+export const TEMPO_DEFAULT_CHAIN = (!testnetRun() && TEMPO_CHAIN_KEYS.find((k) => !TEMPO_CHAINS[k].testnet)) || 'moderato'
 
 const named = process.env[CHAIN_ENV]?.trim() || TEMPO_DEFAULT_CHAIN
 /** Why this process must not run a Tempo script, or '': SUPERSTABLES_BUDGET_CHAIN names a chain the table does not hold. */

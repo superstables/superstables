@@ -4,7 +4,7 @@
 // 0x4d10d7474ea1d04e06b3d9456bfa32bbc23678822baa0e08b33ff01eae65ccfc.
 
 import { readFileSync } from "node:fs";
-import { encodeAbiParameters, encodeFunctionData, encodePacked, formatTransaction, formatTransactionReceipt, hashDomain, keccak256, pad, parseAbi, toEventSelector, type Hex } from "viem";
+import { encodeAbiParameters, encodeFunctionData, encodePacked, formatTransaction, formatTransactionReceipt, hashDomain, keccak256, pad, parseAbi, toEventSelector, toHex, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import {
   DELEGATED_TO_METAMASK, DELEGATION_DEPLOYMENTS, DELEGATION_MANAGER, DELEGATOR_IMPLEMENTATION, REDEEMED_DELEGATION, authorityOf, codeDuring, delegatedCall,
@@ -122,12 +122,12 @@ function recordedTx(name: string) {
   const f = fixture(name);
   return { f, tx: formatTransaction(f.tx) as any, receipt: formatTransactionReceipt(f.receipt) as any };
 }
-async function judge(name: string, want: Call, o: Parameters<typeof chainReads>[1] & { chainKey?: string; token?: Hex; logs?: any[]; tx?: object; ownerState?: OwnerState } = {}) {
+async function judge(name: string, want: Call, o: Parameters<typeof chainReads>[1] & { chainKey?: string; chainId?: number; token?: Hex; logs?: any[]; tx?: object; ownerState?: OwnerState } = {}) {
   const { f, tx, receipt } = recordedTx(name);
   const state = o.ownerState ?? (f.owner ? { codeBefore: f.owner.codeBefore, codeAfter: f.owner.codeAfter, nonceBefore: Number(f.owner.nonceBefore), nonceAfter: Number(f.owner.nonceAfter) } : undefined);
   const { reads, calls } = chainReads(receipt.blockNumber, { ...o, owner: { ...state, ...o.owner } });
   const chainKey = o.chainKey ?? "base-sepolia";
-  const e = await ownerEvidence({ chainKey, chainLabel: chainKey, chainId: 84532, token: o.token ?? BASE_USDC, owner: REC_OWNER, want, tx: { ...tx, ...o.tx }, block: receipt.blockNumber, logs: o.logs ?? receipt.logs }, reads);
+  const e = await ownerEvidence({ chainKey, chainLabel: chainKey, chainId: o.chainId ?? 84532, token: o.token ?? BASE_USDC, owner: REC_OWNER, want, tx: { ...tx, ...o.tx }, block: receipt.blockNumber, logs: o.logs ?? receipt.logs }, reads);
   return { ...e, calls, receipt, tx };
 }
 
@@ -136,7 +136,7 @@ describe("the recordings: the pinned code and event are the ones the chain has",
     expect(keccak256(CODE.manager)).toBe(DELEGATION_DEPLOYMENTS["base-sepolia"].manager);
     expect(keccak256(CODE.executor)).toBe(DELEGATION_DEPLOYMENTS["base-sepolia"].implementation);
     expect(REDEEMED_DELEGATION).toBe("0x40dadaa36c6c2e3d7317e24757451ffb2d603d875f0ad5e92c5dd156573b1873");
-    expect(Object.keys(DELEGATION_DEPLOYMENTS).sort()).toEqual(["arbitrum-sepolia", "arc-testnet", "base-sepolia", "ethereum-sepolia", "moderato", "polygon-amoy"]);
+    expect(Object.keys(DELEGATION_DEPLOYMENTS).sort()).toEqual(["arbitrum", "arbitrum-sepolia", "arc", "arc-testnet", "base", "base-sepolia", "ethereum", "ethereum-sepolia", "moderato", "polygon", "polygon-amoy", "robinhood"]);
   });
 
   it("Ethereum Sepolia's code hashes to its pinned values, and is Base Sepolia's but for the chain id and EIP-712 domain it embeds", () => {
@@ -190,7 +190,7 @@ describe("MetaMask's sponsored transactions count, with the manager's code, its 
 
 describe("a delegation counts only on a chain where the manager is pinned", () => {
   it("SKALE Base Sepolia and any chain not listed refuse it, even with every log in place", async () => {
-    for (const chainKey of ["skale-base-sepolia", "some-new-chain"]) {
+    for (const chainKey of ["skale-base-sepolia", "skale-base", "tempo", "robinhood-testnet", "some-new-chain"]) {
       const e = await judge("base-sponsored-grant", plan.approve(FIRST_FUND_AGENT, CAP), { chainKey });
       expect(e.problems.join(), chainKey).toMatch(/went through a delegation manager, which is not accepted on/);
       expect(e.calls, chainKey).toEqual([]);
@@ -200,6 +200,49 @@ describe("a delegation counts only on a chain where the manager is pinned", () =
   it("Ethereum Sepolia refuses Base Sepolia's manager code: each chain takes only its own pinned code", async () => {
     const e = await judge("base-sponsored-grant", plan.approve(FIRST_FUND_AGENT, CAP), { chainKey: "ethereum-sepolia" });
     expect(e.problems.join()).toMatch(/the delegation manager's code is not the known one/);
+  });
+});
+
+describe("mainnet smart-account evidence", () => {
+  it.each([
+    ["base", 8453], ["arc", 5042], ["arbitrum", 42161],
+    ["polygon", 137], ["ethereum", 1], ["robinhood", 4663],
+  ] as const)("%s accepts the delegated grant and revoke only with its pinned manager", async (chainKey, chainId) => {
+    // The recorded runtime differs only in its embedded chain id and EIP-712 domain.
+    // These reconstructed bytes were also compared with eth_getCode on two operators per mainnet.
+    const domain = (name: string, id: number, verifyingContract: Hex) =>
+      hashDomain({ domain: { name, version: "1", chainId: BigInt(id), verifyingContract }, types: { EIP712Domain: [{ name: "name", type: "string" }, { name: "version", type: "string" }, { name: "chainId", type: "uint256" }, { name: "verifyingContract", type: "address" }] } }).slice(2);
+    const onChain = (code: Hex, name: string, at: Hex): Hex =>
+      code.replaceAll(domain(name, 84532, at), domain(name, chainId, at))
+        .replaceAll(pad(toHex(84532)).slice(2), pad(toHex(chainId)).slice(2)) as Hex;
+    const manager = onChain(CODE.manager, "DelegationManager", DELEGATION_MANAGER);
+    const implementation = onChain(CODE.executor, "EIP7702StatelessDeleGator", DELEGATOR_IMPLEMENTATION);
+    const options = { chainKey, chainId, manager, implementation };
+
+    for (const [name, value] of [["base-sponsored-grant", CAP], ["base-sponsored-revoke", 0n]] as const) {
+      // Calldata and receipt are synthetic mainnet evidence, adapted from the recorded testnet step.
+      const want = plan.approve(FIRST_FUND_AGENT, value);
+      const accepted = await judge(name, want, options);
+      expect(accepted).toMatchObject({ via: "delegation", problems: [] });
+      expect(accepted.unresolved).toBeUndefined();
+      expect((await judge(name, want, { ...options, manager: "0x" })).problems)
+        .toEqual(["there is no delegation manager at that address on this chain"]);
+      for (const wrongCode of ["0x6000", CODE.manager] as const) {
+        expect((await judge(name, want, { ...options, manager: wrongCode })).problems)
+          .toEqual(["the delegation manager's code is not the known one"]);
+      }
+      const unknown = await judge(name, want, { ...options, tx: { to: RELAYER } });
+      expect(unknown.via).toBe("direct");
+      expect(unknown.problems.length).toBeGreaterThan(0);
+      expect(unknown.unresolved).toBeUndefined();
+    }
+    expect(keccak256(manager)).toBe(DELEGATION_DEPLOYMENTS[chainKey]?.manager);
+    expect(keccak256(implementation)).toBe(DELEGATION_DEPLOYMENTS[chainKey]?.implementation);
+    const fund = await judge("base-sponsored-fund", plan.gas(FUND_AGENT), options);
+    expect(fund).toMatchObject({ via: "delegation", problems: [] });
+    expect(fund.unresolved).toBeUndefined();
+    expect((await judge("base-sponsored-fund", plan.gas(FUND_AGENT), { ...options, implementation: CODE.executor })).problems)
+      .toEqual(["MetaMask's smart account implementation on this chain is not the known code"]);
   });
 });
 

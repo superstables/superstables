@@ -808,8 +808,8 @@ at the exact version its files name. In both apps, it reaches the Superstables t
 `https://mcp.superstables.com`. The checksum
 caveat below applies to the plugin zip as it does to the skill zip.
 
-For 1.4.3, use the agent skill zip attached to the 1.4.3 release on
-[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-skill-1.4.3.zip`;
+For 1.4.5, use the agent skill zip attached to the 1.4.5 release on
+[GitHub Releases](https://github.com/superstables/superstables/releases), `superstables-skill-1.4.5.zip`;
 `scripts/VERSION.json` inside it records the version and commit. Comparing the download's SHA-256
 checksum with a published value checks that the downloaded bytes match that value; when both come
 from the same site, it is not an independent check of a compromised site. Installing from git with
@@ -913,7 +913,7 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 - **The mainnet manifest states the chain.** The manifest (`src/core/mainnet-manifest.js`) lists each mainnet with its chain
   id, its token's address, decimals and signing domain, its public RPCs and its finality, each fact with its source. The chain
   table entry must state the same facts, and a manifest with one malformed fact closes every mainnet. It lists Base, Arc,
-  Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain, Tempo and Solana.
+  Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain and Solana.
 - **Mainnet is not paused.** `SUPERSTABLES_MAINNET_PAUSE` is unset or blank, and the file `mainnet-paused` is not in the client's home folder. A pause stops every new signature and send at once; it cannot undo what was already signed.
 - **The chain has what signing on it correctly needs.** The gate checks these and names each one that fails:
   - RPC endpoints that can decide a payment was never made: two operators from the built-in table, or the RPCs your
@@ -925,9 +925,8 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   - where an agent key signs (the budget rails), an agent key file that names the OS keychain and holds no key. `setup`
     stores a mainnet agent key there with `--key-store os-keychain`. `pay` holds no agent key, so this does not apply to it.
 
-  A check that cannot run counts as missing. Budgets on mainnet work on every rail: `evm`, `tempo` (`--chain tempo`) and
-  `solana` (`--chain solana`). On `tempo` the mainnet agent keys have their own key file, which names the OS keychain and
-  holds no key; `setup --key-store os-keychain` creates each key in the keychain before it writes the file.
+  A check that cannot run counts as missing. Budgets on mainnet work on `evm` and
+  `solana` (`--chain solana`).
 
 `buy-once` pays on Base, Arc and Robinhood Chain by default while mainnet is not paused, when superstables.com
 lists a service there. The owner signs on superstables.com and this client signs nothing, so the agent key and verdict RPC

@@ -9,14 +9,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Tempo mainnet budgets are in OUSD:** On Tempo (chain 4217) the budget token is OUSD (`0x20c0…6a37da5c996874be`, 6 decimals), not pathUSD: Tempo's docs say most integrations should use OUSD for balances and payments, and that people never hold pathUSD directly. The agent's key has one limit, on OUSD, and `budget buy` takes only sellers that charge OUSD. Tempo Moderato stays on pathUSD. A key an older client granted on Tempo mainnet in pathUSD reads as having no OUSD left: revoke it and grant again.
-- **The agent pays its Tempo network fee in the budget token:** The keychain counts a fee the account pays against the key's limit on the fee token, so a fee in any other token fails with `SpendingLimitExceeded`. `budget buy` now names the budget token as the fee token, and refuses (before anything is sent) a signed payment that names another or none, unless the seller pays the fee. Before, an owner whose wallet set pathUSD as its fee token could not pay from an OUSD budget.
+- **The agent pays its Tempo network fee in the budget token:** The keychain counts a fee the account pays against the key's limit on the fee token, so a fee in any other token fails with `SpendingLimitExceeded`. `budget buy` now names the budget token as the fee token, and refuses (before anything is sent) a signed payment that names another or none, unless the seller pays the fee. Before, an owner whose wallet set another fee token could not pay from the budget.
 - **`pay` takes OUSD:** The default policy's `stablecoins` list is `[USDC, pathUSD, OUSD, USDG]`. A `policy.yaml` that writes its own list keeps it; add OUSD there to pay in it.
 
 ### Fixed
 
-- **Tempo grant and revoke for an owner who holds only OUSD:** With no fee token set in the owner's FeeManager, the check before the link follows Tempo's own order since T13: pathUSD if it covers the fee, else OUSD. Before, an owner with only OUSD was refused. With a fee token set, that token must cover the fee, as on chain.
-- **`budget status` on Tempo mainnet:** reads the remaining amount in the chain's token (it read only amounts printed in pathUSD).
+- **Tempo grant and revoke fee check:** With no fee token set in the owner's FeeManager, the check before the link follows Tempo's own order since T13: pathUSD if it covers the fee, else OUSD. Before, an owner with only OUSD was refused. With a fee token set, that token must cover the fee, as on chain.
+- **`budget status` on Tempo:** reads the remaining amount in the chain's token (it read only amounts printed in pathUSD).
+
+## [1.4.5] - Smart-account budgets and Base lookups
+
+### Fixed
+
+- **Smart-account budget steps:** Accept MetaMask delegated calls on Base, Arc, Arbitrum One, Polygon, Ethereum and Robinhood Chain with each chain's pinned contract code.
+- **Base payment lookups:** `status` and budget steps can again search up to a day of Base and Base Sepolia blocks. After the move to 0.2-second blocks, the limit had fallen to about 2 hours 24 minutes.
+
+## [1.4.4] - Mainnet chains
+
+### Changed
+
+- **Tempo mainnet:** Temporarily disabled; it will be turned back on soon. Tempo Moderato with `--testnet` is unchanged.
 
 ## [1.4.3] - Budget steps waiting for finality
 
@@ -430,7 +442,9 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.3...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.5...HEAD
+[1.4.5]: https://github.com/superstables/superstables/compare/v1.4.4...v1.4.5
+[1.4.4]: https://github.com/superstables/superstables/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/superstables/superstables/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/superstables/superstables/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/superstables/superstables/compare/v1.4.0...v1.4.1

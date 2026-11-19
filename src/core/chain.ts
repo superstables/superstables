@@ -139,7 +139,7 @@ export const BASE_SEPOLIA: EvmNetwork = evm({
   token: { address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", symbol: "USDC", decimals: 6, domain: { name: "USDC", version: "2" }, approveReset: false },
   chainName: "Base Sepolia",
   nativeCurrency: ETHER,
-  blockSeconds: 2,
+  blockSeconds: 0.2,
   // sepolia.base.org refuses eth_getLogs over more than 200 blocks (error -32614, 14 Oct 2026).
   logRange: 200,
 });
@@ -371,10 +371,8 @@ const MAINNETS: Record<string, string> = {
   "eip155:5042": "Arc (mainnet)",
   "eip155:1187947933": "SKALE Base (mainnet)",
   "skale-base": "SKALE Base (mainnet)",
-  "eip155:4217": "Tempo (mainnet)",
   "eip155:4663": "Robinhood Chain (mainnet)",
   robinhood: "Robinhood Chain (mainnet)",
-  tempo: "Tempo (mainnet)",
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "Solana (mainnet)",
   solana: "Solana (mainnet)",
 };

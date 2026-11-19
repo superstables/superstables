@@ -26,7 +26,7 @@ const baseRef = (m: MainnetManifest = MAINNET_MANIFEST as MainnetManifest) => ({
 /** The testnet each mainnet pairs with: the same rail and token symbol. */
 const PAIRS: Record<string, string> = {
   base: "base-sepolia", arc: "arc-testnet", arbitrum: "arbitrum-sepolia", polygon: "polygon-amoy", "skale-base": "skale-base-sepolia",
-  ethereum: "ethereum-sepolia", robinhood: "robinhood-testnet", tempo: "tempo-moderato", solana: "solana-devnet",
+  ethereum: "ethereum-sepolia", robinhood: "robinhood-testnet", solana: "solana-devnet",
 };
 
 describe("the shipped mainnet manifest", () => {
@@ -35,13 +35,16 @@ describe("the shipped mainnet manifest", () => {
     expect(Object.isFrozen(shippedManifest().chains.base.token)).toBe(true);
   });
 
-  it("has one mainnet for each testnet pair, on the same rail with the same token symbol and decimals, but Tempo's OUSD", () => {
+  it("lists no Tempo mainnet", () => {
+    expect(Object.hasOwn(MAINNET_MANIFEST.chains, "tempo")).toBe(false);
+    expect(Object.values(MAINNET_MANIFEST.chains).some((c) => c.rail === "tempo" || c.chainId === 4217)).toBe(false);
+  });
+
+  it("has one mainnet for each testnet pair, on the same rail with the same token symbol and decimals", () => {
     expect(Object.keys(MAINNET_MANIFEST.chains).sort()).toEqual(Object.keys(PAIRS).sort());
     for (const [key, c] of Object.entries(MAINNET_MANIFEST.chains)) {
       const testnet = KNOWN_NETWORKS.find((n) => n.key === PAIRS[key])!;
-      // Tempo mainnet budgets and payments are in OUSD, Moderato's in pathUSD, which its sellers and faucet use.
-      const symbol = key === "tempo" ? "OUSD" : testnet.token.symbol;
-      expect({ rail: c.rail, symbol: c.token.symbol, decimals: c.token.decimals }, key).toEqual({ rail: testnet.rail, symbol, decimals: testnet.token.decimals });
+      expect({ rail: c.rail, symbol: c.token.symbol, decimals: c.token.decimals }, key).toEqual({ rail: testnet.rail, symbol: testnet.token.symbol, decimals: testnet.token.decimals });
     }
   });
 
@@ -62,7 +65,6 @@ describe("the shipped mainnet manifest", () => {
     expect(MAINNET_MANIFEST.chains.base.token).toMatchObject({ address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, domain: { name: "USD Coin", version: "2" } });
     expect(MAINNET_MANIFEST.chains.robinhood.token).toMatchObject({ symbol: "USDG", address: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168", domain: { name: "Global Dollar", version: "1" } });
     expect(MAINNET_MANIFEST.chains.solana).toMatchObject({ caip2: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", genesisHash: "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d" });
-    expect(MAINNET_MANIFEST.chains.tempo).toMatchObject({ chainId: 4217, token: { symbol: "OUSD", address: "0x20c0000000000000000000006a37DA5C996874BE", decimals: 6 } });
   });
 
   it("leaves the chain tables as they were while the switch is off: testnets only", () => {
@@ -71,7 +73,7 @@ describe("the shipped mainnet manifest", () => {
     expect(KNOWN_NETWORKS.every((n) => n.testnet === true)).toBe(true);
     expect(mainnetChains(undefined, OFF)).toEqual([]);
     expect(mainnetChains(undefined, ON).map(([k]) => k)).toEqual(Object.keys(MAINNET_MANIFEST.chains));
-    expect(mainnetChains("tempo", ON).map(([k]) => k)).toEqual(["tempo"]);
+    expect(mainnetChains("tempo", ON)).toEqual([]);
   });
 
   it("refuses Base at the gate in a testnet-only run, with the flag named", () => {
