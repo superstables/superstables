@@ -1,8 +1,8 @@
 // The one place that knows chains: every chain `pay` can pay on, with the token it pays in there and what a browser
 // wallet needs to add the chain. Each chain belongs to one rail (src/core/rails/): x402 exact on the EVM chains, MPP
-// tempo.charge on Tempo, x402 exact on Solana. The testnets are always here; the mainnets of the mainnet manifest
-// (./mainnet-manifest.js) are here only while the operator turns mainnet on (SUPERSTABLES_ALLOW_MAINNET, chain-gate.js).
-// A chain this table does not name is refused before anything is signed.
+// tempo.charge on Tempo, x402 exact on Solana. The testnets are always here, and signed on only in a testnet-only run
+// (--testnet, chain-gate.js); the mainnets of the mainnet manifest (./mainnet-manifest.js) are here unless the run is
+// testnet-only. A chain this table does not name is refused before anything is signed.
 //
 // The seven EVM chains are the budget's (budget/evm/chains.mjs, its own program with its own build); a test checks that
 // this table agrees with that one field by field.
@@ -11,9 +11,9 @@ import { verifiedRpc } from "./rpc.js";
 import { finalityFor, SOLANA_DEVNET_GENESIS } from "./finality-policy.js";
 import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
-import { mainnetSwitchRefusal } from "./chain-gate.js";
+import { mainnetOffReason } from "./chain-gate.js";
 import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
-import { MAINNET_MARK, mainnetChains, type MainnetChain } from "./mainnet-policy.js";
+import { MAINNET_MARK, mainnetChains, testnetRun, type MainnetChain } from "./mainnet-policy.js";
 
 export type Rail = "evm" | "tempo" | "solana";
 
@@ -89,7 +89,7 @@ function evm(input: {
   key: string;
   chainId: number;
   label: string;
-  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on a mainnet only while the operator has turned mainnet on. */
+  /** Whether the chain is a testnet. Stated by each entry: the chain gate (./chain-gate.js) signs on a testnet only in a testnet-only run, and on a mainnet only outside one. */
   testnet: boolean;
   v1Name?: string;
   rpc: string;
@@ -235,8 +235,8 @@ export const ROBINHOOD_TESTNET: EvmNetwork = evm({
 const EVM_TESTNETS: readonly EvmNetwork[] = [BASE_SEPOLIA, ARC_TESTNET, ARBITRUM_SEPOLIA, POLYGON_AMOY, SKALE_BASE_SEPOLIA, ETHEREUM_SEPOLIA, ROBINHOOD_TESTNET];
 
 /**
- * The EVM mainnets of the mainnet manifest (./mainnet-manifest.js), built like every other entry, while the operator's
- * switch is on (SUPERSTABLES_ALLOW_MAINNET); none while it is off, so the table then holds testnets only. A chain listed
+ * The EVM mainnets of the mainnet manifest (./mainnet-manifest.js), built like every other entry; none in a
+ * testnet-only run (--testnet), so the table then holds testnets only. A chain listed
  * here is still signed on only when the chain gate allows it, on every signature.
  */
 const EVM_MAINNETS: readonly EvmNetwork[] = mainnetChains("evm").map(([key, c]) => evm({
@@ -254,7 +254,7 @@ const EVM_MAINNETS: readonly EvmNetwork[] = mainnetChains("evm").map(([key, c]) 
   logRange: c.logRange,
 }));
 
-/** The seven x402 EVM testnets, in the budget's order, then the mainnets while the operator's switch is on. */
+/** The seven x402 EVM testnets, in the budget's order, then the mainnets unless the run is testnet-only. */
 export const EVM_NETWORKS: readonly EvmNetwork[] = [...EVM_TESTNETS, ...EVM_MAINNETS];
 
 /** How each EVM entry above is built (it refuses an entry with a fact missing); for tests. Not part of the SDK. */
@@ -301,7 +301,7 @@ export const SOLANA_DEVNET: SolanaNetwork = {
   wallet: { chainName: "Solana devnet", nativeCurrency: { name: "SOL", symbol: "SOL", decimals: 9 }, walletChain: "solana:devnet" },
 };
 
-/** Tempo mainnet from the mainnet manifest, while the operator's switch is on. */
+/** Tempo mainnet from the mainnet manifest, unless the run is testnet-only. */
 const TEMPO_MAINNETS: readonly TempoNetwork[] = mainnetChains("tempo").map(([key, c]): TempoNetwork => ({
   rail: "tempo",
   key,
@@ -318,7 +318,7 @@ const TEMPO_MAINNETS: readonly TempoNetwork[] = mainnetChains("tempo").map(([key
   wallet: { chainName: c.label, nativeCurrency: { ...c.nativeCurrency } },
 }));
 
-/** Solana mainnet from the mainnet manifest, while the operator's switch is on. */
+/** Solana mainnet from the mainnet manifest, unless the run is testnet-only. */
 const SOLANA_MAINNETS: readonly SolanaNetwork[] = mainnetChains("solana").map(([key, c]: [string, MainnetChain]): SolanaNetwork => ({
   rail: "solana",
   key,
@@ -336,9 +336,9 @@ const SOLANA_MAINNETS: readonly SolanaNetwork[] = mainnetChains("solana").map(([
   wallet: { chainName: c.label, nativeCurrency: { ...c.nativeCurrency }, walletChain: c.walletChain },
 }));
 
-/** Tempo Moderato, then Tempo mainnet while the operator's switch is on. */
+/** Tempo Moderato, then Tempo mainnet unless the run is testnet-only. */
 export const TEMPO_NETWORKS: readonly TempoNetwork[] = [TEMPO_MODERATO, ...TEMPO_MAINNETS];
-/** Solana devnet, then Solana mainnet while the operator's switch is on. */
+/** Solana devnet, then Solana mainnet unless the run is testnet-only. */
 export const SOLANA_NETWORKS: readonly SolanaNetwork[] = [SOLANA_DEVNET, ...SOLANA_MAINNETS];
 
 /**
@@ -352,11 +352,12 @@ for (const n of [...TEMPO_NETWORKS, ...SOLANA_NETWORKS]) {
   if (problem) throw new Error(`chain table: ${n.key}: ${problem}`);
 }
 
-export const DEFAULT_NETWORK = BASE_SEPOLIA;
+/** The chain used when none is named: Base, or Base Sepolia in a testnet-only run (and when the mainnet manifest is invalid, so no mainnet is held). */
+export const DEFAULT_NETWORK: EvmNetwork = (!testnetRun() && EVM_MAINNETS.find((n) => n.key === "base")) || BASE_SEPOLIA;
 
 /**
- * Mainnets a seller may name, so a refusal says what it is while the operator's switch is off (the table above then holds
- * testnets only). With the switch on, the ones the mainnet manifest lists are in the table, and resolve there first.
+ * Mainnets a seller may name, so a refusal says what it is in a testnet-only run (the table above then holds testnets
+ * only). Otherwise the ones the mainnet manifest lists are in the table, and resolve there first.
  */
 const MAINNETS: Record<string, string> = {
   "eip155:8453": "Base (mainnet)",
@@ -378,9 +379,9 @@ const MAINNETS: Record<string, string> = {
   solana: "Solana (mainnet)",
 };
 
-/** Why a chain named as a mainnet is not paid on: the mainnet switch says so, or (switch on) the chain tables hold no such chain. */
+/** Why a chain named as a mainnet is not paid on: the run is testnet-only, or the chain tables hold no such chain. */
 export function mainnetUnsupported(mainnet: string): string {
-  const off = mainnetSwitchRefusal();
+  const off = mainnetOffReason();
   return `chain ${mainnet} is not supported: ${off || "it is a mainnet, and the chain tables hold no entry for it"}`;
 }
 
@@ -389,7 +390,7 @@ export function mainnetName(name: string): string | undefined {
   return MAINNETS[name] ?? MAINNETS[name.toLowerCase()];
 }
 
-/** Resolves a CAIP-2 id or a v1 vernacular name to a known chain (a mainnet only while the switch is on), or undefined. */
+/** Resolves a CAIP-2 id or a v1 vernacular name to a known chain (a mainnet only outside a testnet-only run), or undefined. */
 export function networkFor(name: string): NetworkInfo | undefined {
   if (!name) return undefined;
   return KNOWN_NETWORKS.find((n) => n.caip2 === name || (n.v1Name !== "" && n.v1Name === name));

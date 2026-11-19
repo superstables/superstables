@@ -64,7 +64,7 @@ const crashHandler = async (err) => {
 crashHandler[RAIL_CRASH_HANDLER] = true;
 process.on("uncaughtException", crashHandler);
 
-/** Whether this process runs on a testnet (Solana devnet). Any other chain only passes the chain gate (../../src/core/chain-gate.js) while the operator's switch is on. */
+/** Whether this process runs on a testnet (Solana devnet). Any other chain only passes the chain gate (../../src/core/chain-gate.js) unless the run is testnet-only (--testnet). */
 export const TESTNET = CHAIN.testnet;
 // SUPERSTABLES_SOLANA_RPC replaces the chain's RPC URL for reads (tests point it at a local fake; you can point it at your own node).
 // https, or http on this computer only (../rpc.mjs): anything else is ignored here with a warning, and the dispatcher refuses
@@ -120,7 +120,7 @@ const solanaGate = () => CHAIN_PROBLEM || chainGate({ rail: "solana", key: CHAIN
 }
 
 /**
- * Why nothing may be signed or sent on this chain at this moment, or "": the operator's switch, the manifest and the pause,
+ * Why nothing may be signed or sent on this chain at this moment, or "": the network mode, the manifest and the pause,
  * read again. Ask it right before an agent key signs and right before a signature leaves (a testnet always passes).
  */
 export function mainnetClosed() {
@@ -137,8 +137,8 @@ export const AGENT_KEY_PATH = agentKeyFile("solana");
 export const PUBLIC_PATH = publicFile("solana", CHAIN.key);
 export const OPS_DIR = opsDir("solana", CHAIN.key);
 export { CHAIN };
-/** What a command line that names this rail adds to name this chain: nothing on devnet, the default. */
-export const CHAIN_FLAG = CHAIN.key === "devnet" ? "" : ` --chain ${CHAIN.key}`;
+/** What a command line that names this rail adds to name this chain: --testnet on devnet; nothing on Solana, the default. */
+export const CHAIN_FLAG = CHAIN.testnet ? " --testnet" : "";
 /** What to do about too little SOL or USDC, then `then`: a faucet on devnet; on a mainnet the owner adds them, there is no faucet. */
 export const getSolHint = (then) => (CHAIN.faucet ? `get devnet SOL (faucet.solana.com), then ${then}` : `the owner adds SOL to the wallet, then ${then}`);
 export const getUsdcHint = (then) => (CHAIN.faucet ? `get devnet USDC from faucet.circle.com (Solana devnet), then ${then}` : `the owner adds USDC to the wallet, then ${then}`);

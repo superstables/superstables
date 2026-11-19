@@ -217,7 +217,7 @@ describe("owner-binding: legacy, retired and the key file", () => {
     expect(hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" })).toBe(" --hosted --site http://127.0.0.1:4000");
     expect(hostedFlags({ APPROVALS: "hosted" })).toBe("");
     expect(hostedFlags({ SITE: "http://127.0.0.1:4000" })).toBe("");
-    expect(legacyWarning("evm", "F", agentA, hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" }))).toContain("run superstables budget setup --rail evm --hosted --site http://127.0.0.1:4000 again");
+    expect(legacyWarning("evm", "F", agentA, hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" }))).toContain("run superstables budget setup --rail evm --testnet --hosted --site http://127.0.0.1:4000 again");
   });
 
   it("a retired agent is refused even with a valid signature; a retired.json that is not JSON is refused", async () => {
@@ -419,7 +419,7 @@ describe("evm: the PoC and its neighbours", () => {
     const recover = await budget(["recover", "--rail", "evm"]);
     expect(recover.code, recover.stdout + recover.stderr).toBe(3);
     expect(recover.result).toMatchObject({ state: "refused_precheck" });
-    expect(recover.result.next).toContain("superstables budget revoke --rail evm");
+    expect(recover.result.next).toContain("superstables budget revoke --rail evm --testnet");
   }, 90_000);
 
   it("an edited owner with the signature kept is refused: the signature is by the old owner", async () => {
@@ -490,15 +490,15 @@ describe("evm: the PoC and its neighbours", () => {
     write(evmPublic(), `${read(evmPublic())}APPROVALS=hosted\nSITE=${site.url}\n`, 0o644);
     const flags = `--hosted --site ${site.url}`;
     const out = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--no-open", "--timeout", "10"]);
-    expect(out.stderr).toContain(`run superstables budget setup --rail evm ${flags} again`);
+    expect(out.stderr).toContain(`run superstables budget setup --rail evm --testnet ${flags} again`);
     const again = await budget(["setup", "--rail", "evm", "--no-open", "--timeout", "10"]);
-    expect(said(again)).toContain(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail evm ${flags} records it from the site's owner proof`);
+    expect(said(again)).toContain(`no owner signature naming agent ${agent} is recorded yet: superstables budget setup --rail evm --testnet ${flags} records it from the site's owner proof`);
     edit(evmPublic(), /^B4_AGENT_ADDRESS=.*$/m, `B4_AGENT_ADDRESS=${DEAD}`);
     write(evmAgent(), "", 0o600);
     rmSync(evmAgent());
     write(evmPublic(), `${read(evmPublic())}SETUP_MESSAGE=x\n`, 0o644);
     const refused = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--no-open", "--timeout", "10"]);
-    expect(refused.result.next).toContain(`run superstables budget setup --rail evm ${flags} where the agent key is, to record the owner's signature again`);
+    expect(refused.result.next).toContain(`run superstables budget setup --rail evm --testnet ${flags} where the agent key is, to record the owner's signature again`);
   }, 120_000);
 
   it("a setup re-run with another owner key on a legacy file is refused and changes nothing", async () => {

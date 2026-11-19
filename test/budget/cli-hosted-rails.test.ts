@@ -120,7 +120,7 @@ describe("tempo, hosted", () => {
     const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(/a budget is live/);
-    expect(r.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo, approved by ${OWNER}), then superstables budget setup --rail tempo --hosted --site ${site.url} --new-owner`);
+    expect(r.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --testnet, approved by ${OWNER}), then superstables budget setup --rail tempo --testnet --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(0);
   }, 60_000);
 
@@ -132,7 +132,7 @@ describe("tempo, hosted", () => {
     const r = await budget(["setup", "--rail", "tempo", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", owner: OWNER });
-    expect(r.result.next).toContain(`superstables budget setup --rail tempo --hosted --site ${site.url} --new-owner`);
+    expect(r.result.next).toContain(`superstables budget setup --rail tempo --testnet --hosted --site ${site.url} --new-owner`);
     expect([readFileSync(file("keys", "budget", "tempo-agent.env"), "utf8"), publicOf("tempo")]).toEqual(before);
   }, 60_000);
 
@@ -403,7 +403,7 @@ describe("solana, hosted", () => {
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(/a budget is live/);
-    expect(r.result.next).toBe(`revoke first (superstables budget revoke --rail solana, approved by ${SOL_OWNER}), then superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
+    expect(r.result.next).toBe(`revoke first (superstables budget revoke --rail solana --testnet, approved by ${SOL_OWNER}), then superstables budget setup --rail solana --testnet --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(0);
   }, 60_000);
 
@@ -415,7 +415,7 @@ describe("solana, hosted", () => {
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", owner: SOL_OWNER });
-    expect(r.result.next).toContain(`superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
+    expect(r.result.next).toContain(`superstables budget setup --rail solana --testnet --hosted --site ${site.url} --new-owner`);
     expect([readFileSync(file("keys", "budget", "solana-agent.env"), "utf8"), publicOf("solana")]).toEqual(before);
   }, 60_000);
 
@@ -456,8 +456,8 @@ describe("solana, hosted", () => {
   }, 180_000);
 
   it.each([
-    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then\. The SOL transfer is final once its transaction is finalized$/],
-    ["grant only", ["--grant", "0.05"], /^landed, not finalized yet: superstables budget status --rail solana later shows when the grant is final\. Do not rely on the budget until then$/],
+    ["grant and SOL", ["--grant", "0.05", "--fund"], /^landed, not finalized yet: superstables budget status --rail solana --testnet later shows when the grant is final\. Do not rely on the budget until then\. The SOL transfer is final once its transaction is finalized$/],
+    ["grant only", ["--grant", "0.05"], /^landed, not finalized yet: superstables budget status --rail solana --testnet later shows when the grant is final\. Do not rely on the budget until then$/],
     ["SOL only", ["--fund"], /^landed, not finalized yet: the SOL transfer is final once its transaction is finalized\. Start the next owner command only then$/],
   ])("setup --hosted with the transactions only confirmed (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     solana.confirmationStatus = "confirmed";
@@ -681,7 +681,7 @@ describe("solana, hosted", () => {
     const r = await budget(["setup", "--rail", "solana", "--hosted", "--site", site.url, "--grant", "0.05"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(new RegExp(`already belongs to an account on .* \\(${SOL_OWNER}\\).*nothing was sent`));
-    expect(r.result.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
+    expect(r.result.next).toMatch(/superstables budget fund-agent --rail solana --testnet, then superstables budget grant --rail solana --testnet --amount A/);
   }, 60_000);
 });
 

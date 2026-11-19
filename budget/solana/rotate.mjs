@@ -56,7 +56,7 @@ const refuse = (reason, next) => {
 /**
  * The public files of Solana chains other than devnet that name an agent. Rotation replaces the one agent key on every chain, and
  * its steps (revoke, sweep, set up) run on devnet here, so a mainnet budget would be left standing on the old key: rotate refuses
- * while one is set up, and never skips it silently. Read whether or not the operator's switch is on.
+ * while one is set up, and never skips it silently. Read in either kind of run.
  */
 function mainnetBudgetFiles() {
   let names;

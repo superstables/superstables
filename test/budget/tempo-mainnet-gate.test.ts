@@ -11,27 +11,29 @@ const charge = (chainId: number) => ({
   recipient: "0x2222222222222222222222222222222222222222", methodDetails: { chainId },
 });
 
-it.each([undefined, "1", "true", "yes"])("Tempo precheck consults the mainnet switch (%s)", (value) => {
-  vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", value);
+// The process runs on Moderato (the chain table's default with --testnet); each value is the network mode at the check.
+it.each(["1", "", "false", "yes"])("Tempo precheck consults the network mode (%s)", (value) => {
+  vi.stubEnv("SUPERSTABLES_TESTNET", value);
   const r = precheckCharge(charge(4217), { maxBase: 1000n });
   expect(r).toMatchObject({ ok: false, code: "wrong_chain" });
   if (r.ok) throw new Error("mainnet must remain unsupported");
-  expect(r.reason).toContain(value === "1" || value === "true" ? "not Tempo Moderato" : "SUPERSTABLES_ALLOW_MAINNET");
+  expect(r.reason).toContain(value === "" || value === "false" ? "not Tempo Moderato" : value === "yes" ? 'SUPERSTABLES_TESTNET is "yes"' : "testnet-only");
   if (value === "yes") expect(r.reason).toContain('is "yes"');
   expect(precheckCharge(charge(99999), { maxBase: 1000n })).toMatchObject({ reason: "chainId 99999 is not Tempo Moderato (42431)" });
   expect(precheckCharge(charge(42431), { maxBase: 1000n })).toMatchObject({ ok: true });
 });
 
-it.each([undefined, "1", "true", "yes"])("Tempo preflight consults the mainnet switch (%s)", async (value) => {
+// Moderato named explicitly: without --testnet the process would run on Tempo mainnet.
+it.each(["1", "yes"])("Tempo preflight consults the network mode (%s)", async (value) => {
   const seller = await startServer((_req, res) => {
     const request = Buffer.from(JSON.stringify(charge(4217))).toString("base64url");
     res.writeHead(402, { "www-authenticate": `Payment method="tempo", intent="charge", request="${request}"` });
     res.end();
   });
   try {
-    const r = await guardedNode(["--import", "tsx", fileURLToPath(new URL("../../budget/tempo/preflight.ts", import.meta.url)), "--url", seller.url], { SUPERSTABLES_ALLOW_MAINNET: value });
-    expect(r.code, r.output).toBe(1);
-    expect(r.output).toContain(value === "1" || value === "true" ? "no tempo.charge offer on Moderato" : "SUPERSTABLES_ALLOW_MAINNET");
+    const r = await guardedNode(["--import", "tsx", fileURLToPath(new URL("../../budget/tempo/preflight.ts", import.meta.url)), "--url", seller.url], { SUPERSTABLES_TESTNET: value });
+    expect(r.code, r.output).toBe(value === "yes" ? 3 : 1);
+    expect(r.output).toContain(value === "1" ? "testnet-only" : "SUPERSTABLES_TESTNET");
     if (value === "yes") expect(r.output).toContain('is \\"yes\\"');
   } finally {
     await seller.close();

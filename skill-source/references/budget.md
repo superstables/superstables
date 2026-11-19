@@ -4,7 +4,7 @@
 
 Auto recovery (`buy` on `evm` and `solana`, a budget set up with `--hosted`): when the seller's terms cannot be read and the owner's recovery policy on the site is on, the client may pay the same seller on another chain, and the `RESULT` carries `recovery` saying so. Rerun the same `buy` with the same `--op` to read the order's outcome; on `unknown` with `final: false`, never pay again for that order.
 
-The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Testnet-first. On a testnet: test tokens. Set up a budget on a mainnet only when the owner asks for that mainnet and the operator's switch is on (SKILL.md's safety rule 7).
+The owner approves a spending cap once, in their own wallet. You then buy from sellers with no approval per purchase, until the cap is spent or the owner revokes it. The chain enforces the cap, and no Superstables service is in the path of a purchase. You hold only the agent key. Mainnet by default; a testnet budget needs `--testnet` and uses test tokens (SKILL.md's safety rule 7).
 
 ## Contents
 
@@ -52,11 +52,11 @@ Without `--hosted` the owner approves on a page on your machine instead, with no
 
 | `--rail` | `--chain` | Token | Sellers | Budget on chain |
 | --- | --- | --- | --- | --- |
-| `evm` | `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia`, `robinhood-testnet`; mainnets `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood` | USDC (USDG on `robinhood-testnet` and `robinhood`) | x402 | An ERC-20 allowance (`approve`) from the owner to the agent key |
-| `tempo` | `moderato`; mainnet `tempo` | pathUSD | MPP (`tempo` charge) | A keychain access key with a limit |
-| `solana` | `devnet`; mainnet `solana` | USDC | x402 | An SPL token delegate on the owner's USDC account |
+| `evm` | `base` (default), `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`; with `--testnet`, `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia`, `robinhood-testnet` | USDC (USDG on `robinhood-testnet` and `robinhood`) | x402 | An ERC-20 allowance (`approve`) from the owner to the agent key |
+| `tempo` | `tempo`; with `--testnet`, `moderato` | pathUSD | MPP (`tempo` charge) | A keychain access key with a limit |
+| `solana` | `solana`; with `--testnet`, `devnet` | USDC | x402 | An SPL token delegate on the owner's USDC account |
 
-The mainnets are taken only while the operator's switch is on, and only when the owner asked for that mainnet (SKILL.md's safety rule 7). A mainnet has no faucet: the owner adds the tokens, and the gas token on `evm` and `solana`, to their own wallet. Its agent key must be in the OS keychain: `superstables budget setup --rail R --chain C --key-store os-keychain`.
+A mainnet has no faucet: the owner adds the tokens, and the gas token on `evm` and `solana`, to their own wallet. Its agent key must be in the OS keychain: `superstables budget setup --rail R --chain C --key-store os-keychain`.
 
 | | `evm` | `tempo` | `solana` |
 | --- | --- | --- | --- |

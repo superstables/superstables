@@ -721,7 +721,7 @@ export class ApprovalServer {
    * be taken back; the payment core keeps any signature it returns and never sends it (pay.ts).
    */
   /**
-   * On a mainnet page, the refusal body when signing has closed since the page opened (the operator's switch is off, the
+   * On a mainnet page, the refusal body when signing has closed since the page opened (the run is testnet-only, the
    * manifest changed or mainnet is paused): the approval ends as refused. Undefined while it is open, and on a testnet.
    */
   private mainnetClosed(record: ApprovalRecord, what: string): { error: string; status: string; reason: string } | undefined {

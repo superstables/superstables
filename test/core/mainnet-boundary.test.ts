@@ -10,7 +10,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The tables are built as their modules load: the switch must be on before then.
-vi.hoisted(() => { process.env.SUPERSTABLES_ALLOW_MAINNET = "1"; });
+vi.hoisted(() => { process.env.SUPERSTABLES_TESTNET = ""; });
 
 vi.mock("../../src/core/mainnet-manifest.js", () => ({
   MAINNET_MANIFEST: {
@@ -68,7 +68,7 @@ beforeEach(() => {
   homes.push(h);
   vi.stubEnv("SUPERSTABLES_HOME", h);
   vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "");
-  vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "1");
+  vi.stubEnv("SUPERSTABLES_TESTNET", "");
   // "testmain" has one made-up RPC: its verdicts are taken as decidable here, as an owner's own node would make them.
   setPrerequisiteCheck("verdictRpc", () => true);
 });
@@ -111,9 +111,9 @@ describe("a manifest chain with the switch on", () => {
   });
 
   it("refuses at the next signature once the switch is off, without asking the key", async () => {
-    vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "0");
+    vi.stubEnv("SUPERSTABLES_TESTNET", "1");
     const { signer, asked } = countedSigner();
-    await refusedWith(signer.sign(request(0.1, 3)), /^mainnet is off: /);
+    await refusedWith(signer.sign(request(0.1, 3)), /^this run is testnet-only \(--testnet\), so mainnets are off/);
     expect(asked()).toBe(0);
   });
 });
@@ -139,7 +139,8 @@ describe("the pause at the local key signer and at sending", () => {
     expect(asked()).toBe(0);
   });
 
-  it("never stops a testnet", async () => {
+  it("never stops a testnet in a testnet-only run", async () => {
+    vi.stubEnv("SUPERSTABLES_TESTNET", "1");
     vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "1");
     writeFileSync(join(h, MAINNET_PAUSE_FILE), "");
     const { signer, asked } = countedSigner();
@@ -268,6 +269,7 @@ describe("the approval page (browser signer)", () => {
   });
 
   it("a testnet page still lets the owner switch accounts", async () => {
+    vi.stubEnv("SUPERSTABLES_TESTNET", "1");
     const signer = pageSigner();
     try {
       const { links, endings } = await open(signer, request(1, 87, BASE_SEPOLIA));
@@ -365,10 +367,10 @@ describe("a budget owner page on a mainnet", () => {
   it("refuses at the first step once the operator's switch is off", async () => {
     const { server, handle } = await page();
     try {
-      vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "0");
+      vi.stubEnv("SUPERSTABLES_TESTNET", "1");
       const account = await post(`${handle.url}/account`, { address: OWNER });
       expect(account.status).toBe(409);
-      expect(String(account.body.error)).toMatch(/^mainnet is off: /);
+      expect(String(account.body.error)).toMatch(/^this run is testnet-only \(--testnet\), so mainnets are off/);
     } finally {
       await server.close();
     }

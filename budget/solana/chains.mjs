@@ -1,10 +1,10 @@
-// The Solana chains a budget can be on, plain data: Solana devnet, the testnet (default), and Solana mainnet, which the
-// table holds only while the operator's switch is on (SUPERSTABLES_ALLOW_MAINNET, ../../src/core/mainnet-policy.js) and
-// takes its facts from the mainnet manifest. The dispatcher names the chain in SUPERSTABLES_BUDGET_CHAIN (--chain devnet or
+// The Solana chains a budget can be on, plain data: Solana mainnet (the default), which the table holds unless the run is
+// testnet-only (--testnet, ../../src/core/mainnet-policy.js) and which takes its facts from the mainnet manifest, and
+// Solana devnet, the testnet (the default in a testnet-only run). The dispatcher names the chain in SUPERSTABLES_BUDGET_CHAIN (--chain devnet or
 // --chain solana). A chain this table does not hold sets CHAIN_PROBLEM, and every Solana script refuses on it as it loads
 // (lib.mjs), before it reads a key or asks an RPC anything. The dispatcher imports this file too, so a bad value never
 // stops it here.
-import { mainnetChains } from "../../src/core/mainnet-policy.js";
+import { mainnetChains, mainnetOffReason, testnetRun } from "../../src/core/mainnet-policy.js";
 import { SOLANA_DEVNET_GENESIS } from "../../src/core/finality-policy.js";
 
 /** The variable the dispatcher names the Tempo or Solana budget chain in. */
@@ -31,10 +31,11 @@ for (const [key, c] of mainnetChains("solana")) {
   };
 }
 export const SOLANA_CHAIN_KEYS = Object.keys(SOLANA_CHAINS);
-export const SOLANA_DEFAULT_CHAIN = "devnet";
+/** The chain when --chain is not given: Solana, or devnet in a testnet-only run (--testnet). */
+export const SOLANA_DEFAULT_CHAIN = testnetRun() ? "devnet" : "solana";
 
 const named = process.env[CHAIN_ENV]?.trim() || SOLANA_DEFAULT_CHAIN;
 /** Why this process must not run a Solana script, or "": SUPERSTABLES_BUDGET_CHAIN names a chain the table does not hold. */
-export const CHAIN_PROBLEM = Object.hasOwn(SOLANA_CHAINS, named) ? "" : `${CHAIN_ENV} names "${named.slice(0, 40)}", which is not a Solana chain this process holds (${SOLANA_CHAIN_KEYS.join(", ")}); a mainnet is there only while the operator's switch is on`;
+export const CHAIN_PROBLEM = Object.hasOwn(SOLANA_CHAINS, named) ? "" : `${CHAIN_ENV} names "${named.slice(0, 40)}", which is not a Solana chain this process holds (${SOLANA_CHAIN_KEYS.join(", ")})${mainnetOffReason() ? `; ${mainnetOffReason()}` : ""}`;
 /** The chain this process runs on: SUPERSTABLES_BUDGET_CHAIN, or devnet when it is unset. Under CHAIN_PROBLEM, devnet's facts, never used to sign. */
 export const CHAIN = CHAIN_PROBLEM ? SOLANA_CHAINS.devnet : SOLANA_CHAINS[named];

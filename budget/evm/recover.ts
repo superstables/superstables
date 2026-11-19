@@ -35,6 +35,7 @@ import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, scanJournals, sweepBlockers, atomicUsdc, type Journal, type SweepBlockers } from "./ops.ts";
 import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, allowanceAgreed, finalityOf, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
+import { evmChainFlags } from "./chains.mjs";
 
 const plan = flag("plan");
 const opId = arg("op") ? checkOpId(arg("op")!) : undefined;
@@ -197,7 +198,7 @@ try {
   const reverted = (e as { txHash?: Hex }).txHash;
   const reason = `recover stopped at the gas step: ${oneLine(e instanceof Error ? e.message : String(e), 300)}`.slice(0, 300);
   console.log(`${reverted ? "FAILED" : "UNKNOWN"}: ${reason}`);
-  const doctor = `superstables budget doctor --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`;
+  const doctor = `superstables budget doctor --rail evm${evmChainFlags(CFG.key)}`;
   process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", ...(reverted ? { proof: "reverted" } : {}), op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));
 }
 

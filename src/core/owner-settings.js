@@ -39,12 +39,12 @@ export const OWNER_SETTINGS_UNREADABLE = "OWNER_SETTINGS_UNREADABLE";
 export const RPC_CHAIN_KEYS = Object.freeze([
   "base-sepolia", "arc-testnet", "arbitrum-sepolia", "polygon-amoy", "skale-base-sepolia", "ethereum-sepolia", "robinhood-testnet",
   "tempo-moderato", "solana-devnet",
-  // The mainnets, while the operator's switch is on: an owner's own node is how SKALE Base, with one public operator, decides a verdict.
+  // The mainnets, unless the run is testnet-only (--testnet): an owner's own node is how SKALE Base, with one public operator, decides a verdict.
   ...mainnetChains().map(([key]) => key),
 ]);
 /**
- * The chain keys a settings file may name an RPC for: RPC_CHAIN_KEYS and every mainnet of the manifest, whatever the
- * operator's switch says now. A file the owner wrote while mainnet was on stays readable after it is turned off.
+ * The chain keys a settings file may name an RPC for: RPC_CHAIN_KEYS and every mainnet of the manifest, whatever
+ * kind of run this is. A file the owner wrote for a mainnet stays readable in a testnet-only run.
  */
 const RPC_FILE_KEYS = Object.freeze([...new Set([...RPC_CHAIN_KEYS, ...Object.keys(shippedManifest().chains)])]);
 export const MAX_RPC_URLS = 5;

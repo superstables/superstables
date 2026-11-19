@@ -1,6 +1,6 @@
 import { finalityFor } from "../finality-policy.js";
 import { inclusion } from "../finality.js";
-// The MPP tempo.charge rail on Tempo (Moderato, and Tempo mainnet while the operator's switch is on), push mode: the
+// The MPP tempo.charge rail on Tempo (Moderato, and Tempo mainnet unless the run is testnet-only (--testnet)), push mode: the
 // owner's own wallet sends one pathUSD transferWithMemo, with the memo bound to the seller's challenge, and the seller is
 // then shown the transaction's hash. Pinned in code: the Tempo chains of the chain table and their pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
 // chain or token, a split between several recipients, the zero address or the token as recipient, the machine-token route, a memo of the seller's own, a seller that will not take a payment
@@ -162,10 +162,10 @@ interface RpcLog {
 
 /**
  * The Tempo chain a payment is on: the one its facts name, or undefined when this process's table does not hold it (a
- * mainnet payment read while the operator's switch is off). Never another chain in its place.
+ * mainnet payment read in a testnet-only run). Never another chain in its place.
  */
 const networkOf = (facts: Pick<PaymentFacts, "network">): TempoNetwork | undefined => tempoNetworkFor(facts.network);
-const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only while the operator's switch is on), so it was not read`;
+const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only outside a testnet-only run), so it was not read`;
 
 /** The RPC a Tempo chain is read through, after it has said it is that chain. */
 const primaryRpc = (network: TempoNetwork, options: ChainReadOptions) => verifiedRpc(network, options);

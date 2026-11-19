@@ -1,8 +1,8 @@
 // The mainnet manifest: every mainnet this client knows, one entry per testnet pair it already pays on, with the facts
 // signing and reading need and where each fact comes from. It is data only. ./mainnet-policy.js checks it whole, and
 // the chain tables (src/core/chain.ts, budget/evm/chains.mjs) and the RPC table (./rpc-endpoints.mjs) build their
-// mainnet entries from it while the operator's switch is on (SUPERSTABLES_ALLOW_MAINNET, ./chain-gate.js). While the
-// switch is off, no table holds a mainnet and every mainnet is refused, as in a build without this file.
+// mainnet entries from it unless the run is testnet-only (--testnet, ./mainnet-policy.js). In a testnet-only run no
+// table holds a mainnet and every mainnet is refused, as in a build without this file.
 //
 //   rail         "evm" (x402 exact, EIP-3009), "tempo" (MPP tempo.charge) or "solana" (x402 exact on SVM)
 //   chainId      the EIP-155 id; 0 on Solana, whose cluster is its genesis hash

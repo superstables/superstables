@@ -8,8 +8,8 @@
 //   budget   superstables budget preflight (signs nothing; prints the price and payTo), then
 //            superstables budget buy, on every rail (evm, tempo, solana).
 //
-// The ways come from the listing's routes, which name a mainnet only while the operator's switch is
-// on: with it off, a mainnet listing gets no command at all. A listing several ways can pay gets each: buy once, then pay, then budgets.
+// The ways come from the listing's routes, which name only the kind of chain this run uses: in a
+// testnet-only run (--testnet) a mainnet listing gets no command at all, and otherwise a testnet one gets none. A listing several ways can pay gets each: buy once, then pay, then budgets.
 
 import type { BudgetRoute, ServiceListing } from "../core/types.js";
 import { shellWord } from "./outcome.js";

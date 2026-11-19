@@ -294,7 +294,7 @@ describe("hosted approvals", () => {
       expect(err).toBeInstanceOf(HostedRefusal);
       expect(err.message).toMatch(/already belongs to the account .*but this machine has no record of the add-agent request that added it.*nothing was recorded or sent\. The owner removes it on their .* account page and adds it again/);
       expect(err.next).toMatch(/remove this agent from their account.*the owner adds the agent again and signs a new owner proof/);
-      expect(err.next).toContain(`superstables budget setup --rail evm --hosted --site ${site.url} again`);
+      expect(err.next).toContain(`superstables budget setup --rail evm --testnet --hosted --site ${site.url} again`);
     });
 
     it("refused with --new-owner, even with a valid proof", async () => {
@@ -1030,7 +1030,7 @@ describe("hosted approvals on tempo and solana", () => {
     const err = await intent(solana(), "grant", "1").catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(new RegExp(`would ask ${SOL_OTHER} to approve this, but the owner recorded on this machine is ${SOL_OWNER}.*nothing was sent`));
-    expect(err.next).toContain(`superstables budget setup --rail solana --hosted --site ${site.url} --new-owner`);
+    expect(err.next).toContain(`superstables budget setup --rail solana --testnet --hosted --site ${site.url} --new-owner`);
     expect(site.requests[0].state).toBe("cancelled");
     // the same letters in another case are another Solana address
     const swapped = SOL_OWNER.replace(/[a-z]/, (c) => c.toUpperCase());
@@ -1088,9 +1088,9 @@ describe("hosted approvals on tempo and solana", () => {
     const err = await solana().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: [{ kind: "grant", solana: { amount_atomic: "1" } }] }).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
     expect(err.message).toMatch(new RegExp(`already belongs to an account on .* \\(${SOL_OWNER}\\)`));
-    expect(err.next).toMatch(/superstables budget fund-agent --rail solana, then superstables budget grant --rail solana --amount A/);
+    expect(err.next).toMatch(/superstables budget fund-agent --rail solana --testnet, then superstables budget grant --rail solana --testnet --amount A/);
     expect(err.next).toContain(`the site reports that this agent already belongs to an account`);
-    expect(err.next).toContain(`setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup --rail solana --hosted --site ${site.url} asks them to add it again and sign a new owner proof`);
+    expect(err.next).toContain(`setup cannot take the site's word for it: the owner removes the agent on that account's page on the site, then superstables budget setup --rail solana --testnet --hosted --site ${site.url} asks them to add it again and sign a new owner proof`);
   });
 
   it("tempo: links and asks for the exact keychain transaction, signed EIP-191 as on evm", async () => {
@@ -1112,7 +1112,7 @@ describe("hosted approvals on tempo and solana", () => {
     site.linked = { [AGENT.toLowerCase()]: OWNER };
     const err = await tempo().request({ kind: "connect", terms: TERMS, timeoutMs: 60_000, then: [{ kind: "grant", transaction: { to: KEYCHAIN, data: "0x980a6025", value: "0x0" } }] }).catch((e) => e);
     expect(err).toBeInstanceOf(HostedRefusal);
-    expect(err.next).toMatch(/A budget is a separate owner step: superstables budget grant --rail tempo --amount A/);
+    expect(err.next).toMatch(/A budget is a separate owner step: superstables budget grant --rail tempo --testnet --amount A/);
     expect(err.next).not.toMatch(/fund-agent/);
   });
 });

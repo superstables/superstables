@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
-import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_CHAINS, evmChainFlags } from "./chains.mjs";
 import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc, evmEnvNameSet } from "../rpc.mjs";
 import { HOME, agentKeyFile, ensurePrivateDir, publicFile, opsDir } from "../paths.mjs";
 import { readAgentSecret } from "../os-keychain.mjs";
@@ -337,7 +337,7 @@ export class ChainRefused extends Error {
 }
 
 /**
- * On a mainnet, throws ChainRefused when the operator's switch, the manifest or the pause has closed it since the command
+ * On a mainnet, throws ChainRefused when the network mode, the manifest or the pause has closed it since the command
  * started; read right before each signature, broadcast and paid request. A testnet always passes.
  */
 export function assertMainnetOpen(what: string, signed = false): void {
@@ -641,7 +641,7 @@ export function readCtx(): Pub {
   const p = publicEnv();
   const owner = p.B4_OWNER_ADDRESS, agent = p.B4_AGENT_ADDRESS;
   if (!owner || !agent || !isAddress(owner) || !isAddress(agent)) {
-    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
+    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${evmChainFlags(CFG.key)} first)`);
     process.exit(1);
   }
   return {
@@ -748,11 +748,11 @@ export async function ownerPlanCtx({ retiredOk = false }: { retiredOk?: boolean 
   const b = await agentBinding("evm", { owner: pub.owner, agent: pub.agent, lines: publicEnv() }, { keyAgent, file: PUBLIC_ENV, retiredOk, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true });
   if (b.state === "refused") return refusePlan(pub, b.problem);
   noteBinding(b); // the page this plan opens says whether the owner signed this agent
-  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${hostedFlags(publicEnv())}`));
+  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${evmChainFlags(CFG.key)}${hostedFlags(publicEnv())}`));
   return pub;
 }
 function refusePlan(pub: Pub, problem: string): never {
   console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
-  const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+  const chainFlag = evmChainFlags(CFG.key);
   process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason: problem, agent: pub.agent, next: `check ${PUBLIC_ENV}: run superstables budget setup --rail evm${chainFlag}${hostedFlags(publicEnv())} where the agent key is, to record the owner's signature again. The owner can still end the allowance from any machine: superstables budget revoke --rail evm${chainFlag}` }));
 }

@@ -229,8 +229,8 @@ for (const make of [solanaRail, tempoRail]) {
       expect(blocked.result).toMatchObject({ owner: r.C });
       expect(blocked.result.reason).toMatch(/a budget is live/);
       expect(blocked.result.next).toBe(r.name === "solana"
-        ? `ask the owner ${r.C} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU), using a tool that supports the SPL Token Revoke instruction; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail solana --new-owner`
-        : `ask the owner ${r.C} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${r.agent}, using a tool that can call AccountKeychain.revokeKey(${r.agent}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail tempo --new-owner`);
+        ? `ask the owner ${r.C} to sign a transaction in their wallet on Solana devnet that removes the agent's spending permission from their associated USDC token account (mint 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU), using a tool that supports the SPL Token Revoke instruction; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail solana --testnet --new-owner`
+        : `ask the owner ${r.C} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${r.agent}, using a tool that can call AccountKeychain.revokeKey(${r.agent}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail tempo --testnet --new-owner`);
       // and revoke refuses rather than report on the public file's owner ("already revoked", "never authorized")
       const revoke = await budget(["revoke", "--rail", r.name, "--wait", "--no-open"]);
       expect(revoke.code, revoke.stderr).toBe(3);
@@ -283,7 +283,7 @@ describe("tempo setup --agent: a new key for the owner on record only", () => {
     const refused = await budget(["setup", "--rail", "tempo", "--agent", "2"]);
     expect(refused.code, refused.stderr).toBe(3);
     expect(refused.result.reason).toMatch(/^the owner files disagree/);
-    expect(refused.result.next).toBe("superstables budget setup --rail tempo --new-owner records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --agent 2");
+    expect(refused.result.next).toBe("superstables budget setup --rail tempo --testnet --new-owner records one owner again (refused while a budget is live on either), then superstables budget setup --rail tempo --testnet --agent 2");
     expect(read(r.agentFile)).toBe(r.agentText(r.C));
     write(r.agentFile, r.agentText());
     // signed with the recorded owner's key file: without one, setup leaves an approval page waiting for the owner's signature
@@ -324,7 +324,7 @@ describe("tempo --new-owner: every key the agent file holds, by the address of i
     tempo.keys.set(`${r.A.toLowerCase()}:${extra.toLowerCase()}`, { expiry: BigInt(Math.floor(Date.now() / 1000) + 86400), limit: 1n, period: 0n, periodEnd: 0n, revoked: false, scoped: false });
     const out = await setup(r, "--new-owner", "--owner-key-file", r.ownerKey("B"));
     expect(out.code, out.stderr).toBe(3);
-    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --agent 2, approved by ${r.A}), then superstables budget setup --rail tempo --new-owner`);
+    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --testnet --agent 2, approved by ${r.A}), then superstables budget setup --rail tempo --testnet --new-owner`);
   }, 60_000);
 });
 
@@ -428,7 +428,7 @@ describe("tempo --new-owner: every recorded key, by the public file's labels too
     const out = await setup(r, "--new-owner", "--owner-key-file", r.ownerKey("B"));
     expect(out.code, out.stderr).toBe(3);
     expect(out.result.reason).toMatch(new RegExp(`access key ${extra} is authorized on the recorded owner ${r.A}`));
-    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --agent 2, approved by ${r.A}), then superstables budget setup --rail tempo --new-owner`);
+    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --testnet --agent 2, approved by ${r.A}), then superstables budget setup --rail tempo --testnet --new-owner`);
     expect(owned(read(r.publicFile), r, r.A)).toBe(true);
   }, 60_000);
 
@@ -443,7 +443,7 @@ describe("tempo --new-owner: every recorded key, by the public file's labels too
     const out = await budget(["setup", "--rail", "tempo", "--agent", "2"]);
     expect(out.code, out.stderr).toBe(3);
     expectReason(out, `${r.publicFile} already records the access key ${extra} under the label 2, and ${r.agentFile} holds no key for it; setup --agent never replaces a recorded key`);
-    expect(out.result.next).toBe(`pick another label (superstables budget setup --rail tempo --agent OTHER). If ${extra} may still hold a budget, revoke it: superstables budget revoke --rail tempo --agent 2, approved by ${r.A}`);
+    expect(out.result.next).toBe(`pick another label (superstables budget setup --rail tempo --testnet --agent OTHER). If ${extra} may still hold a budget, revoke it: superstables budget revoke --rail tempo --testnet --agent 2, approved by ${r.A}`);
     expect(read(r.publicFile)).toBe(pub);
     expect(read(r.agentFile)).toBe(agentBefore);
     const moved = await setup(r, "--new-owner", "--owner-key-file", r.ownerKey("B"));
@@ -464,7 +464,7 @@ describe("tempo --new-owner: every recorded key, by the public file's labels too
     liveOn(r.A, extra);
     const out = await setup(r, "--new-owner", "--owner-key-file", r.ownerKey("B"));
     expect(out.code, out.stderr).toBe(3);
-    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --agent ops_team, approved by ${r.A}), then superstables budget setup --rail tempo --new-owner`);
+    expect(out.result.next).toBe(`revoke it first (superstables budget revoke --rail tempo --testnet --agent ops_team, approved by ${r.A}), then superstables budget setup --rail tempo --testnet --new-owner`);
     // and a wrong address line under that label is caught too
     write(r.agentFile, `${r.agentText(r.A)}AGENTops_team_PRIVATE_KEY=${extraKey}\nAGENTops_team_ADDRESS=${r.C}\n`);
     const wrong = await setup(r, "--new-owner", "--owner-key-file", r.ownerKey("B"));
@@ -478,7 +478,7 @@ describe("tempo --new-owner: every recorded key, by the public file's labels too
     const extra = privateKeyToAddress(extraKey);
     write(r.agentFile, `${r.agentText(r.A)}AGENT2_PRIVATE_KEY=${extraKey}\nAGENT2_ADDRESS=${extra}\n`);
     liveOn(r.A, extra);
-    const wallet = `ask the owner ${r.A} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${extra}, using a tool that can call AccountKeychain.revokeKey(${extra}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail tempo --new-owner`;
+    const wallet = `ask the owner ${r.A} to sign a transaction in their wallet on Tempo Moderato that revokes access key ${extra}, using a tool that can call AccountKeychain.revokeKey(${extra}) at ${KEYCHAIN}; superstables budget revoke acts only for the owner in the public file, and refuses while the two files disagree. Then superstables budget setup --rail tempo --testnet --new-owner`;
     // the public file has no AGENT2_ADDRESS, or another address under it: revoke --agent 2 would not reach this key
     for (const pub of [r.publicText(r.A), `${r.publicText(r.A)}AGENT2_ADDRESS=${r.C}\n`]) {
       write(r.publicFile, pub, 0o644);

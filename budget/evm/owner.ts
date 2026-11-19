@@ -8,7 +8,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { rpcFacts } from "../page-facts.mjs";
-import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_CHAINS, evmChainFlags } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor, requestFact } from "../owner-page.ts";
@@ -37,8 +37,8 @@ export const OWNER_CHAIN: OwnerChain = {
   nativeCurrency: { name: GAS.symbol, symbol: GAS.symbol, decimals: GAS.decimals },
   testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true,
 };
-/** A flag for next-step commands: nothing on the default chain. */
-export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+/** The flags for next-step commands: --testnet on a testnet, --chain unless it is the default of its kind. */
+export const chainFlag = evmChainFlags(CFG.key);
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
 

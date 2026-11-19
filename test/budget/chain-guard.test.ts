@@ -55,14 +55,14 @@ describe("Robinhood Chain in the budget", () => {
     for (const chain of MAINNET) {
       const flag = script(["--chain", chain]);
       expect(flag.code, chain).toBe(3);
-      expect(flag.result, chain).toMatchObject({ ok: false, state: "refused_precheck", reason: expect.stringMatching(/is a mainnet, and mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/) });
+      expect(flag.result, chain).toMatchObject({ ok: false, state: "refused_precheck", reason: expect.stringMatching(/is a mainnet, and this run is testnet-only \(--testnet\), so mainnets are off/) });
       const env = script([], { B4_CHAIN: chain });
       expect(env.code, `B4_CHAIN=${chain}`).toBe(3);
     }
   }, 60_000); // one process per EVM script and per mainnet name, twice: every new script adds spawns
 
   it("with SUPERSTABLES_ALLOW_MAINNET=1 Robinhood Chain is a chain of the table, the guard stops refusing by name, and an unknown chain is still bad input", () => {
-    const on = { SUPERSTABLES_ALLOW_MAINNET: "1" };
+    const on = { SUPERSTABLES_TESTNET: "" };
     const s = script(["--chain", "robinhood"], on);
     expect(s.stderr).not.toMatch(/is a mainnet/);
     expect(s.stderr).not.toMatch(/unknown chain/);
@@ -98,7 +98,7 @@ describe("Robinhood Chain in the budget", () => {
 
 describe("the EVM mainnets with SUPERSTABLES_ALLOW_MAINNET=1", () => {
   // A dead RPC on this computer: a script that gets past the gate fails to read the chain, and nothing leaves this machine.
-  const on = { SUPERSTABLES_ALLOW_MAINNET: "1", B4_RPC_BASE: "http://127.0.0.1:9", B4_RPC_SKALE_BASE: "http://127.0.0.1:9" };
+  const on = { SUPERSTABLES_TESTNET: "", B4_RPC_BASE: "http://127.0.0.1:9", B4_RPC_SKALE_BASE: "http://127.0.0.1:9" };
   const evm = (name: string, args: string[], env: Record<string, string> = {}) => run(process.execPath, [resolve(BUNDLE, `evm/${name}.mjs`), ...args], { ...on, ...env });
   const KEYCHAIN = /the agent key kept in the OS keychain, not as plain text/;
   const GATE = /not ready for mainnet signing|mainnet is off|is a mainnet|does not sign on/;

@@ -15,7 +15,7 @@ import type { PaymentTerms } from "../types.js";
 import type { Challenge, RawAccept } from "../x402.js";
 import type { ChainReadOptions, Judged, Offer, PaymentFacts, SignedFacts, X402Rail } from "./types.js";
 
-/** The EVM chains `pay` signs on: the EVM testnets, and their mainnets while the operator's switch is on (chain.ts). */
+/** The EVM chains `pay` knows: the EVM testnets (signed on only with --testnet), and the mainnets unless the run is testnet-only (chain.ts). */
 const NETWORKS = EVM_NETWORKS;
 /**
  * The longest window a seller may offer (as on superstables.com). Until the authorization's validBefore it can still move

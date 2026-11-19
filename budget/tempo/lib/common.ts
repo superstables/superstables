@@ -32,8 +32,8 @@ export const CHAIN_ID: number = CHAIN_ID_
 /** The viem chain of CHAIN: the one object every client here is made with (a client made with only `testnet` picks by that flag). */
 export const VIEM_CHAIN = CHAIN.chainId === tempoModerato.id ? tempoModerato : tempoMainnet
 if (VIEM_CHAIN.id !== CHAIN.chainId) throw new Error(`the chain table says ${CHAIN.key} is chain ${CHAIN.chainId}, but viem's chain for it is ${VIEM_CHAIN.id}`)
-/** ` --chain tempo` on a mainnet, '' on Moderato (the default): added to every command a message tells the owner to run. */
-export const CHAIN_FLAG = CHAIN.testnet ? '' : ` --chain ${CHAIN.key}`
+/** ` --testnet` on Moderato, '' on Tempo (the default): added to every command a message tells the owner to run. */
+export const CHAIN_FLAG = CHAIN.testnet ? ' --testnet' : ''
 
 // pathUSD: Tempo's protocol-level reference USD stablecoin. Fixed address on
 // every Tempo chain (mainnet and testnets share the same precompile-style
@@ -286,7 +286,7 @@ export function tempoGate(): string {
 }
 
 /**
- * On a mainnet, throws when the operator's switch, the manifest or the pause has closed it since the command started: read
+ * On a mainnet, throws when the network mode, the manifest or the pause has closed it since the command started: read
  * right before each signature by the agent key and each broadcast. `signed`: something was already signed, and it stays on
  * this computer. A testnet always passes.
  */
@@ -309,7 +309,7 @@ export const isMainnetClosed = (err: unknown): boolean => mainnetClosedError(err
   const problem = CHAIN_PROBLEM || tempoGate()
   if (problem) {
     console.error(`REFUSED: ${problem}. Nothing was signed or sent.`)
-    console.log(`RESULT ${JSON.stringify({ ok: false, command: SCRIPT, rail: 'tempo', chain: CHAIN_PROBLEM ? oneLine(process.env[CHAIN_ENV], 40) : CHAIN.key, state: 'refused_precheck', reason: problem, next: CHAIN_PROBLEM ? 'nothing was signed or sent; use --chain moderato, or ask the operator about a mainnet' : CHAIN.testnet ? 'nothing was signed or sent' : SCRIPT === 'setup' && /OS keychain/.test(problem) ? `nothing was signed or sent; the key is kept in the OS keychain only: superstables budget setup --rail tempo${CHAIN_FLAG} --key-store os-keychain` : 'nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs' })}`)
+    console.log(`RESULT ${JSON.stringify({ ok: false, command: SCRIPT, rail: 'tempo', chain: CHAIN_PROBLEM ? oneLine(process.env[CHAIN_ENV], 40) : CHAIN.key, state: 'refused_precheck', reason: problem, next: CHAIN_PROBLEM ? 'nothing was signed or sent; use --chain tempo, or --testnet for Moderato' : CHAIN.testnet ? 'nothing was signed or sent; run it again with --testnet if the owner asked for a testnet' : SCRIPT === 'setup' && /OS keychain/.test(problem) ? `nothing was signed or sent; the key is kept in the OS keychain only: superstables budget setup --rail tempo${CHAIN_FLAG} --key-store os-keychain` : 'nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs' })}`)
     process.exit(3)
   }
 }

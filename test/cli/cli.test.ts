@@ -875,11 +875,11 @@ describe("quote against a local seller on Base mainnet", () => {
   });
 
   it("with the operator's switch on, names the network as a mainnet, as a testnet quote says (testnet)", async () => {
-    const r = await run(["quote", `${seller.url}/paid/intel`], { SUPERSTABLES_ALLOW_MAINNET: "1" });
+    const r = await run(["quote", `${seller.url}/paid/intel`], { SUPERSTABLES_TESTNET: "" });
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/^\s*price\s+0\.05 USDC/m);
     expect(r.stdout).toMatch(/^\s*network\s+Base \(mainnet\)$/m);
-    const quote = JSON.parse((await run(["quote", `${seller.url}/paid/intel`, "--json"], { SUPERSTABLES_ALLOW_MAINNET: "1" })).stdout) as { terms: { network: string } };
+    const quote = JSON.parse((await run(["quote", `${seller.url}/paid/intel`, "--json"], { SUPERSTABLES_TESTNET: "" })).stdout) as { terms: { network: string } };
     expect(quote.terms.network).toBe("eip155:8453");
   });
 
@@ -889,7 +889,7 @@ describe("quote against a local seller on Base mainnet", () => {
     expect(r.stdout).not.toMatch(/^\s*network\s+Base/m);
   });
 
-  it.each([["off", {}], ["on", { SUPERSTABLES_ALLOW_MAINNET: "1" }]] as const)(
+  it.each([["off", {}], ["on", { SUPERSTABLES_TESTNET: "" }]] as const)(
     "on a testnet, with the switch %s, says (testnet) and nothing about mainnet",
     async (_label, env) => {
       const r = await run(["quote", `${testnet.url}/paid/intel`], env);
@@ -1042,7 +1042,7 @@ describe("find against a local index", () => {
 
   it("with the operator's switch on, hides a mainnet listing without parameters as a testnet one is hidden, and says why", async () => {
     const on = (...args: string[]) =>
-      run(["find", "zzqx", ...args], { SUPERSTABLES_INDEX_URL: `${index.url}/api/v1/services`, SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_ALLOW_MAINNET: "1" });
+      run(["find", "zzqx", ...args], { SUPERSTABLES_INDEX_URL: `${index.url}/api/v1/services`, SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_TESTNET: "" });
     const table = await on();
     expect(table.code).toBe(0);
     // The mainnet row is pay: with params now, exactly like the three testnet rows, and none of them blames the switch.

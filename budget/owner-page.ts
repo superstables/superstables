@@ -256,10 +256,10 @@ async function settledOf<T extends { finish(v: OwnerVerdict): void; settled: Pro
 export function ownerPageFor(rail: OwnerRail) {
   /** The facts every page on this computer carries: the RPC hosts, the token, and the agent binding an owner plan noted. */
   const pageFacts = () => ({ ...rail.pageFacts?.(), binding: bindingFacts() });
-  /** What the link's sentence says about the network: test tokens on a testnet; the mainnet's name with (mainnet), which only the operator opens. */
+  /** What the link's sentence says about the network: test tokens on a testnet; the mainnet's name with (mainnet). */
   const moneyWords = rail.chain.testnet
-    ? "Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. This uses test tokens."
-    : `This is on ${rail.chain.chainName} (mainnet).\nOnly the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.`;
+    ? "This is a testnet: it uses test tokens."
+    : `This is on ${rail.chain.chainName} (mainnet).`;
   const inMinutes = (expiresAt: number) => {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);
     return minutes >= 1 ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${Math.round((expiresAt - Date.now()) / 1000)} seconds`;

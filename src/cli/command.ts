@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { isAddress, networkWords } from "../core/chain.js";
-import { mainnetSwitchRefusal } from "../core/chain-gate.js";
+import { TESTNET_FLAG, mainnetOffReason } from "../core/chain-gate.js";
 import { catalogue, findServices, getService, resolveRequest } from "../core/discovery.js";
 import {
   DEFAULT_DEMO_SERVICE_PORT,
@@ -93,7 +93,7 @@ import {
  */
 const usdcSources = (others: string) =>
   `on SKALE Base Sepolia, Base Sepolia test USDC bridged over the SKALE bridge; on Robinhood Chain Testnet, test USDG from https://faucet.paxos.com; on the other ${others}, https://faucet.circle.com (select the payment's chain). No gas is needed: the seller or its facilitator pays it.`;
-const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")} A mainnet, open only while the operator's switch is on, has no faucet: the wallet needs the real token there.`;
+const FAUCET_LINE = `Fund it with test USDC (USDG on Robinhood Chain Testnet) on the EVM chain you pay on: ${usdcSources("EVM chains")} A mainnet has no faucet: the wallet needs the real token there.`;
 
 /** How long the browser approval page gives the owner (BrowserWalletSigner's default). */
 const BROWSER_WINDOW_S = 300;
@@ -108,7 +108,7 @@ program
   .version(clientVersion(), "-V, --version", "print the version of this client and exit")
   .description(
     "Find services that charge per request, quote them, and pay them with stablecoins from a wallet " +
-      "the owner controls. Testnet by default. Mainnet is open only when the operator turns it on.",
+      "the owner controls. Mainnet by default; --testnet uses the testnets.",
   )
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
@@ -165,7 +165,7 @@ explain(
         console.log("For a payment on Solana devnet, use a Solana wallet such as Phantom instead.");
         console.log("");
         console.log(`Fund that account with test USDC (USDG on Robinhood Chain Testnet) on the chain you pay on: ${usdcSources("USDC chains")}`);
-        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself. A mainnet, open only while the operator's switch is on, has no faucet: the wallet needs the real token there.");
+        console.log("On Tempo Moderato it pays in test pathUSD, and the wallet pays the network fee itself. A mainnet has no faucet: the wallet needs the real token there.");
         console.log("");
         console.log("To use the local wallet process instead, run any command with `--wallet local`.");
       } else {
@@ -441,14 +441,14 @@ function unreachableNext(err: unknown): never {
 /**
  * Why the default filter (or --budget) hid some matching listings, in the client's words only. An index listing pay could
  * call once its request parameters are known (pay: with params) is named as such, on a testnet or a mainnet alike; the
- * operator's switch is given as an example only while it is off.
+ * example names the kind of chain this run leaves out.
  */
 function hiddenListingsNote(hidden: ServiceListing[], budget: boolean): string {
   const shown = (n: number) => `${n} matching ${n === 1 ? "listing is" : "listings are"} not shown`;
   const them = (n: number) => (n === 1 ? "it" : "them");
-  const example = mainnetSwitchRefusal()
-    ? "for example on a mainnet while the operator's switch is off, or not https"
-    : "for example not https, or on a chain or token this client does not pay";
+  const example = mainnetOffReason()
+    ? "for example on a mainnet in a testnet-only run, or not https"
+    : `for example on a testnet without ${TESTNET_FLAG}, or not https`;
   const all = `\`find --all\` lists ${them(hidden.length)} with the reason`;
   if (budget) return `${shown(hidden.length)} because no \`superstables budget\` rail could pay ${them(hidden.length)} (${example}); ${all}.`;
   // Only index rows go without parameters; a catalogue row pay could take is hidden for another reason (its payout, asset or scheme).
@@ -565,7 +565,7 @@ explain(
         "preflight` (signs nothing; prints the price and payTo), then `superstables budget buy --max <ceiling> " +
         "--pay-to <payTo> --op <new id>`. On tempo and solana there is no preflight: `buy` alone. Required " +
         "parameters are filled with an example value; index listings do not list theirs, so their URLs end in " +
-        "?<parameters>. While the operator's switch is off, a mainnet listing gets no command.",
+        "?<parameters>. A listing gets commands only on the kind of chain this run uses (testnets need --testnet).",
       LISTING_TEXT_NOTE,
     ],
     money: "no. It reads listings and asks each built-in service for its price, unpaid.",
@@ -748,7 +748,7 @@ explain(
         "the request there, so approving it afterwards signs nothing.",
       "Chains: x402 with test USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base " +
         "Sepolia, Ethereum Sepolia and Solana devnet, and with test USDG on Robinhood Chain Testnet; MPP with test " +
-        "pathUSD on Tempo Moderato. While the operator's switch is on, also their mainnets. The wallet signs on " +
+        "pathUSD on Tempo Moderato, with --testnet. Without it, their mainnets. The wallet signs on " +
         "the EVM chains and Solana, and pay submits what it signed. On Tempo the owner's wallet sends the payment " +
         "itself: pay records that before the wallet is asked, reads the owner's transaction on chain, and only then " +
         "calls the seller. Once the wallet has been asked to send, an attempt that ends without a transaction report " +

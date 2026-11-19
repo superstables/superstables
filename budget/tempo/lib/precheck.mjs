@@ -1,10 +1,10 @@
 // Pre-signing checks for a purchase (contract rule 4). Pure: no network, no keys. A refusal here means
 // nothing was signed, pulled or sent.
 import { CHAIN, CHAIN_ID, TOKEN_ADDRESS, TOKEN_DECIMALS, TOKEN_LABEL } from './constants.mjs'
-import { mainnetSwitchRefusal } from '../../../src/core/chain-gate.js'
+import { mainnetOffReason } from '../../../src/core/chain-gate.js'
 import { mainnetEntry } from '../../../src/core/mainnet-policy.js'
 
-// The Tempo mainnet's chain id, from the mainnet manifest: a seller that offers it while the switch is off is told so.
+// The Tempo mainnet's chain id, from the mainnet manifest: a seller that offers it in a testnet-only run is told so.
 const MAINNET_CHAIN_ID = mainnetEntry('tempo')?.chainId
 
 /** mppx's payment-memo tag: the first 4 bytes of keccak256("mpp"). Every purchase memo starts with it (chain.ts mppMemo). */
@@ -58,7 +58,7 @@ export function precheckCharge(request, opts) {
   }
   if (Number(details.chainId) !== CHAIN_ID) {
     if (MAINNET_CHAIN_ID !== undefined && Number(details.chainId) === MAINNET_CHAIN_ID && CHAIN.testnet) {
-      const off = mainnetSwitchRefusal()
+      const off = mainnetOffReason()
       if (off) return refuse('wrong_chain', off)
     }
     return refuse('wrong_chain', `chainId ${details.chainId} is not ${CHAIN.label} (${CHAIN_ID})`)

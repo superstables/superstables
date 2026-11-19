@@ -40,7 +40,7 @@ Table columns: `id`, `name`, `price`, `chains`, `pay` (`yes`, `with params` when
 - `with a budget, evm on CHAIN`: `superstables budget preflight --rail evm --chain CHAIN --url URL`, then `superstables budget buy --rail evm --chain CHAIN --url URL --max <ceiling> --pay-to <payTo> --op <new id>`.
 - `with a budget, tempo on moderato` or `solana on devnet`: the same two commands with `--rail tempo` or `--rail solana`; a seller that takes POST needs the same `--method` and `--body` on both.
 
-A listing on several testnets gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. While the operator's switch is off, a mainnet listing gets no command; while it is on, it gets the same commands with its mainnet chain, and you run them only when the owner asked for that mainnet (SKILL.md's safety rule 7). Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
+A listing on several chains gets one entry per rail and chain. The URL has each required parameter filled with its example value; an index listing's URL ends in `?<parameters>`, since the index does not record them. A listing gets commands only on the kind of chain the run uses: mainnets by default, testnets with `--testnet` (SKILL.md's safety rule 7). Replace every `<...>` placeholder before running a command: `<ceiling>` is the most the owner accepts for one purchase, `<payTo>` is the address `preflight` prints, `<new id>` is a fresh purchase id.
 
 Each `services[]` entry in `--json`:
 
@@ -75,9 +75,9 @@ When several listings can answer the request:
 | `routes.pay: true` and `actionable: true` | `superstables quote --service ID --param k=v`, then `superstables pay QUOTE_ID` |
 | `routes.pay: true`, `actionable: false` (no params) | `superstables quote 'ENDPOINT?k=v'` with the parameters the seller documents, then `pay` |
 | `routes.budget: [{rail, chain}]` | `superstables budget buy --rail RAIL --chain CHAIN --url URL --max CEILING`, when a budget is live there |
-| Neither | This client cannot pay it (a mainnet while the operator's switch is off, or a protocol it does not speak). Say so |
+| Neither | This client cannot pay it (a testnet without `--testnet`, a mainnet with it, or a protocol it does not speak). Say so |
 
-With the switch on, a mainnet listing has `routes` like a testnet one, and `testnet: false`. Pay it only when the owner asked for that mainnet, and name the mainnet and the amount before the owner approves.
+A mainnet listing has `testnet: false`. Name the network and the amount before the owner approves.
 
 `routes` is a judgement from the listing's rails and chains. The seller still has to answer with an offer the payer accepts: `quote` or `preflight` confirms it.
 
@@ -85,9 +85,7 @@ With the switch on, a mainnet listing has `routes` like a testnet one, and `test
 
 ## Chain names
 
-Testnet by default. SUPERSTABLES_ALLOW_MAINNET is off by default.
-When the operator turns it on, every supported mainnet is open.
-Agents never set the variable. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`, `tempo` and `solana` are mainnets.
+Mainnet by default. The testnets in the first table need `--testnet`, which turns the mainnets off for that run. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`, `tempo` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |
 | --- | --- | --- |
@@ -101,7 +99,7 @@ Agents never set the variable. In the index, `base`, `arc`, `arbitrum`, `polygon
 | `solana-devnet` | yes (x402) | `solana`, `devnet` (x402) |
 | `tempo-moderato`, `moderato` (`eip155:42431`) | yes (MPP) | `tempo`, `moderato` (MPP only) |
 
-While the operator's switch is on, the mainnets route too, each by its key or its CAIP-2 id, and `pay` pays each of them:
+Without `--testnet`, the mainnets route, each by its key or its CAIP-2 id, and `pay` pays each of them:
 
 | Listing chain | Budget `--rail` and `--chain` |
 | --- | --- |
@@ -128,7 +126,7 @@ superstables quote 'https://seller.example/path?k=v'
 - It checks the terms against the spend policy and prints each rule (`kill_switch`, `deny`, `allow`, `stablecoins`, `caps.per_call`, `caps.per_day`). Without a policy file the starting defaults apply: it refuses a payment above 0.05 USDC and payments adding up to more than 1 USDC in a UTC day. The owner changes either in `policy.yaml`, or removes it by writing `null`.
 - The quote lasts 10 minutes and starts at most one payment. After that payment ends, however it ends, take a new quote.
 - `--json` prints the quote record: `id` (the quote id for `pay`; for example `superstables quote ... --json | jq -r .id`), `expiresAt`, `url`, `terms`, `requirement`, `policy` (`allowed`, `checks[]`), `next`.
-- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a mainnet while the operator's switch is off); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
+- Exit 0 quoted and allowed; 1 not a paid endpoint, unreachable, or no payment this client can make (for example a seller on a testnet without `--testnet`); 2 bad input; 3 quoted, but the policy refuses it. The policy belongs to the owner: do not edit it to get past a refusal.
 
 ## Pricing for a budget
 

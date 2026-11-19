@@ -9,7 +9,7 @@
 import { parseCli, urlCheck } from './lib/args.mjs'
 import { CHAIN, CHAIN_ID, TOKEN_LABEL, fromBaseUnits, oneLine } from './lib/common.ts'
 import { precheckCharge, tempoChargeChallenges } from './lib/precheck.ts'
-import { mainnetSwitchRefusal } from '../../src/core/chain-gate.js'
+import { mainnetOffReason } from '../../src/core/chain-gate.js'
 import { mainnetEntry } from '../../src/core/mainnet-policy.js'
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -49,7 +49,7 @@ async function main() {
   const onChain = offers.filter((o) => Number(o?.methodDetails?.chainId) === CHAIN_ID)
   if (!onChain.length) {
     if (CHAIN.testnet && mainnetEntry('tempo') && offers.some((o) => Number(o?.methodDetails?.chainId) === mainnetEntry('tempo')!.chainId)) {
-      const off = mainnetSwitchRefusal()
+      const off = mainnetOffReason()
       if (off) result('failed', { reason: off, next: 'this seller is on Tempo mainnet, which is off: ask the owner' })
     }
     const other = /method="tempo"/.test(header) ? `tempo offers only on another chain or another intent (a session or ${CHAIN.testnet ? 'mainnet' : 'testnet'})` : 'no MPP tempo offer at all'

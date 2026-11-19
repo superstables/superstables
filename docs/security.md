@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.4.1 makes testnet payments by default and refuses mainnet unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`, which opens every supported mainnet at once. This page says what each way to pay protects
+Superstables client 1.4.1 pays on mainnets by default; `--testnet` makes a run testnet-only, with test tokens. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:
@@ -249,9 +249,7 @@ fixed. Amounts are read as you wrote them, in plain decimal with at most six dec
 `1` or `0.05 USDC`. YAML would read `0x10` as 16 and `1e3` as 1000, so those spellings, and `.5`,
 `+1` or `-1`, stop payments in the same way, with the key named. The only limits that survive a
 compromised machine are the ones inside what you sign — the amount and the recipient in the
-authorization — and the balance of the account. Testnet by default.
-SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-supported mainnet is open.
+authorization — and the balance of the account. Mainnet by default; `--testnet` uses the testnets.
 
 The browser signer counts the daily cap from receipts and attempt records in this directory,
 including pending, in-flight and uncertain payments; the local wallet counts the authorizations in
@@ -288,10 +286,9 @@ not enforcement: an agent that runs as you can still edit the files, and in the 
 read the key that signs, so there the signature only makes an edit evident. The signature that
 matters is the one a wallet you keep apart from the agent makes.
 
-## Testnet by default
+## Mainnet by default
 
-SUPERSTABLES_ALLOW_MAINNET is off by default. When the operator turns it on, every
-supported mainnet is open.
+Every supported mainnet is open by default. `--testnet` (or `SUPERSTABLES_TESTNET=1`) makes a run testnet-only.
 
 `pay` supports nine testnets, each with one token pinned in the client: x402 `exact` with test
 USDC on Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum
@@ -305,18 +302,17 @@ chain and refuses, before anyone is asked, when it is not the one the table stat
 answers for another chain. When a testnet's RPC cannot be read, `pay` goes on without that check (a
 wrong domain only makes a signature that does not verify) and reads again on the next payment. A
 budget grant never approves over a live allowance on any token, and a token that needs its
-allowance set to 0 first is never granted through an approval site such as superstables.com. A requirement naming anything else is refused before anyone is asked, and so is every mainnet while the operator's switch is off.
+allowance set to 0 first is never granted through an approval site such as superstables.com. A requirement naming anything else is refused before anyone is asked, and so is every chain of the other kind than the run uses.
 
-Mainnet is off unless the operator turns it on. The switch is the environment variable `SUPERSTABLES_ALLOW_MAINNET`,
-read in one place. `1` or `true` turns it on. Unset, empty, `0` or `false` leave it off. Any other value, such as `yes`,
-`TRUE` or ` 1`, is an error that names the variable and refuses every mainnet: a guess would turn a typo into a silent no or
-an unintended yes, on a switch that guards money. Only the operator sets it, in their own environment. An agent never does,
-and a skill tells it so. With the switch on, the chain tables also list every mainnet in the mainnet manifest, and a
-mainnet passes when it meets the checks in [Mainnet](#mainnet): there is no per-chain approval and no cap beyond your own
-spend policy and budgets. Before anything is signed, offered to a wallet or sent, `quote`, `pay`, the approval page, the
-local wallet and every `superstables budget` command ask that check. While the switch is off, the chain tables list no
-mainnet, `quote` and `pay` refuse the offer, a budget command exits 3 before it reads a key file or the chain, and each
-refusal names `SUPERSTABLES_ALLOW_MAINNET`.
+A run uses one kind of chain. The mode is the environment variable `SUPERSTABLES_TESTNET`, read in one place; the CLI's
+`--testnet` sets it for the run and the processes it starts. `1` or `true` makes the run testnet-only. Unset, empty, `0` or
+`false` keep the default, mainnet. Any other value, such as `yes`, `TRUE` or ` 1`, is an error that names the variable and
+refuses every chain: a guess would turn a typo into real money or test tokens nobody meant. By default the chain tables list
+every mainnet in the mainnet manifest, and a mainnet passes when it meets the checks in [Mainnet](#mainnet): there is no
+per-chain approval and no cap beyond your own spend policy and budgets. Before anything is signed, offered to a wallet or
+sent, `quote`, `pay`, the approval page, the local wallet and every `superstables budget` command ask that check. A testnet
+is refused without `--testnet`, and each refusal names the flag. In a testnet-only run the chain tables list no mainnet,
+`quote` and `pay` refuse the offer, and a budget command exits 3 before it reads a key file or the chain.
 
 On Tempo the owner's wallet sends the payment itself, so the order is different. MPP sellers that
 split a price between recipients, set a memo of their own, accept only payments they submit
@@ -906,15 +902,14 @@ says "not supported", there is no command for it yet; do not move key files by h
 
 ## Mainnet
 
-This client signs on testnets by default. This section lists what has to be true before a chain that is not a testnet is
+This client signs on mainnets by default. This section lists what has to be true before a chain that is not a testnet is
 signed on, so that what the code enforces stays separate from what it does not.
 
 **What the code requires.** Every signature, wallet request and broadcast, in `pay` and in every `superstables budget` rail,
 passes one chain gate first. A chain whose table entry is not marked as a testnet is refused unless all of these hold:
 
-- **The operator allows mainnet.** `SUPERSTABLES_ALLOW_MAINNET` is `1` or `true` in the environment (see
-  [Testnet by default](#testnet-by-default)). It is off unless set, and no file sets it. It opens every mainnet in the
-  manifest at once.
+- **The run is not testnet-only.** No `--testnet`, and `SUPERSTABLES_TESTNET` unset, empty, `0` or `false` (see
+  [Mainnet by default](#mainnet-by-default)). Every mainnet in the manifest is open at once.
 - **The mainnet manifest states the chain.** The manifest (`src/core/mainnet-manifest.js`) lists each mainnet with its chain
   id, its token's address, decimals and signing domain, its public RPCs and its finality, each fact with its source. The chain
   table entry must state the same facts, and a manifest with one malformed fact closes every mainnet. It lists Base, Arc,
@@ -934,13 +929,12 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   `solana` (`--chain solana`). On `tempo` the mainnet agent keys have their own key file, which names the OS keychain and
   holds no key; `setup --key-store os-keychain` creates each key in the keychain before it writes the file.
 
-`buy-once` pays on Base, Arc and Robinhood Chain while the switch is on and mainnet is not paused, when superstables.com
+`buy-once` pays on Base, Arc and Robinhood Chain by default while mainnet is not paused, when superstables.com
 lists a service there. The owner signs on superstables.com and this client signs nothing, so the agent key and verdict RPC
-checks above do not apply to it. A mainnet purchase read after the switch is off keeps its chain: it is reported paid only
+checks above do not apply to it. A mainnet purchase read in a testnet-only run keeps its chain: it is reported paid only
 when this client reads the payment on that chain, and it is never read as a testnet purchase.
 
-While the switch is off, every budget command refuses a mainnet chain, `revoke` included. To revoke a mainnet budget then,
-the operator turns the switch on for that command, or the owner sets the allowance to 0 from their wallet on the chain itself.
+With `--testnet`, every budget command refuses a mainnet chain, `revoke` included: revoke a mainnet budget without it.
 
 **What is still outside the code.**
 

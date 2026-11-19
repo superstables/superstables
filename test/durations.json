@@ -147,7 +147,7 @@
  "test/core/log-windows.test.ts": 0.5,
  "test/core/look.test.ts": 0,
  "test/core/mainnet-prerequisites.test.ts": 0.3,
- "test/core/mainnet-switch.test.ts": 0,
+ "test/core/network-mode.test.ts": 0,
  "test/core/malformed-ids.test.ts": 0.2,
  "test/core/mismatch-recovery.test.ts": 0.4,
  "test/core/mpp.test.ts": 0,

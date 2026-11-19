@@ -21,7 +21,7 @@
 // (the RPC table, the keychain, the pause file) are used here. None of them opens a key file.
 import { dirname, basename, resolve } from "node:path";
 import { EVM_CHAINS, EVM_CHAIN_KEYS, EVM_DEFAULT_CHAIN } from "./chains.mjs";
-import { chainGate, mainnetSwitchRefusal } from "../../src/core/chain-gate.js";
+import { chainGate, mainnetOffReason } from "../../src/core/chain-gate.js";
 import "../../src/core/rpc-endpoints.mjs";
 import "../../src/core/mainnet-spend.js";
 import "../os-keychain.mjs";
@@ -71,9 +71,9 @@ if (argv.includes("--help") || argv.includes("-h")) {
   process.exit(0);
 }
 
-// Mainnet is off unless the operator sets SUPERSTABLES_ALLOW_MAINNET (chain-gate.js). While it is off (or holds an invalid value),
-// a mainnet named by --mainnet, --chain or B4_CHAIN (by name or chain id) is refused here, before anything else runs. While it
-// is on, the name goes on to chains.ts (an unknown chain exits 2) and to the chain gate below.
+// In a testnet-only run (--testnet, chain-gate.js), or while SUPERSTABLES_TESTNET holds an invalid value, a mainnet named
+// by --mainnet, --chain or B4_CHAIN (by name or chain id) is refused here, before anything else runs. Otherwise the name
+// goes on to chains.ts (an unknown chain exits 2) and to the chain gate below, which refuses a testnet without --testnet.
 const MAINNET_IDS = new Set(["1", "10", "56", "130", "137", "143", "146", "480", "999", "1329", "4663", "5042", "8453", "42161", "42220", "43114", "1187947933"]);
 const MAINNET_NAMES = new Set(["base", "arc", "ethereum", "eth", "optimism", "op", "polygon", "arbitrum", "avalanche", "bsc", "monad", "sei", "celo", "robinhood", "skale-base"]);
 const looksMainnet = (v) => {
@@ -82,7 +82,7 @@ const looksMainnet = (v) => {
 };
 const ci = argv.indexOf("--chain");
 const chainValue = ci >= 0 ? argv[ci + 1] : process.env.B4_CHAIN;
-const mainnetOff = mainnetSwitchRefusal();
+const mainnetOff = mainnetOffReason();
 if (mainnetOff && (argv.includes("--mainnet") || (chainValue && !String(chainValue).startsWith("--") && looksMainnet(chainValue)))) {
   const shown = argv.includes("--mainnet") ? "--mainnet" : String(chainValue);
   process.stderr.write(`REFUSED: "${shown}" is a mainnet, and ${mainnetOff}. Nothing was signed or sent (testnets: --chain ${EVM_CHAIN_KEYS.join(", ")}).\n`);
@@ -102,7 +102,7 @@ const movingToKeychain = scriptName === "setup" && argv.includes("--key-store") 
 const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token, agentKey: AGENT_KEY_SCRIPTS.has(scriptName) && !movingToKeychain }) : "";
 if (gate) {
   process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
-  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: gateEntry?.testnet === true ? "nothing was signed or sent; use a testnet chain" : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: gateEntry?.testnet === true ? "nothing was signed or sent; run it again with --testnet if the owner asked for a testnet" : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}\n`);
   process.exit(3);
 }
 

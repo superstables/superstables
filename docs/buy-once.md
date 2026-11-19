@@ -23,9 +23,8 @@ There are two ways:
   Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Tempo Moderato or Solana devnet. See
   [Single purchase on your machine](#approve-each-payment-on-this-computer-pay).
 
-**Testnet by default.** With the operator's switch on (`SUPERSTABLES_ALLOW_MAINNET=1`) and mainnet not paused,
-`buy-once` also pays on Base, Arc and Robinhood Chain when superstables.com lists a service there. On
-testnets the tokens are test USDC, USDG on Robinhood Chain Testnet, or pathUSD on
+**Mainnet by default.** While mainnet is not paused, `buy-once` pays on Base, Arc and Robinhood Chain when
+superstables.com lists a service there; the testnets need `--testnet`. On testnets the tokens are test USDC, USDG on Robinhood Chain Testnet, or pathUSD on
 Tempo Moderato. Use the [client install instructions](install.md). A command-capable agent initiates
 purchases using the skill or CLI, then shows the owner the exact approval link and terms. For
 requests on superstables.com, the owner approves and checks activity on the site; linked budget agents are
@@ -107,7 +106,7 @@ Single purchase requests made on superstables.com appear in the [site account](h
 | Solana devnet | x402 `exact`, test USDC | Signs one token transfer whose fee the seller's facilitator pays; the facilitator sends it |
 
 The client pins each chain's token, and on the EVM chains the token's signing domain. If the seller
-offers no payment option the client supports, or asks for a mainnet while the operator's switch is off, it is refused before the
+offers no payment option the client supports, or asks for a chain of the other kind than the run uses (`--testnet` or not), it is refused before the
 owner is asked. Local `pay` needs no account and no site.
 
 On Tempo Moderato the money moves when the wallet sends the transfer, before the seller is called.
@@ -135,7 +134,7 @@ per approval.
   facilitator that settles the payment pays it. On Tempo Moderato, test pathUSD from
   <https://docs.tempo.xyz/quickstart/faucet>, a little more than the price, because the wallet pays
   the network fee.
-- On a mainnet, open only while the operator's switch is on, there is no faucet: the wallet needs the
+- On a mainnet there is no faucet: the wallet needs the
   real token on that chain, at least the price.
 
 ### 1. Find a service (agent)

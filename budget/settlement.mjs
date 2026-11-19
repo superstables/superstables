@@ -74,7 +74,7 @@ export function settlementRpc(rail, chain) {
   const key = budgetChainKey(rail, chain);
   if (rail === "tempo") return rpcFromEnv("SUPERSTABLES_TEMPO_RPC", builtinRpc(rail, chain) ?? DEFAULT_RPC.tempo, "read", key).url;
   if (rail === "solana") return rpcFromEnv("SUPERSTABLES_SOLANA_RPC", builtinRpc(rail, chain) ?? DEFAULT_RPC.solana, "read", key).url;
-  // a chain the table does not hold now (a mainnet read while the operator's switch is off): nothing is read in its place
+  // a chain the table does not hold now (a mainnet read in a testnet-only run): nothing is read in its place
   if (chain !== undefined && !EVM_CHAINS[chain]) return undefined;
   return rpcFromEnv("B4_RPC", EVM_CHAINS[chain]?.rpc ?? EVM_CHAINS["base-sepolia"].rpc, "read", EVM_CHAINS[chain] ? key : "base-sepolia").url;
 }
@@ -90,7 +90,7 @@ const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.s
 export async function readSettlement({ rail, chain, tx, payer, payTo, asset, amount, notBefore, nonce, rpcUrl, deadline }) {
   if (!isNonce(nonce) || !payer) return { state: "unread", reason: "this purchase has no payment identity or payer to verify" };
   const url = rpcUrl ?? settlementRpc(rail, chain);
-  if (!url) return { state: "unread", reason: `${String(chain).slice(0, 40)} is not in this client's chain table now (a mainnet is there only while the operator's switch is on), so the chain was not read` };
+  if (!url) return { state: "unread", reason: `${String(chain).slice(0, 40)} is not in this client's chain table now (a mainnet is there only outside a testnet-only run), so the chain was not read` };
   // `deadline` (an absolute time, ms): every RPC call gets what is left of it at most, and none starts after it
   const rpc = (method, params) => {
     const left = deadline === undefined ? RPC_TIMEOUT_MS : Math.min(RPC_TIMEOUT_MS, deadline - Date.now());

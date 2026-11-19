@@ -1,6 +1,6 @@
 # Superstables plugin
 
-The Superstables plugin adds a skill, the connector at `https://mcp.superstables.com` and, in Claude Code, the commands `/superstables:setup` and `/superstables:status`. It helps an agent find services, read prices, request a single purchase and read a budget. The owner approves in their wallet. Testnet by default; only the operator turns mainnet on.
+The Superstables plugin adds a skill, the connector at `https://mcp.superstables.com` and, in Claude Code, the commands `/superstables:setup` and `/superstables:status`. It helps an agent find services, read prices, request a single purchase and read a budget. The owner approves in their wallet. Mainnet by default; the CLI uses testnets with `--testnet`.
 
 The [installation steps](https://github.com/superstables/superstables#the-plugin) cover Claude Code, Codex and Claude. The [install guide](https://github.com/superstables/superstables/blob/main/docs/install.md) covers the standalone skill and CLI.
 

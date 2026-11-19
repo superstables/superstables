@@ -63,7 +63,7 @@ export class LocalKeySigner implements Signer {
       nonce: typed.message.nonce as `0x${string}`,
     };
     const types = { TransferWithAuthorization: typed.types.TransferWithAuthorization };
-    // On a mainnet the operator's switch, the manifest and the pause are read again right before the key is asked.
+    // On a mainnet the network mode, the manifest and the pause are read again right before the key is asked.
     const closed = mainnetSendRefusal(network);
     if (closed) throw new SignRefused("policy", closed);
     const signature = await this.account.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });

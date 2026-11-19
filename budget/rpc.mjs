@@ -27,7 +27,7 @@ export const RPC_ENV = { evm: "B4_RPC", tempo: "SUPERSTABLES_TEMPO_RPC", solana:
 export const DEFAULT_RPC = { tempo: "https://rpc.moderato.tempo.xyz", solana: "https://api.devnet.solana.com" };
 /**
  * The built-in RPC of a budget rail and chain: the chain table's (evm/chains.mjs), else the first of the RPC table
- * (src/core/rpc-endpoints.mjs), which holds a Tempo or Solana mainnet only while the operator's switch is on. undefined for
+ * (src/core/rpc-endpoints.mjs), which holds a Tempo or Solana mainnet only unless the run is testnet-only (--testnet). undefined for
  * a chain neither table holds: nothing is read in its place.
  */
 export function builtinRpc(rail, chain) {
@@ -154,7 +154,7 @@ export function customRpc(rail, chain) {
 
 /**
  * The endpoints that decide a budget EVM verdict (allowance 0, a pull that reverted, nothing found, an authorization
- * that can no longer settle). A mainnet (one the operator's switch put in the table) never takes the single-operator
+ * that can no longer settle). A mainnet (a mainnet the table holds) never takes the single-operator
  * branch: it needs two operators or the owner's own node. The environment URL is the primary only: it joins the
  * confirming set when it is one of the built-in endpoints.
  */
