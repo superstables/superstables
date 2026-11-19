@@ -449,8 +449,8 @@ can still move money: waiting for the owner within its approval window, or signe
 resolved (an EVM authorization until its `validBefore` and two minutes; a Tempo transfer, which has
 no expiry, or a Solana transaction until `superstables status` resolves it on chain). That includes
 a payment with a receipt the chain has not confirmed (the seller's report) or has contradicted: it
-counts on the receipt's day and, once a day, on later days on the same terms. USDC, pathUSD and USDG count together, one for one, as dollars; the
-default `stablecoins` list is `[USDC, pathUSD, USDG]`, and a policy that lists USDC only refuses the others.
+counts on the receipt's day and, once a day, on later days on the same terms. USDC, pathUSD, OUSD and USDG count together, one for one, as dollars; the
+default `stablecoins` list is `[USDC, pathUSD, OUSD, USDG]`, and a policy that lists USDC only refuses the others.
 `pay`
 reserves the amount under a lock shared by the processes on this machine before the owner is
 asked.

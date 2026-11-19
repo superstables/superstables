@@ -104,10 +104,10 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
     };
   }
   if (typeof request.currency !== "string" || request.currency.toLowerCase() !== network.token.address.toLowerCase()) {
-    return { supported: false, reason: `the currency is not pathUSD on ${network.label}` };
+    return { supported: false, reason: `the currency is not ${network.token.symbol} on ${network.label}` };
   }
   if (request.decimals !== undefined && request.decimals !== network.token.decimals) {
-    return { supported: false, reason: `the challenge quotes ${untrustedText(request.decimals, 10)} decimals; pathUSD has ${network.token.decimals}` };
+    return { supported: false, reason: `the challenge quotes ${untrustedText(request.decimals, 10)} decimals; ${network.token.symbol} has ${network.token.decimals}` };
   }
   const amount = typeof request.amount === "string" ? request.amount : "";
   if (!/^[1-9]\d{0,17}$/.test(amount)) return { supported: false, reason: "the amount is missing or malformed" };
@@ -118,7 +118,7 @@ export function judgeTempoCharge(challenge: MppChallenge, now: number = Date.now
     return { supported: false, reason: "a payment split between several recipients is not supported" };
   }
   // mppx's machine-token route settles through a swap contract this client has not verified on chain; the owner's wallet
-  // sends a plain pathUSD transfer. Anything but absent or false is refused.
+  // sends a plain transfer of the chain's token. Anything but absent or false is refused.
   if (details.machineTokenEnabled !== undefined && details.machineTokenEnabled !== false) {
     return { supported: false, reason: "the seller routes payment through the machine-token swap, which this client does not use" };
   }

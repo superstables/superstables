@@ -32,7 +32,7 @@ import { CHAIN, CHAIN_FLAG, TOKEN_ADDRESS, TOKEN_LABEL, explorerTx, fromBaseUnit
 import { chainHead, readKey, rpcRead, sleep } from './lib/chain.ts'
 import { OWNER_KEY_FILE, OWNER_TIMEOUT_MS, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import {
-  KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, grantCalldata,
+  KEYCHAIN, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, ownerFee, findKeyEvent, grantCalldata,
   grantTerms, iso, maxByExpiry, readSent, readUntilMatches, revertedReceiptOf, tokenBalance, useHostedAgent, type GrantPlan,
 } from './owner.ts'
 import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
@@ -121,16 +121,14 @@ async function main() {
   } else {
     // Refuse here, before any link exists, whatever would make the owner's approval fail or pointless.
     if (expirySeconds * 1000 <= OWNER_TIMEOUT_MS + 60_000) refuse(`the key would expire (in ${expirySeconds}s) before the approval link does (${Math.round(OWNER_TIMEOUT_MS / 1000)}s)`, 'grant with a later --expiry, or a shorter --timeout')
-    const feeToken = await feeTokenOf(owner).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${oneLine(err?.message ?? err, 120)})`, `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then grant again`))
-    const feeBalance = await tokenBalance(feeToken, owner)
-    if (feeBalance < MIN_FEE_BALANCE) {
-      refuse(`the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} a grant's network fee may need`, CHAIN.faucet ? 'fund the owner (superstables budget setup --rail tempo' + CHAIN_FLAG + ' --fund-only uses the Moderato faucet), then grant again' : 'the owner adds pathUSD (the network fee is paid in it), then grant again')
-    }
     const held = await tokenBalance(TOKEN_ADDRESS, owner)
     const head = await chainHead()
     plan = { agent, limit, expiry: head.timestamp + expirySeconds, period, sellers }
     console.log(`  expiry: ${new Date(plan.expiry * 1000).toISOString()} (unix ${plan.expiry}, chain time + ${expirySeconds}s)`)
     const data = grantCalldata(plan)
+    const fee = await ownerFee(owner, { to: KEYCHAIN, data }).catch((err) => refuse(`could not read the owner's fee token from the FeeManager (${oneLine(err?.message ?? err, 120)})`, `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then grant again`))
+    if (fee.problem || !fee.token) refuse(`the owner ${owner} ${fee.problem}`, `${'next' in fee ? fee.next : ''} grant again`)
+    const feeToken = fee.token as Address
     useHostedAgent(agent) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('grant', owner, { to: KEYCHAIN, data }, grantTerms({ ...plan, owner, expirySeconds, held, feeToken, label }))
     if (outcome.status === 'rejected' || outcome.status === 'expired') await endUnapproved('setBudget', outcome, { requested: amount }, `superstables budget status --rail tempo${CHAIN_FLAG}${agentFlag(label)}`)

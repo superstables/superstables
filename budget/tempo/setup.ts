@@ -7,8 +7,8 @@
 //      message: it proves the address is theirs and sends nothing. With --owner-key-file <path> the address comes from that
 //      key instead (tests and automation only).
 //   3. The public file: owner and agent addresses, no secret.
-//   4. If the owner holds less than 1 pathUSD, the Moderato faucet (tempo_fundAddress) tops it up (the mainnet has no faucet: the
-//      owner adds pathUSD). The agent needs nothing: its access key spends the owner's pathUSD and the fees come from the owner.
+//   4. If the owner holds less than 1 of the budget token, the Moderato faucet (tempo_fundAddress) tops it up (the mainnet has no
+//      faucet: the owner adds OUSD). The agent needs nothing: its access key spends the owner's budget token, fees included.
 //
 //   setup.ts                        the above
 //   setup.ts --agent <label>        a new agent key AGENT<label>_* (key to the agent file, address to the public file), for the
@@ -290,9 +290,9 @@ async function main() {
 
   if (!CHAIN.testnet && KEY_STORE === 'file') refuseStore(`a plain-text agent key file is never made on ${CHAIN.label}`)
   if (args['fund-only'] && !CHAIN.faucet) {
-    const reason = `${CHAIN.label} has no faucet: the owner adds pathUSD themselves (network fees are paid in pathUSD)`
+    const reason = `${CHAIN.label} has no faucet: the owner adds ${TOKEN_LABEL} themselves (the budget and its network fees are paid in it)`
     console.log(`REFUSED: ${reason}. Nothing was changed.`)
-    process.exit(result(3, { state: 'refused_precheck', reason, next: 'the owner sends pathUSD to their own wallet, then superstables budget doctor --rail tempo' + CHAIN_FLAG }))
+    process.exit(result(3, { state: 'refused_precheck', reason, next: `the owner sends ${TOKEN_LABEL} to their own wallet, then superstables budget doctor --rail tempo${CHAIN_FLAG}` }))
   }
   if (args['fund-only']) {
     if (!pub.OWNER_ADDRESS) process.exit(result(3, { state: 'refused_precheck', reason: 'no owner is recorded yet', next: 'superstables budget setup --rail tempo' + CHAIN_FLAG }))
@@ -599,7 +599,7 @@ async function main() {
   console.log(`wrote ${PUBLIC_ENV_PATH} (no secret) and the owner's address into ${AGENT_ENV_PATH}.${HOSTED ? ` Owner approvals on this chain: hosted on ${SITE}.` : ''}`)
   if (binding) console.log(`the owner's signature naming agent ${agent} is recorded in ${PUBLIC_ENV_PATH}`)
 
-  // 4. test pathUSD for the owner, if it has too little (the mainnet has no faucet: the owner adds it)
+  // 4. the budget token for the owner, if it has too little (Moderato's faucet; the mainnet has none: the owner adds it)
   let held = await tokenBalance(TOKEN_ADDRESS, owner).catch(() => null)
   if (!CHAIN.faucet && held !== null && held < MIN_OWNER) {
     console.log(`the owner holds less than ${fromBaseUnits(MIN_OWNER)} ${TOKEN_LABEL}: there is no faucet on ${CHAIN.label}, so the owner adds ${TOKEN_LABEL} to their wallet (network fees are paid in ${TOKEN_LABEL} too)`)
@@ -616,7 +616,7 @@ async function main() {
       console.log(`the faucet did not answer (${oneLine((e as Error).message, 300)}); fund the owner later with: superstables budget setup --rail tempo${CHAIN_FLAG} --fund-only`)
     }
   }
-  console.log(`owner ${owner}: pathUSD ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)
+  console.log(`owner ${owner}: ${TOKEN_LABEL} ${held === null ? 'unknown' : fromBaseUnits(held)}. The agent needs no funds.`)
 
   if (plan) await finishBundle(owner, agent, plan, startBlock, bundle?.steps ?? [])
 

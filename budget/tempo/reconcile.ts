@@ -19,7 +19,7 @@
 import type { Address } from 'viem'
 import { requireRecordLock } from '../op-lock.mjs'
 import { hashCheck, intCheck, opIdCheck, parseCli } from './lib/args.mjs'
-import { CHAIN_FLAG, explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
+import { CHAIN_FLAG, TOKEN_LABEL, explorerTx, fromBaseUnits, toBaseUnits, oneLine } from './lib/common.ts'
 import { RPC_CHAIN_NEXT, readKey, rpcChainProblem } from './lib/chain.ts'
 import { judge, lookupOnce, waitForOutcome } from './lib/resolve.ts'
 import { failedNext, feeSentence, notFoundFee, notFoundNext } from './lib/words.ts'
@@ -73,7 +73,7 @@ async function main() {
   }
 
   // the reason, recipient and receipt tx may be the seller's text: one line (oneLine)
-  console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} pathUSD to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
+  console.log(oneLine(`op ${opId} (${op.kind}): journal says ${op.state}${op.reason ? ` (${op.reason})` : ''}; ${op.intent.amountDecimal} ${TOKEN_LABEL} to ${op.intent.recipient}${op.tx ? `; tx ${op.tx}` : ''}`, 2000))
 
   if (op.state === 'settled') return done('settled', { tx: op.tx, debit: op.debit == null ? BigInt(op.intent.amount) : toBaseUnits(op.debit), next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
 
@@ -105,7 +105,7 @@ async function main() {
     console.log(`chain: tx ${outcome.hash} ${outcome.receipt.status} in block ${outcome.receipt.blockNumber}; keychain keyId ${outcome.keyId ?? 'n/a'}`)
     console.log(`explorer: ${explorerTx(outcome.hash)}`)
     if (j.state === 'settled') {
-      console.log(`SETTLED: ${fromBaseUnits(j.debit)} pathUSD left the owner in the payment's own transaction. delivered stays ${op.delivered ?? 'unrecorded'}.`)
+      console.log(`SETTLED: ${fromBaseUnits(j.debit)} ${TOKEN_LABEL} left the owner in the payment's own transaction. delivered stays ${op.delivered ?? 'unrecorded'}.`)
       return done('settled', { tx: outcome.hash, debit: j.debit, next: op.delivered === false ? 'paid but not delivered; never pay again, contact the seller with the tx hash' : 'none', exit: 0 })
     }
     if (j.state === 'failed') {

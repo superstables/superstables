@@ -93,6 +93,50 @@ describe("tempo: the keychain call in words", () => {
   });
 });
 
+describe("tempo: the owner's fee token, as Tempo picks it", () => {
+  const PATH = "0x20C0000000000000000000000000000000000000";
+  const OUSD = "0x20c0000000000000000000006a37DA5C996874BE";
+  const OTHER = "0x20C0000000000000000000000000000000000001";
+  const held = (m: Record<string, bigint>) => (token: string) => m[token.toLowerCase()] ?? 0n;
+
+  it("with no preference: pathUSD when it covers the fee, else OUSD, as T13's fallback does", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    expect(t.chooseOwnerFee(null, held({ [PATH.toLowerCase()]: 500_000n, [OUSD.toLowerCase()]: 9_000_000n }))).toEqual({ token: PATH, balance: 500_000n, problem: "" });
+    // An owner who holds only OUSD is not refused: the chain pays the fee in OUSD.
+    expect(t.chooseOwnerFee(null, held({ [OUSD.toLowerCase()]: 9_000_000n }))).toEqual({ token: OUSD, balance: 9_000_000n, problem: "" });
+    // pathUSD below the fee moves on to OUSD; balances are not combined.
+    expect(t.chooseOwnerFee(null, held({ [PATH.toLowerCase()]: 99_999n, [OUSD.toLowerCase()]: 100_000n })).token).toBe(OUSD);
+    const neither = t.chooseOwnerFee(null, held({ [PATH.toLowerCase()]: 99_999n, [OUSD.toLowerCase()]: 99_999n }));
+    expect(neither.problem).toBe("holds less than 0.1 of pathUSD and of OUSD, the tokens Tempo pays the network fee in when the account sets none");
+    expect(neither.token).toBeUndefined();
+  });
+
+  it("compares against the estimated maximum fee: pathUSD that covers it is used, as Tempo would", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    const balances = held({ [PATH.toLowerCase()]: 50_000n, [OUSD.toLowerCase()]: 5_000_000n });
+    expect(t.chooseOwnerFee(null, balances, 9_000n)).toEqual({ token: PATH, balance: 50_000n, problem: "" });
+    expect(t.chooseOwnerFee(null, balances, 60_000n).token).toBe(OUSD);
+    expect(t.chooseOwnerFee(OTHER, held({ [OTHER.toLowerCase()]: 10_000n }), 9_000n).problem).toBe("");
+  });
+
+  it("with a preference: that token only, since Tempo does not fall back from it", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    expect(t.chooseOwnerFee(OUSD, held({ [OUSD.toLowerCase()]: 100_000n }))).toEqual({ token: OUSD, balance: 100_000n, problem: "" });
+    const low = t.chooseOwnerFee(OTHER, held({ [OTHER.toLowerCase()]: 1n, [PATH.toLowerCase()]: 9_000_000n, [OUSD.toLowerCase()]: 9_000_000n }));
+    expect(low).toMatchObject({ token: OTHER, balance: 1n });
+    expect(low.problem).toBe(`holds 0.000001 of its fee token ${OTHER} (its FeeManager preference), less than the 0.1 the network fee may need`);
+    expect(low.next).toBe(`the owner adds ${OTHER}, or sets another fee token in the wallet, then`);
+  });
+
+  it("names pathUSD and OUSD in the terms, and says an agent-paid fee comes off the limit", async () => {
+    const t = (await import(new URL("../../budget/tempo/owner.ts", import.meta.url).href)) as any;
+    const terms = t.grantTerms({ agent: AGENT, owner: OWNER, limit: 1_000_000n, expiry: 1_792_000_000, period: 0, sellers: undefined, expirySeconds: 3600, held: 0n, feeToken: OUSD, label: "" });
+    expect(terms.walletShows[4]).toBe("A network fee in OUSD, paid from your account");
+    expect(terms.notes.join(" ")).toContain("When the agent pays it, the fee comes off this limit too.");
+    expect(terms.notes.join(" ")).not.toContain("haven't yet verified");
+  });
+});
+
 // ── solana ────────────────────────────────────────────────────────────────────────────────
 
 describe("solana: the instruction, raw and readable", () => {

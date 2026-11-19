@@ -344,7 +344,7 @@ describe("display unchanged", () => {
       { domain: "api.example.com", amountAtomic: 10000n, asset: "USDC", spentTodayAtomic: 0n },
     ]) {
       expect(JSON.stringify(policyChecks(DEFAULT_POLICY, a))).toBe(
-        '[{"rule":"kill_switch","ok":true,"detail":"off"},{"rule":"deny","ok":true,"detail":"empty"},{"rule":"allow","ok":true,"detail":"empty: any host"},{"rule":"stablecoins","ok":true,"detail":"USDC is in [USDC, pathUSD, USDG]"},{"rule":"caps.per_call","ok":true,"detail":"0.01 USDC, at most 0.05 USDC"},{"rule":"caps.per_day","ok":true,"detail":"0 USDC paid today (UTC) + this 0.01 = 0.01, at most 1 USDC"}]',
+        '[{"rule":"kill_switch","ok":true,"detail":"off"},{"rule":"deny","ok":true,"detail":"empty"},{"rule":"allow","ok":true,"detail":"empty: any host"},{"rule":"stablecoins","ok":true,"detail":"USDC is in [USDC, pathUSD, OUSD, USDG]"},{"rule":"caps.per_call","ok":true,"detail":"0.01 USDC, at most 0.05 USDC"},{"rule":"caps.per_day","ok":true,"detail":"0 USDC paid today (UTC) + this 0.01 = 0.01, at most 1 USDC"}]',
       );
     }
   });

@@ -95,7 +95,7 @@ function versionLine() {
 // ---- rails ------------------------------------------------------------------------------------------
 const RAILS = {
   evm: { chains: EVM_CHAIN_KEYS, chain: EVM_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "USDC" },
-  tempo: { chains: TEMPO_CHAIN_KEYS, chain: TEMPO_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "pathUSD" },
+  tempo: { chains: TEMPO_CHAIN_KEYS, chain: TEMPO_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "OUSD" }, // a chain's own token: chainFacts(rail, chain).unit
   solana: { chains: SOLANA_CHAIN_KEYS, chain: SOLANA_DEFAULT_CHAIN, addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
 /**
@@ -106,7 +106,7 @@ const RAILS = {
 function chainFacts(rail, chain) {
   if (rail === "tempo") {
     const c = Object.hasOwn(TEMPO_CHAINS, chain ?? TEMPO_DEFAULT_CHAIN) ? TEMPO_CHAINS[chain ?? TEMPO_DEFAULT_CHAIN] : undefined;
-    return { label: c?.testnet ? "Tempo testnet (Moderato)" : c?.label ?? "Tempo", testnet: c?.testnet === true, unit: "pathUSD" };
+    return { label: c?.testnet ? "Tempo testnet (Moderato)" : c?.label ?? "Tempo", testnet: c?.testnet === true, unit: c?.token.symbol ?? "OUSD" };
   }
   if (rail === "solana") {
     const c = Object.hasOwn(SOLANA_CHAINS, chain ?? SOLANA_DEFAULT_CHAIN) ? SOLANA_CHAINS[chain ?? SOLANA_DEFAULT_CHAIN] : undefined;
@@ -569,7 +569,7 @@ or Solana devnet: the chain comes from the listing. --max
 is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain and its testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
 created. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or
 per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset.
-Limits count USDC, USDG and pathUSD token units together across chains; the daily limit uses UTC.
+Limits count USDC, USDG, OUSD and pathUSD token units together across chains; the daily limit uses UTC.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one
@@ -1075,7 +1075,7 @@ function parse(argv) {
     if (rest.some((a) => a === "--chain" || a.startsWith("--chain="))) badInput(ctx, "rotate covers every chain the key is set up on; --chain is not taken");
   }
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
-  if (cmd === "fund-agent" && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: its access key spends the owner's pathUSD, and the fees come from the owner");
+  if (cmd === "fund-agent" && f.rail === "tempo") badInput(ctx, "tempo's agent needs no gas: its access key spends the owner's budget token, which also pays its network fees, within the limit");
   if (cmd === "fund-agent" && f.amount !== undefined && !(f.rail === "solana" ? /^\d+(\.\d{1,9})?$/ : /^\d+(\.\d{1,18})?$/).test(f.amount)) badInput(ctx, f.rail === "solana" ? "--amount must be a decimal amount of SOL (at most 9 places)" : "--amount must be a decimal amount of the chain's gas token");
   if (f.timeout !== undefined && !(/^\d+$/.test(f.timeout) && Number(f.timeout) >= 10 && Number(f.timeout) <= 3600)) badInput(ctx, "--timeout must be a whole number of seconds from 10 to 3600");
   if (f.yes && !f["owner-key-file"]) badInput(ctx, "reply to the owner with message_for_owner, and run wait --shown when they say they have approved: drop --yes. --yes only goes with --owner-key-file PATH (unattended tests only)");
@@ -1401,7 +1401,7 @@ const micro = (s) => { const [i, d = ""] = s.split("."); return BigInt(i) * 1000
 const decimal = (n) => { const s = n.toString().padStart(7, "0"); return (s.slice(0, -6) + "." + s.slice(-6)).replace(/\.?0+$/, "") || "0"; };
 const ago = (iso) => (iso ? iso : "none");
 // The budget token's symbol: per chain on evm (chains.mjs), per rail elsewhere.
-const unitOf = (f) => (f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : RAILS[f.rail].unit);
+const unitOf = (f) => (f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : f.rail === "tempo" ? chainFacts(f.rail, f.chain).unit : RAILS[f.rail].unit);
 
 // The owner address on record for this rail and chain (the public file setup wrote), or null.
 const OWNER_VAR = { evm: "B4_OWNER_ADDRESS", tempo: "OWNER_ADDRESS", solana: "SOLANA_OWNER_ADDRESS" };
@@ -1486,7 +1486,7 @@ async function readBudget(f) {
   const t = r.stdout;
   const pick = (re) => re.exec(t)?.[1];
   if (f.rail === "tempo") {
-    const remaining = pick(/remaining:\s+\d+ base units \(([\d.]+) pathUSD\)/);
+    const remaining = pick(/remaining:\s+\d+ base units \(([\d.]+) [A-Za-z]+\)/);
     const exp = Number(pick(/expiry:\s+(\d+)/) ?? 0);
     const revoked = pick(/isRevoked:\s+(true|false)/) === "true";
     const expiry = exp ? new Date(exp * 1000).toISOString() : null;
@@ -1596,7 +1596,7 @@ function budgetSpent(f, rail) {
   const mainnet = !facts.testnet;
   const rec = { rail: f.rail, chain: f.chain };
   const net = networkOf(rec, facts.label);
-  const unit = f.rail === "tempo" ? "pathUSD" : mainnet ? facts.unit : `test ${facts.unit}`;
+  const unit = f.rail === "tempo" ? facts.unit : mainnet ? facts.unit : `test ${facts.unit}`;
   const line = networkLineAfter(rec);
   const m = /price ([0-9.]+)(?: [A-Za-z]+)?(?: plus up to ([0-9.]+)(?: [A-Za-z]+)? for the network fee)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
   if (m) return { budget_spent: true, message_for_owner: m[2]
@@ -1653,7 +1653,7 @@ async function preflight({ f, ctx }) {
   const price = /^\d+(\.\d+)?$/.test(String(rr.price ?? "")) ? String(rr.price) : null;
   const ok = r.code === 0 && (rr.state === "ok" || rr.state === "quoted") && price !== null;
   const o = rr.offer ?? {};
-  const token = f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : f.rail === "tempo" ? "pathUSD" : "USDC";
+  const token = f.rail === "evm" ? EVM_CHAINS[f.chain].token.symbol : f.rail === "tempo" ? chainFacts(f.rail, f.chain).unit : "USDC";
   const offer = ok ? (f.rail === "evm" ? { price: rr.price, token: o.token, payTo: rr.payTo, network: o.network, scheme: o.scheme, x402Version: o.x402Version } : { price: rr.price, token, payTo: rr.payTo, network: o.network ?? `${f.rail}-${f.chain}`, ...(o.feePayer !== undefined ? { feePayer: o.feePayer } : {}) }) : undefined;
   // --max stays the caller's own ceiling: the seller's price is shown, never filled in as --max
   const q = (v) => `'${String(v).replace(/'/g, "'\\''")}'`;

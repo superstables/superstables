@@ -21,10 +21,12 @@ export const TEMPO_CHAINS = {
   moderato: {
     key: 'moderato', gateKey: 'tempo-moderato', label: 'Tempo Moderato', short: 'Moderato', binding: 'Tempo Testnet (Moderato)', chainId: 42431, testnet: true,
     rpc: DEFAULT_RPC.tempo, explorer: 'https://explore.testnet.tempo.xyz', faucet: true,
+    // pathUSD, Tempo's reference USD stablecoin: what Moderato's sellers charge and its faucet hands out.
+    token: { address: '0x20C0000000000000000000000000000000000000', decimals: 6, symbol: 'pathUSD' },
   },
 }
 for (const [key, c] of mainnetChains('tempo')) {
-  TEMPO_CHAINS[key] = { key, gateKey: key, label: c.label, short: c.label, binding: `${c.label} Mainnet`, chainId: c.chainId, testnet: false, rpc: c.rpc[0].url, explorer: c.explorer, faucet: false }
+  TEMPO_CHAINS[key] = { key, gateKey: key, label: c.label, short: c.label, binding: `${c.label} Mainnet`, chainId: c.chainId, testnet: false, rpc: c.rpc[0].url, explorer: c.explorer, faucet: false, token: { address: c.token.address, decimals: c.token.decimals, symbol: c.token.symbol } }
 }
 export const TEMPO_CHAIN_KEYS = Object.keys(TEMPO_CHAINS)
 /** The chain when --chain is not given: the first mainnet the table holds, or Moderato in a testnet-only run (--testnet) or when it holds none. */
@@ -50,7 +52,11 @@ export const RPC_URL = (() => {
 export const CHAIN_ID = CHAIN.chainId
 /** true on Moderato. On mainnet the chain gate (../../../src/core/chain-gate.js) decides whether anything is signed. */
 export const TESTNET = CHAIN.testnet
-// pathUSD: Tempo's protocol-level reference USD stablecoin, a fixed address, 6 decimals, the same on every Tempo chain.
-export const TOKEN_ADDRESS = '0x20C0000000000000000000000000000000000000'
-export const TOKEN_DECIMALS = 6
-export const TOKEN_LABEL = 'pathUSD'
+// The budget token: the one token the agent's key has a limit on and pays sellers and its own fees in. OUSD on Tempo
+// mainnet (the mainnet manifest), pathUSD on Moderato.
+export const TOKEN_ADDRESS = CHAIN.token.address
+export const TOKEN_DECIMALS = CHAIN.token.decimals
+export const TOKEN_LABEL = CHAIN.token.symbol
+/** pathUSD and OUSD: from T13 the fee token Tempo falls back to when none is chosen, in this order (protocol/fees/spec-fee). */
+export const PATH_USD = '0x20C0000000000000000000000000000000000000'
+export const OUSD = '0x20c0000000000000000000006a37DA5C996874BE'

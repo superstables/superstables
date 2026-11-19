@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The agent pays its Tempo network fee in the budget token:** The keychain counts a fee the account pays against the key's limit on the fee token, so a fee in any other token fails with `SpendingLimitExceeded`. `budget buy` now names the budget token as the fee token, and refuses (before anything is sent) a signed payment that names another or none, unless the seller pays the fee. Before, an owner whose wallet set another fee token could not pay from the budget.
+- **`pay` takes OUSD:** The default policy's `stablecoins` list is `[USDC, pathUSD, OUSD, USDG]`. A `policy.yaml` that writes its own list keeps it; add OUSD there to pay in it.
+
+### Fixed
+
+- **Tempo grant and revoke fee check:** With no fee token set in the owner's FeeManager, the check before the link follows Tempo's own order since T13: pathUSD if it covers the fee, else OUSD. Before, an owner with only OUSD was refused. With a fee token set, that token must cover the fee, as on chain.
+- **`budget status` on Tempo:** reads the remaining amount in the chain's token (it read only amounts printed in pathUSD).
+
 ## [1.4.5] - Smart-account budgets and Base lookups
 
 ### Fixed

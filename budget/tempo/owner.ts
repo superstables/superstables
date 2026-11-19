@@ -26,6 +26,8 @@ import { readAgentSecret } from '../os-keychain.mjs'
 import { rpcFacts } from '../page-facts.mjs'
 import { AGENT_ENV_PATH, CHAIN, CHAIN_FLAG, CHAIN_ID, EXPLORER_BASE, TOKEN_ADDRESS, TOKEN_LABEL, agentFileText, assertMainnetOpen, fromBaseUnits, inKeychain, loadPublicEnv, makeClient, parseEnvFile } from './lib/common.ts'
 import { FINAL_TAG, chainHead, rpcRead, sleep, topicOf } from './lib/chain.ts'
+import { OUSD, PATH_USD } from './lib/constants.mjs'
+import { maxFeeUnits } from './lib/precheck.mjs'
 import { LABEL } from './lib/args.mjs'
 
 export { closeOwnerPage }
@@ -48,7 +50,7 @@ export const KEYCHAIN: Address = Addresses.accountKeychain
 const FEE_MANAGER: Address = Addresses.feeManager
 const TRANSFER = '0xa9059cbb'
 const TRANSFER_WITH_MEMO = '0x95777d59'
-/** The owner's fee token must hold at least this much (a scoped grant costs about 0.003 to 0.09 pathUSD at testnet prices). */
+/** The owner's fee token must hold at least this much (a scoped grant costs about 0.003 to 0.09 at testnet prices). */
 export const MIN_FEE_BALANCE = 100_000n // 0.1 in 6-decimal units
 
 /** One RESULT line, last on stdout (CLI.md), the same shape as the evm scripts. Returns `exit`. */
@@ -227,15 +229,60 @@ export function maxByExpiry(limit: bigint, expirySeconds: number, period?: numbe
 
 const word = (a: string) => a.toLowerCase().replace('0x', '').padStart(64, '0')
 
+export type OwnerFee = { token: Address; balance: bigint; problem: '' } | { token?: Address; balance: bigint; problem: string; next: string }
+
 /**
- * The token the owner pays fees in: its FeeManager preference if it set one (a zero answer means none, so pathUSD).
- * A failed read throws: the command refuses before any link rather than guess pathUSD and show the owner wrong terms.
+ * The token the owner's plain transaction pays its fee in, as Tempo picks it (protocol/fees/spec-fee): the owner's FeeManager
+ * preference when it set one; otherwise, from T13, pathUSD if it covers the maximum fee, else OUSD (protocol/upgrades/t13:
+ * "Only an insufficient balance moves on to OUSD"; one token must cover the whole maximum fee). `need` is that maximum fee as
+ * this client estimates it (ownerFeeNeed). A problem when the token Tempo would pick holds less. Pure.
  */
-export async function feeTokenOf(owner: Address): Promise<Address> {
+export function chooseOwnerFee(preference: Address | null, balances: (token: Address) => bigint, need: bigint = MIN_FEE_BALANCE): OwnerFee {
+  if (preference) {
+    const balance = balances(preference)
+    if (balance >= need) return { token: preference, balance, problem: '' }
+    return { token: preference, balance, problem: `holds ${fromBaseUnits(balance)} of its fee token ${feeTokenWords(preference)} (its FeeManager preference), less than the ${fromBaseUnits(need)} the network fee may need`, next: `the owner adds ${feeTokenWords(preference)}, or sets another fee token in the wallet, then` }
+  }
+  for (const token of [PATH_USD, OUSD] as Address[]) {
+    const balance = balances(token)
+    if (balance >= need) return { token, balance, problem: '' }
+  }
+  return { balance: 0n, problem: `holds less than ${fromBaseUnits(need)} of pathUSD and of OUSD, the tokens Tempo pays the network fee in when the account sets none`, next: CHAIN.testnet ? `fund the owner (superstables budget setup --rail tempo${CHAIN_FLAG} --fund-only uses the Moderato faucet), then` : 'the owner adds OUSD (the network fee is paid in it), then' }
+}
+
+/**
+ * The most the owner's keychain call may cost in fees, in base units: three times the node's estimate (gas times gas price),
+ * since the wallet picks its own gas limit and fee cap and Tempo checks the token against those. MIN_FEE_BALANCE when the
+ * node does not answer: the earlier fixed allowance, so nothing is guessed lower than before.
+ */
+export async function ownerFeeNeed(owner: Address, call: { to: Address; data: Hex }): Promise<bigint> {
+  try {
+    const gas = await rpcRead('eth_estimateGas', [{ from: owner, to: call.to, data: call.data }])
+    const price = await rpcRead('eth_gasPrice', [])
+    if (typeof gas !== 'string' || !/^0x[0-9a-fA-F]+$/.test(gas) || typeof price !== 'string' || !/^0x[0-9a-fA-F]+$/.test(price)) return MIN_FEE_BALANCE
+    const fee = maxFeeUnits(BigInt(gas), BigInt(price)) * 3n
+    return fee > 0n ? fee : MIN_FEE_BALANCE
+  } catch {
+    return MIN_FEE_BALANCE
+  }
+}
+
+/** The owner's FeeManager preference, or null when it set none (a zero answer). A failed read throws: nothing is guessed. */
+export async function feePreferenceOf(owner: Address): Promise<Address | null> {
   const r = await rpcRead('eth_call', [{ to: FEE_MANAGER, data: '0xed498fa8' + word(owner) }, 'latest'])
   if (typeof r !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(r)) throw new Error(`the FeeManager answered ${JSON.stringify(r).slice(0, 80)}, not an address`)
   const token = ('0x' + r.slice(-40)) as Address
-  return /^0x0{40}$/.test(token) ? TOKEN_ADDRESS : getAddress(token)
+  return /^0x0{40}$/.test(token) ? null : getAddress(token)
+}
+
+/** The owner's fee token and whether it covers this grant's or revoke's fee (chooseOwnerFee), from the chain. A failed read throws. */
+export async function ownerFee(owner: Address, call: { to: Address; data: Hex }): Promise<OwnerFee> {
+  const need = await ownerFeeNeed(owner, call)
+  const preference = await feePreferenceOf(owner)
+  const tokens = preference ? [preference] : [PATH_USD, OUSD] as Address[]
+  const held = new Map<string, bigint>()
+  for (const t of tokens) held.set(t.toLowerCase(), await tokenBalance(t, owner))
+  return chooseOwnerFee(preference, (t) => held.get(t.toLowerCase()) ?? 0n, need)
 }
 
 export async function tokenBalance(token: Address, holder: Address): Promise<bigint> {
@@ -493,7 +540,7 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
     ],
     notes: [
       `Your wallet may show "Interacting with ${KEYCHAIN.slice(0, 7)}...${KEYCHAIN.slice(-5)}" without decoding the limit. Review the terms above. Do not change the transaction; the command checks the resulting key on chain.`,
-      `Your wallet may first ask to add ${CHAIN.binding}. The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet. No budget funds transfer now. When the seller pays the network fee, only the price comes off this limit. We haven't yet verified how fees affect this limit when the seller doesn't pay them.`,
+      `Your wallet may first ask to add ${CHAIN.binding}. The expected fee token is ${feeTokenWords(p.feeToken)}. Check both the token and fee in your wallet. No budget funds transfer now. When the seller pays the network fee, only the price comes off this limit. When the agent pays it, the fee comes off this limit too.`,
       `To end the budget at any time: superstables budget revoke --rail tempo${CHAIN_FLAG}${agentFlag(p.label)}. You approve that in your wallet too.`,
       'A revoked or expired key can never be granted again: the next budget needs a new agent key (superstables budget setup --rail tempo' + CHAIN_FLAG + ' --agent LABEL).',
     ],
@@ -507,8 +554,11 @@ export function grantTerms(p: GrantPlan & { owner: Address; expirySeconds: numbe
   }
 }
 
-/** The fee token in words: its label when it is the budget token, else its address. */
-const feeTokenWords = (feeToken: Address) => (feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : feeToken)
+/** The fee token in words: its label when it is the budget token, pathUSD or OUSD, else its address. */
+const feeTokenWords = (feeToken: Address) => {
+  const t = feeToken.toLowerCase()
+  return t === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : t === PATH_USD.toLowerCase() ? 'pathUSD' : t === OUSD.toLowerCase() ? 'OUSD' : feeToken
+}
 
 export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigint; expiry: number; feeToken: Address; label: string }): OwnerTerms {
   return {
@@ -528,7 +578,7 @@ export function revokeTerms(p: { owner: Address; agent: Address; remaining: bigi
       'No reversal of payments confirmed before this revoke.',
     ],
     notes: [
-      `This revokes permission; it does not return funds. The expected fee token is ${p.feeToken.toLowerCase() === TOKEN_ADDRESS.toLowerCase() ? TOKEN_LABEL : p.feeToken}. Check both the token and fee in your wallet.`,
+      `This revokes permission; it does not return funds. The expected fee token is ${feeTokenWords(p.feeToken)}. Check both the token and fee in your wallet.`,
       'This key can never be granted again. For a new budget, make a new agent key: superstables budget setup --rail tempo' + CHAIN_FLAG + ' --agent LABEL.',
     ],
     walletShows: [

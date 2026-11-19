@@ -9,14 +9,16 @@
 //   1. Parse flags. Bad or missing flags exit 2 before any file is read.
 //   2. Open tempo-agent.env only (access key + the owner's PUBLIC address; no owner key).
 //   3. Fetch the seller's challenge (an unpaid request) and run the pre-signing checks: price <= --max
-//      (required), token is pathUSD on the chain, whole base units, recipient == --pay-to when given, the
+//      (required), token is the chain's budget token (OUSD on Tempo, pathUSD on Moderato), whole base units, recipient == --pay-to when given, the
 //      challenge names a realm, stays open at most 600 s and does not turn on mppx's machine-token route.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
+//      The agent's payment pays its own network fee (when the seller does not) in the budget token, the one token its key
+//      has a limit on: mppx builds it on a client whose feeToken is that token, and signedPayment refuses any other.
 //   4. Write the operation journal (state quoted, with the purchase memo and the seller's referral, which
 //      the memo names through MPP's client id), then sign. In pull mode (the
 //      default for an access key) the signed payment is a bearer transaction that expires when mppx says, 25 s,
 //      read from the signed transaction. The challenge's memo is claimed for this op (lib/claim.ts) before signing;
-//      the signed payment is read back and leaves only if it is the quoted pathUSD transfers, valid at most 600 s. The
+//      the signed payment is read back and leaves only if it is the quoted budget-token transfers, valid at most 600 s. The
 //      memo mppx puts on it is known before signing and is an indexed topic of the on-chain
 //      TransferWithMemo event, so this one purchase can be found on chain even if its transaction hash
 //      is never learned (a sponsored transaction's final hash exists only after the seller adds the
@@ -26,7 +28,7 @@
 //      only when no broadcast request began; once one did, any error stays `unknown` (even a journal write that
 //      stopped the request), and a payment with a recorded expiry can be proven expired by reconcile.
 //   5. Send it. Whatever the seller answers (200, 402, 500, a dropped connection), the outcome is read
-//      from the chain: settled needs the payment's OWN transaction to have succeeded with a pathUSD
+//      from the chain: settled needs the payment's OWN transaction to have succeeded with a budget-token
 //      Transfer owner -> recipient of the price. The seller's HTTP status is recorded separately as
 //      `delivered`. A payment is never retried, and a delivery failure never causes a new payment.
 //   6. Final line: RESULT {"rail","op","state","tx","debit","remaining","delivered","next"}.
@@ -46,7 +48,8 @@ import { join } from 'node:path'
 import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
-import { createClient, http, isHex, keccak256, type Address, type Hex } from 'viem'
+import { isHex, keccak256, type Address, type Hex } from 'viem'
+import { createClient, http } from 'viem/tempo'
 import { addressCheck, decimalCheck, labelCheck, opIdCheck, parseCli, urlCheck } from './lib/args.mjs'
 import {
   CHAIN,
@@ -240,7 +243,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: VIEM_CHAIN, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: VIEM_CHAIN, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }), feeToken: TOKEN_ADDRESS }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)

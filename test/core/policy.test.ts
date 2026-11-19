@@ -79,12 +79,13 @@ describe("evaluatePolicy", () => {
 describe("the assets pay pays in", () => {
   const payment = { domain: "api.example.com", amountDecimal: 0.01, spentTodayDecimal: 0 };
 
-  it("allows USDC, pathUSD and USDG by default, and refuses any other asset", () => {
-    expect(DEFAULT_POLICY.stablecoins).toEqual(["USDC", "pathUSD", "USDG"]);
+  it("allows USDC, pathUSD, OUSD and USDG by default, and refuses any other asset", () => {
+    expect(DEFAULT_POLICY.stablecoins).toEqual(["USDC", "pathUSD", "OUSD", "USDG"]);
+    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "OUSD" })).toEqual({ allowed: true });
     expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "USDC" })).toEqual({ allowed: true });
     expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "pathUSD" })).toEqual({ allowed: true });
     expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "USDG" })).toEqual({ allowed: true });
-    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "DAI" })).toEqual({ allowed: false, reason: "DAI is not in the policy's stablecoin list [USDC, pathUSD, USDG]" });
+    expect(evaluatePolicy(DEFAULT_POLICY, { ...payment, asset: "DAI" })).toEqual({ allowed: false, reason: "DAI is not in the policy's stablecoin list [USDC, pathUSD, OUSD, USDG]" });
   });
 
   it("holds pathUSD and USDG to the same caps as USDC, as dollars", () => {
@@ -102,7 +103,7 @@ describe("the assets pay pays in", () => {
     expect(parsePolicy("stablecoins: [USDC, PATHUSD, eurc]\n").stablecoins).toEqual(["USDC", "pathUSD", "EURC"]);
     expect(evaluatePolicy(parsePolicy("stablecoins: [usdc, pathusd]\n"), { ...payment, asset: "pathUSD" }).allowed).toBe(true);
     // A file that names no list gets the default.
-    expect(parsePolicy("caps:\n  per_call: 0.02 USDC\n").stablecoins).toEqual(["USDC", "pathUSD", "USDG"]);
+    expect(parsePolicy("caps:\n  per_call: 0.02 USDC\n").stablecoins).toEqual(["USDC", "pathUSD", "OUSD", "USDG"]);
   });
 });
 

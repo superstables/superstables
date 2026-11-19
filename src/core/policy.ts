@@ -44,13 +44,13 @@ export interface Policy {
 }
 
 /**
- * The US dollar stablecoins `pay` pays in: USDC (the EVM chains and Solana), pathUSD (Tempo Moderato) and USDG (Robinhood
- * Chain Testnet). The caps count them together, one for one, as dollars; any other asset is refused unless the owner
+ * The US dollar stablecoins `pay` pays in: USDC (the EVM chains and Solana), pathUSD (Tempo Moderato), OUSD (Tempo) and USDG
+ * (Robinhood Chain). The caps count them together, one for one, as dollars; any other asset is refused unless the owner
  * lists it, and is then counted on its own.
  */
-export const USD_STABLECOINS: readonly string[] = ["USDC", "pathUSD", "USDG"];
+export const USD_STABLECOINS: readonly string[] = ["USDC", "pathUSD", "OUSD", "USDG"];
 
-/** The asset's own spelling when it is one this client knows (USDC, pathUSD, USDG), else its name in capitals. */
+/** The asset's own spelling when it is one this client knows (USDC, pathUSD, OUSD, USDG), else its name in capitals. */
 export function assetName(asset: string): string {
   return USD_STABLECOINS.find((known) => known.toUpperCase() === asset.toUpperCase()) ?? asset.toUpperCase();
 }
@@ -99,7 +99,7 @@ caps:
   per_day: 1 USDC       # payments adding up to more than this in one UTC day are refused
 allow: []               # hostname patterns; empty = any host
 deny: []                # e.g. ["*.example.net"]
-stablecoins: [USDC, pathUSD, USDG]  # allowed assets; the caps count them together, one for one
+stablecoins: [USDC, pathUSD, OUSD, USDG]  # allowed assets; the caps count them together, one for one
 approval: ask-every-payment   # the wallet asks the owner before every payment
 # kill_switch: true     # refuse everything
 `;
