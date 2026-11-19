@@ -246,8 +246,7 @@ setup --new-owner without --hosted moves a chain with approvals on superstables.
 keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
 bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on
 superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect
-the key from code running as you while the keychain is unlocked. On tempo it is for the mainnet only (--chain tempo), where
-it is required, and Tempo Moderato keys stay in the key file.
+the key from code running as you while the keychain is unlocked.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain

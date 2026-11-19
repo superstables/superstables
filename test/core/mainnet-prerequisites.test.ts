@@ -202,7 +202,7 @@ describe("with the default, mainnet, when the tables load", () => {
     for (const id of ["eip155:1187947933", "eip155:4663"]) expect(gateOf(gate, chain.networkFor(id)!), id).toBe("");
   });
 
-  it("judges an offer on each mainnet as payable: x402 on the EVM chains and Solana, MPP on Tempo", async () => {
+  it("judges an offer on each mainnet as payable: x402 on the EVM chains and Solana; MPP on chain 4217 is not", async () => {
     const { chain, rails } = await load();
     for (const n of chain.EVM_NETWORKS.filter((k) => !k.testnet && !OWN_NODE.includes(k.key))) {
       const judged = rails.judgeAccept(chain.usdcRequirement(0.01, PAY_TO_EVM, n) as never, 2);
@@ -218,7 +218,8 @@ describe("with the default, mainnet, when the tables load", () => {
     } as Parameters<typeof Challenge.from>[0]);
     const { parseMppChallenges } = await import("../../src/core/mpp.js");
     const tempo = rails.judgeMppChallenge(parseMppChallenges(Challenge.serialize(issued))[0]);
-    expect(tempo.supported ? tempo.offer.terms : tempo.reason).toMatchObject({ network: "eip155:4217", networkLabel: "Tempo", asset: "pathUSD" });
+    expect(tempo.supported).toBe(false);
+    if (!tempo.supported) expect(tempo.reason).toMatch(/^chain .* is not supported/);
   });
 
   it("gives the budget's EVM table the same mainnet facts as the pay table", async () => {

@@ -96,7 +96,7 @@ Two ways to pay: Budgets or Single purchase
   budget   Budgets. The owner grants an on-chain budget once, from their wallet; the agent then
            buys on its own until the budget is spent, expires or is revoked. The chain enforces
            the limit. Rails: evm (Base, Arc, Arbitrum, Polygon, SKALE Base, Ethereum, Robinhood
-           Chain), tempo (Tempo), solana (Solana), and with --testnet their testnets. Use it when the
+           Chain), solana (Solana), and with --testnet their testnets. Use it when the
            agent should buy without asking each time.
   pay      Single purchase on your machine. The owner approves each payment in their own wallet:
            a browser wallet such as MetaMask (Phantom on Solana) on a page `pay` serves on

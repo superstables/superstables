@@ -7,6 +7,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.4] - Mainnet chains
+
+### Changed
+
+- **Tempo mainnet:** No longer offered. `--chain tempo` is refused like any other chain the client does not support. Tempo Moderato with `--testnet` works as before.
+
 ## [1.4.3] - Budget steps waiting for finality
 
 `budget wait` says when a budget step is in a block and waiting for finality.
@@ -419,7 +425,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.3...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.4...HEAD
+[1.4.4]: https://github.com/superstables/superstables/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/superstables/superstables/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/superstables/superstables/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/superstables/superstables/compare/v1.4.0...v1.4.1
