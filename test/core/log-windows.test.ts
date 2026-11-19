@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EVM_CHAINS } from "../../budget/evm/chains.mjs";
+import { MAINNET_MANIFEST } from "../../src/core/mainnet-manifest.js";
 import { BASE_SEPOLIA, EVM_NETWORKS } from "../../src/core/chain.js";
 import { recheckChain } from "../../src/core/pay.js";
 import { Records } from "../../src/core/records.js";
@@ -142,6 +143,23 @@ describe("status through an RPC that caps eth_getLogs", () => {
 });
 
 describe("searchLogs", () => {
+  it.each([
+    ["core Base Sepolia", BASE_SEPOLIA],
+    ["budget Base Sepolia", EVM_CHAINS["base-sepolia"]],
+    ["Base mainnet", MAINNET_MANIFEST.chains.base],
+  ])("pages a full day of %s blocks within the RPC range", async (_label, network) => {
+    const { searchLogs } = await import("../../src/core/log-windows.mjs");
+    let next = 10n;
+    const r = await searchLogs(async (from: bigint, to: bigint) => {
+      expect(from).toBe(next);
+      expect(Number(to - from + 1n)).toBeLessThanOrEqual(network.logRange!);
+      next = to + 1n;
+      return [];
+    }, { from: 10n, to: 500_009n, window: network.logRange!, blockSeconds: network.blockSeconds }, async () => undefined, { maxCalls: 3_000 });
+    expect(r).toMatchObject({ covered: false, searchedTo: 432_009n });
+    expect(next).toBe(432_010n);
+  });
+
   it("covers every block once, in order, and says whether it covered the span", async () => {
     const { searchLogs } = await import("../../src/core/log-windows.mjs");
     const seen: [bigint, bigint][] = [];

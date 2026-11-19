@@ -74,6 +74,14 @@ describe("findApproval (a replaced grant or revoke)", () => {
 });
 
 describe("readSettlement (reconcile's settlement lookup)", () => {
+  it("finds settlement 5000 seconds back when an older journal has no pull block", async () => {
+    const block = HEAD - 25_000n;
+    logs.AuthorizationUsed = [{ blockNumber: block, transactionHash: SETTLE }];
+    rpc.getTransactionReceipt.mockImplementationOnce(async ({ hash }) => ({ transactionHash: hash, blockNumber: block, blockHash: BLOCK_HASH, status: "success", logs: settlementLogs }));
+    expect(await (await ops()).readSettlement(journal({ pullBlock: undefined }))).toMatchObject({ kind: "used", settleTx: SETTLE, transferOk: true });
+    expect(Math.max(...widths)).toBeLessThanOrEqual(200);
+  });
+
   it("finds the settlement through an RPC that caps eth_getLogs below 100 blocks", async () => {
     limit = 50;
     logs.AuthorizationUsed = [{ blockNumber: HEAD - 2_000n + 450n, transactionHash: SETTLE }];
