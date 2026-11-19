@@ -789,8 +789,10 @@ superstables budget wait --id ID --shown [--timeout S] [--site URL] [--abandon]
 
 After an owner command or buy-once returned waiting_owner: waits up to S seconds (default 30, at most 300) for that
 approval, then prints its state. While the owner has not decided: state waiting_owner, final false, exit 0. That is not
-an approval. Once the owner's wallet was asked to send and there is no final result yet: state unknown, final false,
-exit 5; tell the owner the outcome is unknown and run wait --shown again later. Once it ended: final true, and the owner
+an approval. Once the owner's wallet was asked to send and there is no final result yet: state landed, final false,
+exit 0 when superstables.com reports the transaction in a block that is not final yet (reason names the block and how
+long the chain usually takes after inclusion to make it final), else state unknown, final false, exit 5; tell the owner
+what next says and run wait --shown again later. Once it ended: final true, and the owner
 command's (or purchase's) own final RESULT and exit code, the same on every later call.
 Scripts test final, not the exit code.
 --shown means: message_for_owner was sent in a reply the owner can read.

@@ -8,6 +8,13 @@ describe("how long a chain takes to make a block final, in words", () => {
     expect(finalityFor("evm", "base-sepolia")).toBe("finalized");
   });
 
+  it("says the mainnet times measured on 19 Nov 2026, as the website's table does", () => {
+    expect(finalWords("evm", "base")).toBe("about 20 minutes");
+    expect(finalWords("evm", "arbitrum")).toBe("about 17 minutes");
+    expect(finalWords("evm", "robinhood")).toBe("about 17 minutes");
+    expect(finalWords("evm", "ethereum")).toBe("about 16 minutes");
+  });
+
   it("leaves the time out for a chain nobody measured", () => {
     expect(finalWords("evm", "polygon-amoy")).toBe("");
   });

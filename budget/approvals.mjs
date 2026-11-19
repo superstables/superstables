@@ -1236,9 +1236,24 @@ export async function pageStateOf(record) {
     const stepAsked = linked && r.view.steps.some((s) => s?.wallet_asked === true || typeof s?.tx_hash === "string");
     // the reason an open request is still waiting, as a documented word only
     const reasonCode = typeof r.view?.reason_code === "string" ? siteWord("code", r.view.reason_code) : null;
-    return r.ok ? { status: `hosted:${siteWord("state", r.view.state)}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked, reasonCode } : { status: "hosted:unreachable" };
+    const landed = r.ok ? landedOf(r.view) : null;
+    return r.ok ? { status: `hosted:${siteWord("state", r.view.state)}`, linked, walletAsked: r.view.wallet_asked === true || typeof r.view.tx_hash === "string" || stepAsked, reasonCode, ...(landed ? { landed } : {}) } : { status: "hosted:unreachable" };
   }
   return pageState(record?.url);
+}
+
+/**
+ * The site's `landed` of a request that is sent and not final: the chain included its transaction (the open step's, on a link) in a
+ * block that is not final yet. { block, minutes }: `minutes` is read from the site's `final_in` ("in about 20 minutes") and is null
+ * when the site sends none (before website #778) or sends anything else; the site's text itself is never repeated. null when the
+ * request is not landed, or a step still waits for the owner.
+ */
+function landedOf(view) {
+  const l = view?.landed;
+  if (view?.state !== "sent" || view.final === true || !l || typeof l !== "object" || !Number.isSafeInteger(l.block) || l.block < 0) return null;
+  if (Array.isArray(view.steps) && view.steps.some((s) => s?.state === "awaiting_owner" || s?.state === "queued")) return null;
+  const m = typeof l.final_in === "string" ? /^in about ([1-9]\d{0,2}) minutes?$/.exec(l.final_in) : null;
+  return { block: l.block, minutes: m ? Number(m[1]) : null };
 }
 
 /** The most read of one answer from an owner page on this computer: its /state and /cancel answers are a few hundred bytes. */
@@ -1276,7 +1291,9 @@ export function pageWords(page, rail) {
     case "hosted:unknown": return "superstables.com cannot tell whether the wallet sent it; the command is finishing and the chain must be checked";
     case "hosted:linked": return "the owner added this agent to their account; the command is finishing";
     case "hosted:queued": return "the owner added this agent to their account; the next wallet step has not been asked yet";
-    case "hosted:sent": case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
+    case "hosted:sent": if (page.landed) return `the transaction is in ${rail === "solana" ? "slot" : "block"} ${page.landed.block}, which is not final yet`;
+      return "a transaction hash was reported; the command is checking it on chain";
+    case "hosted:confirmed": case "hosted:failed": return "a transaction hash was reported; the command is checking it on chain";
     case "hosted:unreachable": return "waiting for the owner (superstables.com did not answer just now)";
     case undefined: case null: return "waiting for the owner";
     default: return "the owner page has ended; the command is finishing";

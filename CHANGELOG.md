@@ -7,6 +7,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.3] - Budget steps waiting for finality
+
+`budget wait` says when a budget step is in a block and waiting for finality.
+
+### Fixed
+
+- **`budget wait` on a step in a block:** While superstables.com reports a budget step in a block that is not final yet, `wait` answers `landed` (exit 0, `final: false`), not `unknown` (exit 5). `reason` names the block and the chain, and how long the chain usually takes after inclusion to make it final: for example, "in block 38514772 on Base, waiting for finality: Base usually takes about 20 minutes after inclusion to make it final". `next` says the owner has nothing to do and to run `wait` again later. The time comes from superstables.com when it sends one, else from the client's own measured times.
+
+### Changed
+
+- **Finality times:** Measured again on 19 Nov 2026: Base about 20 minutes, Arbitrum One and Robinhood Chain about 17, Ethereum about 16.
+
 ## [1.4.2] - Mainnet by default
 
 Mainnet by default; `--testnet` makes a run testnet-only.
@@ -407,7 +419,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.2...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.3...HEAD
+[1.4.3]: https://github.com/superstables/superstables/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/superstables/superstables/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/superstables/superstables/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/superstables/superstables/compare/v1.3.0...v1.4.0
