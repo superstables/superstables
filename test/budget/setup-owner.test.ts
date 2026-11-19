@@ -159,7 +159,7 @@ for (const make of [solanaRail, tempoRail]) {
         expect(out.result).toMatchObject({ ok: false, state: "refused_precheck", owner: r.A });
         expect(out.result.reason).toBe(`another owner (${r.A}) is recorded for this agent`);
         // the retry keeps the chain where its approvals are: hosted on the recorded site, or on this computer
-        expect(out.result.next).toBe(`superstables budget setup --rail ${r.name}${hosted ? ` --hosted --site ${SITE}` : ""} --new-owner replaces it (refused while a budget is live)`);
+        expect(out.result.next).toBe(`superstables budget setup --rail ${r.name} --testnet${hosted ? ` --hosted --site ${SITE}` : ""} --new-owner replaces it (refused while a budget is live)`);
         expect(read(r.agentFile)).toBe(before.agent);
         expect(read(r.publicFile)).toBe(before.pub);
         expect(r.isLive(r.A)).toBe(true);
@@ -217,7 +217,7 @@ for (const make of [solanaRail, tempoRail]) {
         const out = await setup(r, "--owner-key-file", r.ownerKey(who));
         expect(out.code, out.stderr).toBe(3);
         expectReason(out, `the owner files disagree: ${r.publicFile} records the owner ${r.A}, and ${r.agentFile} is bound to ${r.C}`);
-        expect(out.result.next).toBe(`superstables budget setup --rail ${r.name} --new-owner records one owner again (refused while a budget is live on either)`);
+        expect(out.result.next).toBe(`superstables budget setup --rail ${r.name} --testnet --new-owner records one owner again (refused while a budget is live on either)`);
       }
       expect(read(r.agentFile)).toBe(before.agent);
       expect(read(r.publicFile)).toBe(before.pub);
@@ -236,7 +236,7 @@ for (const make of [solanaRail, tempoRail]) {
       expect(revoke.code, revoke.stderr).toBe(3);
       expect(revoke.result).toMatchObject({ ok: false, state: "refused_precheck" });
       expect(revoke.result.reason).toBe(`the owner files disagree: the public file records the owner ${r.A}, and the agent key file is bound to ${r.C}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`);
-      expect(revoke.result.next).toBe(`superstables budget setup --rail ${r.name} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one`);
+      expect(revoke.result.next).toBe(`superstables budget setup --rail ${r.name} --testnet --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one`);
       expect(JSON.stringify(revoke.result)).not.toMatch(/already revoked|never authorized/);
       expect(r.isLive(r.C)).toBe(true);
       r.ended(r.C);
@@ -335,7 +335,7 @@ describe("revoke while the owner files disagree", () => {
       write(r.publicFile, r.publicText(r.A, true), 0o644);
       const out = await budget(["revoke", "--rail", r.name, "--wait", "--no-open"]);
       expect(out.code, out.stderr).toBe(3);
-      expect(out.result.next).toBe(`superstables budget setup --rail ${r.name} --hosted --site ${SITE} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one`);
+      expect(out.result.next).toBe(`superstables budget setup --rail ${r.name} --testnet --hosted --site ${SITE} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one`);
     }
   }, 60_000);
 

@@ -4,14 +4,14 @@
     "name": "Superstables"
   },
   "metadata": {
-    "description": "Find paid services, use budgets, and request single purchases you approve. Testnet by default."
+    "description": "Find paid services, use budgets, and request single purchases you approve. Mainnet by default."
   },
   "plugins": [
     {
       "name": "superstables",
       "source": "./plugin",
       "displayName": "Superstables",
-      "description": "Find paid services, use budgets, and request single purchases you approve. Testnet by default.",
+      "description": "Find paid services, use budgets, and request single purchases you approve. Mainnet by default.",
       "category": "Payments",
       "tags": [
         "payments",

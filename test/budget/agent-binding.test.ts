@@ -217,7 +217,7 @@ describe("owner-binding: legacy, retired and the key file", () => {
     expect(hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" })).toBe(" --hosted --site http://127.0.0.1:4000");
     expect(hostedFlags({ APPROVALS: "hosted" })).toBe("");
     expect(hostedFlags({ SITE: "http://127.0.0.1:4000" })).toBe("");
-    expect(legacyWarning("evm", "F", agentA, hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" }))).toContain("run superstables budget setup --rail evm --testnet --hosted --site http://127.0.0.1:4000 again");
+    expect(legacyWarning("evm", "F", agentA, hostedFlags({ APPROVALS: "hosted", SITE: "http://127.0.0.1:4000" }))).toContain("run superstables budget setup --rail evm --hosted --site http://127.0.0.1:4000 again");
   });
 
   it("a retired agent is refused even with a valid signature; a retired.json that is not JSON is refused", async () => {

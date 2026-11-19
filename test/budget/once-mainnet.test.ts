@@ -114,7 +114,7 @@ describe("buy-once on a mainnet, the default", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ chain: "base-sepolia", state: "waiting_owner" });
     expect(r.result.message_for_owner).toMatch(/test USDC on Base Sepolia/);
-    expect(r.result.message_for_owner).toContain("This is a testnet: it uses test tokens.");
+    expect(r.result.message_for_owner).toContain("This uses test tokens.");
   }, 30_000);
 });
 

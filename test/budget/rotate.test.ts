@@ -96,7 +96,7 @@ describe("rotate, evm", () => {
     expect(r.result.newAgent).toMatch(/^0x[0-9a-fA-F]{40}$/);
     expect(r.result.newAgent.toLowerCase()).not.toBe(e.agent.address.toLowerCase());
     expect(r.result.chains).toEqual([{ chain: "base-sepolia", recovered: true, setUp: true, hosted: null, revocation: expect.objectContaining({ final: true }) }]);
-    expect(r.result.next).toMatch(/budget grant --rail evm --chain base-sepolia --amount A/);
+    expect(r.result.next).toMatch(/budget grant --rail evm --testnet --chain base-sepolia --amount A/);
     // the chain: the allowance is 0, and the 0.5 USDC went back to the owner
     expect(e.chain.allowanceOf(OWNER.address, e.agent.address)).toBe(0n);
     expect(e.chain.usdcOf(e.agent.address)).toBe(0n);
@@ -160,7 +160,7 @@ describe("rotate, evm", () => {
     expect(r.result).toMatchObject({ state: "refused_precheck", retired: false });
     expect(r.result.reason).toContain("0x000000000000000000000000000000000000dEaD");
     expect(r.result.reason).toContain(OWNER.address);
-    expect(r.result.next).toMatch(/^superstables budget setup --rail evm /);
+    expect(r.result.next).toMatch(/^superstables budget setup --rail evm --testnet /);
     expect(sendsOf(e.chain)).toBe(0);
     expect(existsSync(file("keys", "budget", "retired.json"))).toBe(false);
     expect(readFileSync(keyFile, "utf8")).toContain(e.agent.address);
@@ -381,7 +381,7 @@ describe("rotate, evm", () => {
   it("tempo has no rotation: it says what to run instead", async () => {
     const r = await budget(["rotate", "--rail", "tempo"]);
     expect(r.code).toBe(2);
-    expect(r.result.reason).toMatch(/setup --rail tempo --agent LABEL/);
+    expect(r.result.reason).toMatch(/setup --rail tempo --testnet --agent LABEL/);
   }, 60_000);
 
   it("--chain is not taken", async () => {

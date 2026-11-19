@@ -817,7 +817,6 @@ export function ownerApprovalPage(facts: OwnerPageFacts, terms: OwnerTerms, look
     ${shows}
     ${limits}
     ${networkHint}
-    ${facts.chain.testnet || facts.kind === "settings" ? "" : `<div id="real-money" class="note bad">This is on ${esc(facts.chain.chainName)} (mainnet).</div>`}
     <div id="say" class="note" hidden></div>
     <div class="actions">
       <button id="connect" class="primary" data-act="connect">Connect wallet</button>

@@ -194,7 +194,7 @@ describe("setup --hosted", () => {
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(0);
     const host = new URL(site.url).host;
-    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    const again = `superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner`;
     expect(r.stderr).toContain(`AGENT ADDED to the ${host} account ${OTHER}`);
     expect(r.stderr).toContain(`If it is not, someone else added this agent to their account: grant nothing. Once the agent is removed on that account's page on ${host}, run ${again} yourself.`);
     expect(r.stderr).not.toContain("OWNER CONNECTED");
@@ -220,7 +220,7 @@ describe("setup --hosted", () => {
     };
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"], env);
     expect(r.code, r.stderr).toBe(0);
-    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    const again = `superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner`;
     expect(r.stderr).toContain(`run ${again} yourself.`);
     expect(r.result.next).toContain(`then run ${again} with the owner present`);
     expect(r.result.next).not.toContain("staging.superstables.com");
@@ -351,7 +351,7 @@ describe("setup --hosted", () => {
     expect(publicFile()).toMatch(/^APPROVALS=hosted$/m);
     // doctor names the same command for the owner on record
     const doctor = await budget(["doctor", "--rail", "evm"]);
-    expect(doctor.stderr).toContain(`If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner replaces it`);
+    expect(doctor.stderr).toContain(`If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner replaces it`);
   }, 90_000);
 
   it("moving a hosted chain to another site takes a fresh link signed there; the old link does not count", async () => {
@@ -761,7 +761,7 @@ describe("find", () => {
     expect(r.stdout).toMatch(/^name\s+price\s+chain\s+simulated\s+url$/m);
     expect(r.stdout).toMatch(/Weather\s+0\.001 USDC\s+base-sepolia\s+not said\s+https:\/\/seller\.example\/w/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ name: "Weather", chain: "base-sepolia", simulated: null, url: "https://seller.example/w" }] });
-    expect(r.result.next).toBe("check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy");
+    expect(r.result.next).toBe("check the price with superstables budget preflight --rail evm --testnet --chain base-sepolia --url U before you buy");
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);
@@ -777,7 +777,7 @@ describe("find", () => {
       // an unknown network: the listing's chain and rail are data, so the command stays a placeholder
       { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: PLACEHOLDER_NEXT },
       // a known network under another chain's name: the client's table wins
-      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy", chain: "base-sepolia", rail: "evm" },
+      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "check the price with superstables budget preflight --rail evm --testnet --chain base-sepolia --url U before you buy", chain: "base-sepolia", rail: "evm" },
       // a network no rail pays
       { rows: [{ ...hostile, network: "cosmos:1", rail: "evm;id" }], next: PLACEHOLDER_NEXT },
       { rows: [1, 2, 3].map(() => ({ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" })), next: PLACEHOLDER_NEXT },
@@ -827,7 +827,7 @@ describe("find", () => {
       const out = JSON.parse(r.stdout);
       expect(out).toMatchObject({ state: "ok", rail: "solana", chain: "devnet" });
       expect(out.services.map((s: { name: string }) => s.name)).toEqual(["Market data on Solana"]);
-      expect(out.next).toMatch(/preflight --rail solana --chain devnet --url U/);
+      expect(out.next).toMatch(/preflight --rail solana --testnet --chain devnet --url U/);
     }, 30_000);
 
     it("every EVM key works, and --rail narrows to a rail; the chain comes from the network when the site does not name it", async () => {

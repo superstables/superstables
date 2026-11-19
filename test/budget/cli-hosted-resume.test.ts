@@ -172,7 +172,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const retiredResult = {
       state: "refused_precheck", id, url: first.result.url,
       reason: "the approval link expired on the site without a completed approval",
-      next: `superstables budget setup --rail evm --chain ${record(id).chain} --hosted --site ${site.url}`,
+      next: `superstables budget setup --rail evm --testnet --chain ${record(id).chain} --hosted --site ${site.url}`,
     };
     expect(record(id).chain).toEqual(expect.any(String));
     expect(retired.result).toMatchObject({ ...retiredResult, final: true });

@@ -28,7 +28,7 @@ describe("the owner check after setup", () => {
 
   it("hosted on the default site: names the account and the exact recorded site in the replacement command", () => {
     const c = ownerCheck({ rail: "evm", chain: "base-sepolia", owner, site: "https://www.superstables.com" });
-    const again = "superstables budget setup --rail evm --chain base-sepolia --hosted --site https://www.superstables.com --new-owner";
+    const again = "superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site https://www.superstables.com --new-owner";
     expect(c.words).toBe(`AGENT ADDED to the superstables.com account ${owner}\n  Check that this is your own wallet's address. If it is not, someone else added this agent to their account: grant nothing. Once the agent is removed on that account's page on superstables.com, run ${again} yourself.`);
     expect(c.next).toContain(`The agent stays on that account until it is removed on that account's page on superstables.com; then run ${again} with the owner present`);
   });
@@ -36,13 +36,13 @@ describe("the owner check after setup", () => {
   it("hosted on another site: names that site", () => {
     const c = ownerCheck({ rail: "tempo", chain: "moderato", owner, site: "https://staging.superstables.com" });
     expect(c.words).toContain("AGENT ADDED to the staging.superstables.com account");
-    expect(c.next).toContain("superstables budget setup --rail tempo --chain moderato --hosted --site https://staging.superstables.com --new-owner");
+    expect(c.next).toContain("superstables budget setup --rail tempo --testnet --chain moderato --hosted --site https://staging.superstables.com --new-owner");
   });
 
   it("on this computer: OWNER CONNECTED and setup --new-owner, unchanged", () => {
     const c = ownerCheck({ rail: "evm", chain: "arc-testnet", owner, site: null });
     expect(c.words).toBe(`OWNER CONNECTED: ${owner}\n  Check that this is your own wallet's address. If it is not, someone else completed setup: grant nothing, and run setup --new-owner yourself.`);
-    expect(c.next).toBe(`the owner on record is now ${owner}: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing, and run superstables budget setup --rail evm --chain arc-testnet --new-owner with the owner present`);
+    expect(c.next).toBe(`the owner on record is now ${owner}: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing, and run superstables budget setup --rail evm --testnet --chain arc-testnet --new-owner with the owner present`);
   });
 });
 

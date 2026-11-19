@@ -215,7 +215,7 @@ describe("the switch is on: the agent key must be in the keychain where it signs
     expect(ok.stderr).not.toContain(SECRET);
     plainFile();
     const plain = budget(["doctor", "--rail", "tempo", "--chain", "tempo"], ON);
-    expect(plain.stderr).toMatch(/FAIL\s+key storage: .*plain-text file.*--chain tempo --key-store os-keychain/);
+    expect(plain.stderr).toMatch(/FAIL\s+key storage: .*plain-text file.*--rail tempo --key-store os-keychain/);
   }, 90_000);
 
   it("an owner key file is a plain-text key and is refused on the mainnet", () => {

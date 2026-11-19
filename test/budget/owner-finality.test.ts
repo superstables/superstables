@@ -377,7 +377,7 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result.reason).toMatch(/this setup replaces the owner, so whether the new owner already gives this agent an allowance cannot be read before the link\. Set up first \(link\), then grant/);
     expect(r.result.reason).not.toMatch(/no owner is recorded/);
-    expect(r.result.next).toMatch(/setup --rail evm --hosted --new-owner, then superstables budget grant/);
+    expect(r.result.next).toMatch(/setup --rail evm --testnet --hosted --new-owner, then superstables budget grant/);
     expect(c.site.posts).toEqual([]);
   }, 150_000);
 

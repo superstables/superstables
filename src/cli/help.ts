@@ -112,7 +112,7 @@ Start here, Single purchase on superstables.com:
 
 Seller credit (a seller account on superstables.com):
   superstables seller credit                          the prepaid credit referral fees come out of
-  superstables seller top-up <amount>                 add to it with test USDC on Base Sepolia
+  superstables seller top-up <amount>                 add to it with test USDC on Base Sepolia (--testnet)
   The seller API key comes from SUPERSTABLES_SELLER_API_KEY and goes only to the Superstables
   origin, never into this output. A top-up is paid like any purchase: the owner approves it.
 

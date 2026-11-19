@@ -92,7 +92,7 @@ describe("the superstables CLI", () => {
       expect(result.stdout).toContain(command);
     }
     // The one sentence a reader must not miss.
-    expect(result.stdout).toContain("Testnet by default. Mainnet");
+    expect(result.stdout).toContain("Mainnet by default. --testnet");
     // The hosted catalogue is not simulated as a whole: its market data service returns live prices.
     expect(result.stdout).not.toMatch(/simulated demo services/);
     expect(result.stdout).toMatch(/most are simulated; the market data service returns live prices/);
@@ -352,7 +352,7 @@ describe("the help", () => {
   it("explains the two ways to pay, where to start each, the environment and the exit codes", async () => {
     const { stdout, code } = await run(["--help"]);
     expect(code).toBe(0);
-    expect(stdout).toContain("Testnet by default. Mainnet");
+    expect(stdout).toContain("Mainnet by default. --testnet");
     expect(stdout).toContain("Two ways to pay");
     expect(stdout).toContain("superstables budget setup --rail evm");
     expect(stdout).toContain("`superstables setup` is for pay only");
@@ -874,7 +874,7 @@ describe("quote against a local seller on Base mainnet", () => {
     await Promise.all([seller.close(), testnet.close()]);
   });
 
-  it("with the operator's switch on, names the network as a mainnet, as a testnet quote says (testnet)", async () => {
+  it("by default, names the network as a mainnet, as a testnet quote says (testnet)", async () => {
     const r = await run(["quote", `${seller.url}/paid/intel`], { SUPERSTABLES_TESTNET: "" });
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/^\s*price\s+0\.05 USDC/m);
@@ -883,21 +883,27 @@ describe("quote against a local seller on Base mainnet", () => {
     expect(quote.terms.network).toBe("eip155:8453");
   });
 
-  it("with the switch off, takes no quote for it", async () => {
+  it("in a testnet-only run, takes no quote for it", async () => {
     const r = await run(["quote", `${seller.url}/paid/intel`]);
     expect(r.code).not.toBe(0);
     expect(r.stdout).not.toMatch(/^\s*network\s+Base/m);
   });
 
-  it.each([["off", {}], ["on", { SUPERSTABLES_TESTNET: "" }]] as const)(
-    "on a testnet, with the switch %s, says (testnet) and nothing about mainnet",
-    async (_label, env) => {
-      const r = await run(["quote", `${testnet.url}/paid/intel`], env);
-      expect(r.code).toBe(0);
-      expect(r.stdout).toMatch(/^\s*network\s+Base Sepolia \(testnet\)$/m);
-      expect(r.stdout).not.toMatch(/mainnet/);
-    },
-  );
+  it("on a testnet, in a testnet-only run, says (testnet) and nothing about mainnet", async () => {
+    const r = await run(["quote", `${testnet.url}/paid/intel`]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^\s*network\s+Base Sepolia \(testnet\)$/m);
+    expect(r.stdout).not.toMatch(/mainnet/);
+  });
+
+  it("on a testnet, by default, takes no quote and names --testnet; with --testnet it quotes", async () => {
+    const r = await run(["quote", `${testnet.url}/paid/intel`], { SUPERSTABLES_TESTNET: "" });
+    expect(r.code).not.toBe(0);
+    expect(`${r.stdout}\n${r.stderr}`).toContain("testnets need --testnet");
+    const flagged = await run(["--testnet", "quote", `${testnet.url}/paid/intel`], { SUPERSTABLES_TESTNET: "" });
+    expect(flagged.code, flagged.stderr).toBe(0);
+    expect(flagged.stdout).toMatch(/^\s*network\s+Base Sepolia \(testnet\)$/m);
+  });
 });
 
 // ── find: the commands for each listing fit the ways it can be paid ──────────────────
@@ -1005,10 +1011,10 @@ describe("find against a local index", () => {
 
   it("says how many matching listings the default filter hides, and why, in the table and in --json, and not with --all", async () => {
     // Index rows do not list their parameters, so pay cannot call any of the four as listed: all are hidden by default.
-    // Three are on testnets pay pays on (pay: with params); the mainnet one is refused while the switch is off.
+    // Three are on testnets pay pays on (pay: with params); the mainnet one is refused in this testnet-only run.
     const hidden =
       "4 matching listings are not shown: for 3, the index does not record the request parameters `superstables pay` needs (pay: with params); " +
-      "`superstables pay` cannot call the other 1 (for example on a mainnet while the operator's switch is off, or not https). `find --all` lists them with the reason.";
+      "`superstables pay` cannot call the other 1 (for example on a mainnet in a testnet-only run, or not https). `find --all` lists them with the reason.";
     const table = await find();
     expect(table.code).toBe(0);
     expect(table.stdout).toContain(`note: ${hidden}`);
@@ -1020,7 +1026,7 @@ describe("find against a local index", () => {
     // --budget words it by the budget rail: only the mainnet row is dropped
     const budgetTable = await find("--budget");
     expect(budgetTable.stdout).toContain(
-      "note: 1 matching listing is not shown because no `superstables budget` rail could pay it (for example on a mainnet while the operator's switch is off, or not https); `find --all` lists it with the reason.",
+      "note: 1 matching listing is not shown because no `superstables budget` rail could pay it (for example on a mainnet in a testnet-only run, or not https); `find --all` lists it with the reason.",
     );
     const budget = JSON.parse((await find("--budget", "--json")).stdout) as { warnings: string[] };
     expect(budget.warnings.some((w) => /^1 matching listing is not shown because no `superstables budget` rail could pay it/.test(w))).toBe(true);
@@ -1035,31 +1041,29 @@ describe("find against a local index", () => {
     const r = await run(["find", "qqzv", "--demo"], { SUPERSTABLES_INDEX_URL: "off", SUPERSTABLES_CATALOGUE_URL: `${index.url}/catalogue` });
     expect(r.code).toBe(0);
     expect(r.stdout).toContain(
-      "note: 1 matching listing is not shown because `superstables pay` cannot call it (for example on a mainnet while the operator's switch is off, or not https); `find --all` lists it with the reason.",
+      "note: 1 matching listing is not shown because `superstables pay` cannot call it (for example on a mainnet in a testnet-only run, or not https); `find --all` lists it with the reason.",
     );
     expect(r.stdout).not.toContain("pay: with params");
   });
 
-  it("with the operator's switch on, hides a mainnet listing without parameters as a testnet one is hidden, and says why", async () => {
+  it("by default, hides a mainnet listing without parameters for its parameters, and the testnet ones for their chain", async () => {
     const on = (...args: string[]) =>
       run(["find", "zzqx", ...args], { SUPERSTABLES_INDEX_URL: `${index.url}/api/v1/services`, SUPERSTABLES_DEMO_SERVICES: "off", SUPERSTABLES_TESTNET: "" });
     const table = await on();
     expect(table.code).toBe(0);
-    // The mainnet row is pay: with params now, exactly like the three testnet rows, and none of them blames the switch.
+    // The mainnet row is pay: with params; the three testnet rows need --testnet.
     expect(table.stdout).toContain(
-      "note: 4 matching listings are not shown because the index does not record the request parameters `superstables pay` needs (pay: with params); " +
-        "`find --all` lists them, with the command that quotes each once its parameters are filled in.",
+      "note: 4 matching listings are not shown: for 1, the index does not record the request parameters `superstables pay` needs (pay: with params); " +
+        "`superstables pay` cannot call the other 3 (for example on a testnet without --testnet, or not https). `find --all` lists them with the reason.",
     );
-    expect(table.stdout).not.toMatch(/switch is off/);
 
     const all = await on("--all", "--json");
     const { services } = JSON.parse(all.stdout) as { services: { id: string; actionable: boolean; routes: { pay: boolean } }[] };
-    for (const id of ["sats.example", "main.example"]) {
-      expect(services.find((s) => s.id === id)).toMatchObject({ actionable: false, routes: { pay: true } });
-    }
+    expect(services.find((s) => s.id === "main.example")).toMatchObject({ actionable: false, routes: { pay: true } });
+    expect(services.find((s) => s.id === "sats.example")).toMatchObject({ actionable: false, routes: { pay: false } });
 
     const budget = await on("--budget");
-    expect(`${budget.stdout}\n${budget.stderr}`).not.toMatch(/switch is off/);
+    expect(`${budget.stdout}\n${budget.stderr}`).not.toMatch(/testnet-only run/);
   });
 
   it("tells the reader that listing text is the listing's own words, in the output and in the help", async () => {

@@ -668,7 +668,7 @@ function ownerAction(overrides: Partial<OwnerActionInput> = {}): OwnerActionInpu
       rows: [{ label: "Agent", value: AGENT, mono: true }],
       enforced: ["A total cap of 0.01 USDC."],
       notEnforced: ["No expiry.", "No seller list."],
-      notes: ["To end the budget at any time: superstables budget revoke --rail evm."],
+      notes: ["To end the budget at any time: superstables budget revoke --rail evm --testnet."],
     },
     account: OWNER.address,
     transaction: { to: USDC_TOKEN, data: APPROVE_DATA, value: "0x0" },
@@ -2047,7 +2047,7 @@ describe("the agent's gas, checked before it signs anything", () => {
     expect(g).toMatchObject({ ok: false, have: POL / 50n, gas: 280_000n });
     expect(g.need).toBe(280_000n * g.fee);
     expect(lib.gasWords(g, "this purchase", ", including what a refund would cost")).toBe("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
-    expect(lib.fundAgentNext(g)).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.078");
+    expect(lib.fundAgentNext(g)).toBe("owner: superstables budget fund-agent --rail evm --testnet --chain polygon-amoy --amount 0.078");
     const short = await lib.agentGasFor(agent, AMOY_USDC, "0x23b872dd", "pull", ["cancel", "return"]).catch((err: unknown) => err);
     expect(short).toBeInstanceOf(lib.GasShort);
     // at the usual 30 gwei the same agent can pay: the pull gets the chain's limit, signed at the fee that was checked
@@ -2084,7 +2084,7 @@ describe("the agent's gas, checked before it signs anything", () => {
       expect(r).toMatchObject({ state: "refused_precheck", exitCode: 3, signedPayment: false, pulled: 0n });
       expect(r.journal.pullTx).toBeUndefined();
       expect(r.journal.reason).toContain("the agent key has 0.02 POL; this purchase needs about 0.098 POL at the current fee (348 gwei), including what a refund would cost");
-      expect(r.journal.next).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy");
+      expect(r.journal.next).toContain("superstables budget fund-agent --rail evm --testnet --chain polygon-amoy");
       expect(f.calls).toContain("eth_estimateGas"); // refused by the pull's own check, the one that estimates
       expect(f.calls).not.toContain("eth_sendRawTransaction");
       // too little POL at the precheck's own fee: refused there, before the pull is estimated or the journal says it was sent
@@ -2165,7 +2165,7 @@ describe("doctor on an evm chain", () => {
   it("names the chain in the new-owner hint", async () => {
     const out = await doctorAmoy({ balance: POL, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
     expect(out).toContain(`OWNER (recorded): ${OWNER.address}`);
-    expect(out).toContain("superstables budget setup --rail evm --chain polygon-amoy --new-owner replaces it");
+    expect(out).toContain("superstables budget setup --rail evm --testnet --chain polygon-amoy --new-owner replaces it");
   });
 
   it("asks the agent for twice what one purchase and a failure's cleanup cost at the current fee, and says what that is", async () => {
@@ -2174,7 +2174,7 @@ describe("doctor on an evm chain", () => {
     const agentLine = spike.split("\n").find((l) => l.includes("agent POL (gas) balance"))!;
     expect(agentLine).toMatch(/^\s+FAIL/);
     expect(agentLine).toContain("need at least 0.2; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.098 POL now at 348 gwei");
-    expect(spike).toContain("superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.18");
+    expect(spike).toContain("superstables budget fund-agent --rail evm --testnet --chain polygon-amoy --amount 0.18");
     // at the usual 30 gwei the chain's own minimum (0.05 POL) is the larger
     const usual = await doctorAmoy({ balance: POL / 50n, tips: [30n * GWEI], owner: OWNER.address, agent: AGENT, calls: [] });
     expect(usual.split("\n").find((l) => l.includes("agent POL (gas) balance"))).toContain("need at least 0.05; one purchase plus the cleanup a failed one needs (pull, cancel, return: 280000 gas) costs about 0.0085 POL now at 30 gwei");
@@ -2298,7 +2298,7 @@ describe("the owner commands' words on an evm chain", () => {
       expect(r.code).toBe(3);
       expect(r.result).toMatchObject({ command: "buy", state: "refused_precheck", paid: false });
       expect(r.result.reason).toBe("REFUSED: the agent key has 0.006 POL; this purchase needs about 0.068 POL at the current fee (242 gwei), including what a refund would cost. Nothing was signed or pulled.");
-      expect(r.result.next).toBe("owner: superstables budget fund-agent --rail evm --chain polygon-amoy --amount 0.062 (the owner approves it in their wallet), then buy again");
+      expect(r.result.next).toBe("owner: superstables budget fund-agent --rail evm --testnet --chain polygon-amoy --amount 0.062 (the owner approves it in their wallet), then buy again");
     } finally {
       await seller.close();
     }

@@ -275,7 +275,7 @@ describe("a copy of the client whose chain tables name chains that are not testn
     const r = await run(h, full, { SUPERSTABLES_SOLANA_RPC: rpc.url, SUPERSTABLES_TEMPO_RPC: rpc.url }, script);
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result).toMatchObject({ ok: false, state: "refused_precheck" });
-    expect(r.result.reason).toMatch(new RegExp(`^this run is testnet-only \(--testnet\), so mainnets are off; the ${rail} chain`));
+    expect(r.result.reason).toMatch(new RegExp(`^this run is testnet-only \\(--testnet\\), so mainnets are off; the ${rail} chain`));
     expect(rpc.hits()).toBe(0);
     expect(seller.hits()).toBe(0);
   }, 120_000);

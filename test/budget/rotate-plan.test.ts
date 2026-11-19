@@ -237,7 +237,7 @@ describe("a revoke that is not final yet", () => {
     expect(r.code).toBe(5);
     expect(r.fields).toMatchObject({ state: "incomplete", oldAgent: OLD, retired: true });
     expect(r.fields.reason).toMatch(/not final/);
-    expect(r.fields.next).toMatch(/superstables budget status --rail evm --chain base-sepolia/);
+    expect(r.fields.next).toMatch(/superstables budget status --rail evm --testnet --chain base-sepolia/);
     expect(r.fields.next).toMatch(/does not send them again/);
     for (const c of NOT_AFTER_REVOKE) expect(h.calls).not.toContain(c);
     const kept = h.saved.at(-1);
@@ -294,8 +294,8 @@ describe("a revoke that is not final yet", () => {
     const r = await rotate({ ...base, steps: h.steps });
     expect(r.code).toBe(5);
     expect(r.fields.reason).toMatch(/base-sepolia.*arc-testnet/);
-    expect(r.fields.next).toContain("superstables budget status --rail evm --chain base-sepolia");
-    expect(r.fields.next).toContain("superstables budget status --rail evm --chain arc-testnet");
+    expect(r.fields.next).toContain("superstables budget status --rail evm --testnet --chain base-sepolia");
+    expect(r.fields.next).toContain("superstables budget status --rail evm --testnet --chain arc-testnet");
     expect(h.calls).not.toContain("swap");
   });
 
@@ -417,7 +417,7 @@ describe("solana: a revoke that landed but is not final", () => {
     const r = await rotate({ ...sol, steps: h.steps });
     expect(r.code).toBe(5);
     expect(r.fields).toMatchObject({ state: "incomplete", retired: true });
-    expect(r.fields.next).toMatch(/superstables budget status --rail solana/);
+    expect(r.fields.next).toMatch(/superstables budget status --rail solana --testnet/);
     for (const c of ["sweep", "swap", "clear(devnet)", "setup(devnet)"]) expect(h.calls).not.toContain(c);
     expect(h.saved.at(-1).chains.devnet.revocation).toMatchObject({ final: false, tx: "sigRevoke", slot: 7 });
     expect(h.saved.at(-1).chains.devnet.revokedAt).toBeUndefined();

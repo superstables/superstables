@@ -217,7 +217,8 @@ describe("the approval page (browser signer)", () => {
       const { links, endings } = await open(signer, request(1, 90));
       const html = await (await fetch(links[0])).text();
       expect(html).toContain('<span class="pill real">Mainnet</span>');
-      expect(html).toContain("This payment is on Example Main (mainnet). A payment cannot be undone.");
+      expect(html).toContain("Example Main");
+      expect(html).not.toMatch(/id="real-money"|cannot be undone/);
       expect(html).toContain('<div class="amount">1<span>USDC</span></div>');
       expect(html).not.toMatch(/real money|money is real/);
       await postJson(`${links[0]}/reject`, {});

@@ -10,6 +10,7 @@
 // and the site can say what became of it. "Nothing was charged" is said only when nothing was signed.
 
 import { join } from "node:path";
+import { testnetOffReason } from "../core/chain-gate.js";
 import { withFileLock } from "../core/lock.js";
 import { shownTransaction } from "../core/pay.js";
 import { SecretEchoedError, quote as takeQuote } from "../core/quote.js";
@@ -112,6 +113,9 @@ export async function runTopUp(input: {
   say: (line: string) => void;
   ports: TopUpPorts;
 }): Promise<TopUpResult> {
+  // a top-up is paid in test USDC on Base Sepolia only: refused before the site is asked, unless the run is testnet-only
+  const testnetOff = testnetOffReason();
+  if (testnetOff) throw new CliError(`seller top-up pays in test USDC on Base Sepolia only, and ${testnetOff}: run it again with --testnet. Nothing was created or charged.`, EXIT.badInput);
   const { apiKey } = input;
   const result = await topUpSteps({ ...input, say: (line) => input.say(redactSecret(line, apiKey)) });
   return {

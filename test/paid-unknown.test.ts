@@ -1366,7 +1366,7 @@ const ROWS: Row[] = [
       return [answer, replay, seenBudget("wait, after every process is gone", "wait", await budget(c.home, ["wait", "--id", r2.id, "--timeout", "10"], c.env))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction", next: "superstables budget status --rail evm --chain base-sepolia: read whether it landed before running this again" } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction", next: "superstables budget status --rail evm --testnet --chain base-sepolia: read whether it landed before running this again" } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction" } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped after its command was about to broadcast a transaction (last page state: none)" } },
     ],
@@ -1528,7 +1528,7 @@ const ROWS: Row[] = [
       writeFileSync(join(b.home, "budget", "ops", "evm-base-sepolia", `${op}.json`), JSON.stringify({ ...purchase(op), state: "unknown" }));
       return [seenBudget("buy again", "buy", await budget(b.home, ["buy", "--rail", "evm", "--url", "https://seller.example/x", "--max", "0.01", "--op", op], b.env))];
     },
-    expect: [{ verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-ab12", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-ab12/) } }],
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-ab12", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --testnet --chain base-sepolia --op rb-20261010120000-ab12/) } }],
   },
   {
     path: "budget buy with the --op of a purchase whose outcome is unknown, without its agent key or with an unsafe key file; and with an op another buy holds before it wrote a journal",
@@ -1559,7 +1559,7 @@ const ROWS: Row[] = [
       }
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-cd34", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-cd34/) } },
+      { verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-cd34", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --testnet --chain base-sepolia --op rb-20261010120000-cd34/) } },
       { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_already_unknown" } },
       { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_in_progress", next: expect.stringMatching(/Another process \(buy or reconcile\) may be working on this op; wait for its RESULT, then superstables budget reconcile .* Never pay again for this op while its outcome is unknown$/) } },
     ],

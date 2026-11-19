@@ -77,15 +77,17 @@ describe("Robinhood Chain in the budget", () => {
     expect(flag.result?.state).not.toBe("refused_precheck");
   }, 60_000);
 
-  it("an invalid SUPERSTABLES_ALLOW_MAINNET refuses a mainnet with the error, and leaves a testnet alone", () => {
-    const bad = { SUPERSTABLES_ALLOW_MAINNET: "yes" };
+  it("an invalid SUPERSTABLES_TESTNET refuses both kinds of chain with the error", () => {
+    const bad = { SUPERSTABLES_TESTNET: "yes" };
     const s = script(["--chain", "robinhood"], bad);
     expect(s.code).toBe(3);
-    expect(s.result?.reason).toContain('SUPERSTABLES_ALLOW_MAINNET is "yes"');
+    expect(s.result?.reason).toContain('SUPERSTABLES_TESTNET is "yes"');
     const d = run(process.execPath, [CLI, "status", "--rail", "evm", "--chain", "robinhood"], bad);
-    expect(d.code).toBe(3);
-    expect(d.result?.reason).toContain("SUPERSTABLES_ALLOW_MAINNET");
-    expect(script(["--chain", "robinhood-testnet"], bad).code).not.toBe(3);
+    expect(d.code).toBe(2);
+    expect(d.result?.reason).toContain('SUPERSTABLES_TESTNET is "yes"');
+    const t = script(["--chain", "robinhood-testnet"], bad);
+    expect(t.code).toBe(3);
+    expect(t.result?.reason).toContain('SUPERSTABLES_TESTNET is "yes"');
   }, 60_000);
 
   it("every EVM script takes --chain robinhood-testnet past the guard", () => {
