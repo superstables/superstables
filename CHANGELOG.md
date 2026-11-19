@@ -15,7 +15,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Tempo mainnet:** No longer offered. Tempo Moderato with `--testnet` is unchanged.
+- **Tempo mainnet:** Temporarily disabled; it will be turned back on soon. Tempo Moderato with `--testnet` is unchanged.
 
 ## [1.4.3] - Budget steps waiting for finality
 
