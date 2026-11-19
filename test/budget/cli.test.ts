@@ -159,7 +159,7 @@ describe("a checkout without its dev packages", () => {
     writeFileSync(join(repo, "budget", rail, "reconcile.mjs"), `console.log('RESULT ' + JSON.stringify({ state: 'settled', chain_final: false, delivered: false, debit: '0.01', next: 'node budget/${rail}/reconcile.mjs' }));`);
     const r = await run([join(repo, "budget", "cli.mjs"), "reconcile", "--rail", rail, "--op", op]);
     expect(r.code).toBe(4);
-    expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: true, chain_final: false, next: `Run superstables budget reconcile --rail ${rail}${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
+    expect(result(r.stdout)).toMatchObject({ state: "settled", paid: true, delivered: false, final: true, chain_final: false, next: `Run superstables budget reconcile --rail ${rail} --testnet${rail === "evm" ? " --chain base-sepolia" : ""} --op ${op} later to check finality. Do not pay again. Contact the seller.` });
   });
   it.each(["unknown", "settled"])("published reconcile separates command completion from chain finality: %s", async (state) => {
     const repo = checkoutWithoutDevPackages();
