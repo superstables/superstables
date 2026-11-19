@@ -114,7 +114,7 @@ When run in a terminal, `superstables doctor` checks npm for a newer client rele
 
 ## Contributing
 
-From a checkout, run `npm run typecheck`, `npm test`, `npm run build` and `npm run install-check`.
+From a checkout, run `npm run typecheck`, `npm test -- <the test files your change touches>`, `npm run build` and `npm run install-check`.
 See [Live testnet checks](test/live/README.md) for tests that contact real sellers.
 
 ## Open source
