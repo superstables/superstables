@@ -314,7 +314,7 @@ async function differentFinalNonceTransaction(j: Journal): Promise<Hex | undefin
     const top = head.number;
     for (const filter of filters) {
       const logStart = CFG.key === "ethereum-sepolia" && top > 9000n && start < top - 9000n ? top - 9000n : start;
-      const search = await searchLogs<{ removed: boolean; transactionHash: Hex | null; blockNumber: bigint | null }, Hex>(filter, { from: logStart, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds }, async (logs) => {
+      const search = await searchLogs<{ removed: boolean; transactionHash: Hex | null; blockNumber: bigint | null }, Hex>(filter, { from: logStart, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds, chainId: CFG.chainId }, async (logs) => {
         for (const log of logs) {
           if (log.removed || !log.transactionHash || log.blockNumber === null || log.blockNumber > top) continue;
           const identified = await candidate(log.transactionHash);
@@ -428,13 +428,15 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       const found = await inspect(hash);
       if (found) return found;
     }
-    const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest.number > 3000n ? latest.number - 3000n : 0n;
+    // Older Base journals without a pull block still cover the former 6,000-second fallback.
+    const lookback = CFG.chainId === 8453 || CFG.chainId === 84532 ? BigInt(Math.ceil(6_000 / CFG.blockSeconds)) : 3000n;
+    const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest.number > lookback ? latest.number - lookback : 0n;
     const top = latest.number;
     let covered = true;
     for (const event of events) {
       const search = await searchLogs(
         (from: bigint, to: bigint) => publicClient.getLogs({ address: USDC, event, args: { authorizer: j.agent, nonce: auth.nonce }, fromBlock: from, toBlock: to }),
-        { from: fromBlock, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds },
+        { from: fromBlock, to: top, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds, chainId: CFG.chainId },
         async (logs) => {
           for (const log of logs) {
             if (log.removed || log.blockNumber === null || log.blockNumber > top || !log.blockHash || !log.transactionHash) continue;

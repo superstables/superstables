@@ -1,14 +1,14 @@
 // Searching a chain's event logs (eth_getLogs) in block windows its RPC accepts. Public RPCs cap how many blocks one
 // request may span, and the cap changes without notice (Base Sepolia's went to 200 blocks in October 2026), so a search
 // starts at the chain's known range, halves the window each time the RPC refuses a range, and never skips a block. It
-// reads at most a day of the chain's blocks from where it starts, and at most MAX_LOG_CALLS requests; after an RPC says it
+// reads at most a day of the chain's blocks from where it starts, and at most MAX_LOG_CALLS requests (ten times that on Base); after an RPC says it
 // is limiting requests, it waits as long as asked and keeps a pace. A search that did not read every block it was given
 // says so (`covered: false`): what it did not find there decides nothing. Shared by `status` (src/core/settlement.ts) and
 // the budget's EVM rail (budget/evm/ops.ts, budget/evm/owner.ts).
 
 /** The narrowest window a search narrows to; a range refused at this width ends the search, incomplete. */
 export const LOG_WINDOW_FLOOR = 10;
-/** The most eth_getLogs requests one search makes, refused and limited ones included. */
+/** The default eth_getLogs request budget, refused and limited ones included; Base scales it for Denim. */
 export const MAX_LOG_CALLS = 400;
 /** How much chain time one search covers from its first block: what it looks for lands within minutes of that block. */
 export const LOG_SPAN_SECONDS = 86_400;
@@ -69,7 +69,7 @@ function retryAfterMs(err) {
  * `visit` throws are the caller's.
  * @template L, T
  * @param {(fromBlock: bigint, toBlock: bigint) => Promise<readonly L[]>} read
- * @param {{ from: bigint, to: bigint, window: number, blockSeconds: number }} span
+ * @param {{ from: bigint, to: bigint, window: number, blockSeconds: number, chainId?: number }} span
  * @param {(logs: readonly L[]) => Promise<T | undefined>} visit
  * @param {LogSearchOptions} [options]
  * @returns {Promise<{ found?: T, covered: boolean, searchedTo: bigint, calls: number }>}
@@ -78,7 +78,8 @@ export async function searchLogs(read, span, visit, options = {}) {
   const now = options.now ?? Date.now;
   const pause = options.pause ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const paceMs = options.paceMs ?? LOG_PACE_MS;
-  const maxCalls = options.maxCalls ?? MAX_LOG_CALLS;
+  // Base needs ten times as many pages after Denim to retain the same time coverage.
+  const maxCalls = options.maxCalls ?? MAX_LOG_CALLS * (span.chainId === 8453 || span.chainId === 84532 ? 10 : 1);
   const deadline = now() + (options.searchMs ?? LOG_SEARCH_MS);
   const reach = BigInt(Math.ceil(LOG_SPAN_SECONDS / Math.max(span.blockSeconds, 0.01)));
   const last = span.to - span.from + 1n > reach ? span.from + reach - 1n : span.to;

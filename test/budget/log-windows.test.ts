@@ -90,9 +90,9 @@ describe("readSettlement (reconcile's settlement lookup)", () => {
     expect(widths.slice(0, 3)).toEqual([200, 100, 50]);
   });
   it("is unread, not pending, when the span is more than a day of blocks", async () => {
-    const s = await (await ops()).readSettlement(journal({ pullBlock: String(HEAD - 100_000n) }));
+    const s = await (await ops()).readSettlement(journal({ pullBlock: String(HEAD - 500_000n) }));
     expect(s).toMatchObject({ kind: "unread", used: false, reason: expect.stringMatching(/could not be read/) });
-    expect(widths.reduce((a, b) => a + b, 0)).toBe(2 * 43_200);
+    expect(widths.reduce((a, b) => a + b, 0)).toBe(2 * 432_000);
   });
 });
 

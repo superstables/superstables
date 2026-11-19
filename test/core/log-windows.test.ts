@@ -108,7 +108,7 @@ describe("findAuthorization through an RPC that caps eth_getLogs", () => {
   });
 
   it("is unreadable, never `never`, past its span, and reads no more than a day of blocks", async () => {
-    const c = await chainWithPayment(50_000); // about 28 hours of Base Sepolia blocks after the attempt began
+    const c = await chainWithPayment(500_000); // exceeds a day even at the 200 ms cadence
     const rpc = capped(200);
     const r = await find(c, rpc.fetchImpl);
     expect(r).toMatchObject({ found: false, unreadable: true, authorizationUsed: true, reason: expect.stringMatching(/could not be searched past block/) });
@@ -149,13 +149,15 @@ describe("searchLogs", () => {
     ["Base mainnet", MAINNET_MANIFEST.chains.base],
   ])("pages a full day of %s blocks within the RPC range", async (_label, network) => {
     const { searchLogs } = await import("../../src/core/log-windows.mjs");
+    if (network.logRange === undefined || network.blockSeconds === undefined) throw new Error("missing EVM cadence or log range");
+    const { logRange, blockSeconds, chainId } = network;
     let next = 10n;
     const r = await searchLogs(async (from: bigint, to: bigint) => {
       expect(from).toBe(next);
-      expect(Number(to - from + 1n)).toBeLessThanOrEqual(network.logRange!);
+      expect(Number(to - from + 1n)).toBeLessThanOrEqual(logRange);
       next = to + 1n;
       return [];
-    }, { from: 10n, to: 500_009n, window: network.logRange!, blockSeconds: network.blockSeconds }, async () => undefined, { maxCalls: 3_000 });
+    }, { from: 10n, to: 500_009n, window: logRange, blockSeconds, chainId }, async () => undefined);
     expect(r).toMatchObject({ covered: false, searchedTo: 432_009n });
     expect(next).toBe(432_010n);
   });
@@ -169,7 +171,7 @@ describe("searchLogs", () => {
   });
   it("stops at its call budget, incomplete", async () => {
     const { searchLogs } = await import("../../src/core/log-windows.mjs");
-    const r = await searchLogs(async () => [], { from: 0n, to: 100_000n, window: 10, blockSeconds: 2 }, async () => undefined);
+    const r = await searchLogs(async () => [], { from: 0n, to: 100_000n, window: 10, blockSeconds: 2, chainId: 1 }, async () => undefined);
     expect(r).toMatchObject({ covered: false, calls: 400, searchedTo: 3_999n });
   });
   it("honours Retry-After and keeps a pace after the RPC limited it", async () => {

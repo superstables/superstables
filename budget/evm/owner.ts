@@ -206,7 +206,7 @@ export async function findApproval(owner: Address, spender: Address, fromBlock: 
   const seen: { hash: Hex; value: bigint }[] = [];
   const search = await searchLogs(
     (from, to) => publicClient.getLogs({ address: USDC, event: approval, args: { owner, spender } as any, fromBlock: from, toBlock: to }) as Promise<any[]>,
-    { from: fromBlock + 1n, to: head, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds },
+    { from: fromBlock + 1n, to: head, window: CFG.logRange ?? 1000, blockSeconds: CFG.blockSeconds, chainId: CFG.chainId },
     async (logs) => {
       for (const l of logs) seen.push({ hash: l.transactionHash, value: l.args.value });
       return undefined;
