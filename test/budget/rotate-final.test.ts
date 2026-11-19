@@ -100,7 +100,7 @@ describe("evm: rotate needs the old allowance to be final at 0", () => {
     expect(r.result, all(r)).toMatchObject({ state: "incomplete", oldAgent: c.agent.address, retired: true, final: false });
     expect(r.result.state).not.toBe("rotated");
     expect(r.code).toBe(5);
-    expect(r.result.next).toMatch(/superstables budget status --rail evm --chain base-sepolia/);
+    expect(r.result.next).toMatch(/superstables budget status --rail evm --testnet --chain base-sepolia/);
     expect(r.result.chains[0]).toMatchObject({ chain: "base-sepolia", recovered: false, setUp: false });
     untouched(c);
     expect(c.chain.allowanceOf(OWNER.address, c.agent.address)).toBe(0n); // the head has it; the final block does not yet

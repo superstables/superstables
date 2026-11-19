@@ -194,7 +194,7 @@ describe("setup --hosted", () => {
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(0);
     const host = new URL(site.url).host;
-    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    const again = `superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner`;
     expect(r.stderr).toContain(`AGENT ADDED to the ${host} account ${OTHER}`);
     expect(r.stderr).toContain(`If it is not, someone else added this agent to their account: grant nothing. Once the agent is removed on that account's page on ${host}, run ${again} yourself.`);
     expect(r.stderr).not.toContain("OWNER CONNECTED");
@@ -220,7 +220,7 @@ describe("setup --hosted", () => {
     };
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"], env);
     expect(r.code, r.stderr).toBe(0);
-    const again = `superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner`;
+    const again = `superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner`;
     expect(r.stderr).toContain(`run ${again} yourself.`);
     expect(r.result.next).toContain(`then run ${again} with the owner present`);
     expect(r.result.next).not.toContain("staging.superstables.com");
@@ -314,9 +314,9 @@ describe("setup --hosted", () => {
     const r = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.reason).toMatch(new RegExp(`the agent ${agent} holds 0\\.5 USDC from the recorded owner's budget`));
-    expect(r.result.next).toMatch(/superstables budget recover --rail evm/);
+    expect(r.result.next).toMatch(/superstables budget recover --rail evm --testnet/);
     // the retry stays hosted, on the recorded site: a bare setup --new-owner would move the chain to this computer
-    expect(r.result.next).toContain(`then superstables budget setup --rail evm --hosted --site ${site.url} --new-owner`);
+    expect(r.result.next).toContain(`then superstables budget setup --rail evm --testnet --hosted --site ${site.url} --new-owner`);
     expect(site.requests).toHaveLength(1);
   }, 60_000);
 
@@ -325,7 +325,7 @@ describe("setup --hosted", () => {
       if (r.polls >= 2) Object.assign(r, { state: "linked", owner: OWNER });
     };
     expect((await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--wait", "--no-open"])).code).toBe(0);
-    const again = `superstables budget setup --rail evm --hosted --site ${site.url} --new-owner`;
+    const again = `superstables budget setup --rail evm --testnet --hosted --site ${site.url} --new-owner`;
     await rpc.close();
     // a live budget: allowance(owner, agent) is 0.5 USDC
     rpc = await startFakeRpc(84532, (method, params) => {
@@ -335,12 +335,12 @@ describe("setup --hosted", () => {
     const live = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url, "--new-owner", "--wait", "--no-open"]);
     expect(live.code, live.stderr).toBe(3);
     expect(live.result.reason).toMatch(/a budget is live/);
-    expect(live.result.next).toBe(`revoke first (superstables budget revoke --rail evm, approved by ${OWNER}), then ${again}`);
+    expect(live.result.next).toBe(`revoke first (superstables budget revoke --rail evm --testnet, approved by ${OWNER}), then ${again}`);
     expect(site.requests).toHaveLength(1);
     // --new-owner without --hosted asks on this computer and moves the chain there: its retry stays bare, as asked
     const local = await budget(["setup", "--rail", "evm", "--new-owner", "--wait", "--no-open"]);
     expect(local.code, local.stderr).toBe(3);
-    expect(local.result.next).toBe(`revoke first (superstables budget revoke --rail evm, approved by ${OWNER}), then superstables budget setup --rail evm --new-owner`);
+    expect(local.result.next).toBe(`revoke first (superstables budget revoke --rail evm --testnet, approved by ${OWNER}), then superstables budget setup --rail evm --testnet --new-owner`);
     // an owner key file for another owner (tests and automation): refused, and the retry stays hosted on the recorded site
     const keyFile = join(home, "other-owner.env");
     writeFileSync(keyFile, `B4_OWNER_KEY=${evmOwnerKey("33")}\n`, { mode: 0o600 });
@@ -351,7 +351,7 @@ describe("setup --hosted", () => {
     expect(publicFile()).toMatch(/^APPROVALS=hosted$/m);
     // doctor names the same command for the owner on record
     const doctor = await budget(["doctor", "--rail", "evm"]);
-    expect(doctor.stderr).toContain(`If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail evm --chain base-sepolia --hosted --site ${site.url} --new-owner replaces it`);
+    expect(doctor.stderr).toContain(`If this isn't your wallet, stop: do not approve grants for it. superstables budget setup --rail evm --testnet --chain base-sepolia --hosted --site ${site.url} --new-owner replaces it`);
   }, 90_000);
 
   it("moving a hosted chain to another site takes a fresh link signed there; the old link does not count", async () => {
@@ -409,7 +409,7 @@ describe("setup --hosted", () => {
     const first = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(first.code, first.stderr).toBe(0);
     expect(first.result).toMatchObject({ state: "waiting_owner", matchCode: "ABC-DEF", action: "setup" });
-    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown\\. .*${TESTNET}$`));
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id oa-\\S+ --shown --testnet\\. .*${TESTNET}$`));
     // the words for the owner are asserted on `next` (the RESULT), not on stderr: the worker writes the rail's stderr to
     // its log on its own schedule, so stderr may still lack them when the record with the link exists
     // the reply the agent sends word for word: the exact link (with the part after #), the code, the network, the testnet line
@@ -562,7 +562,7 @@ describe("owner commands on a hosted chain", () => {
     const r = await budget(["grant", "--rail", "evm", "--amount", "0.01", "--wait", "--no-open"]);
     expect(r.code, r.stderr).toBe(5);
     expect(r.result.state).toBe("unknown");
-    expect(r.result.next).toMatch(/superstables budget status --rail evm/);
+    expect(r.result.next).toMatch(/superstables budget status --rail evm --testnet/);
     expect(r.approve).toMatchObject({ action: "grant", matchCode: "ABC-DEF" });
   }, 60_000);
 
@@ -761,7 +761,7 @@ describe("find", () => {
     expect(r.stdout).toMatch(/^name\s+price\s+chain\s+simulated\s+url$/m);
     expect(r.stdout).toMatch(/Weather\s+0\.001 USDC\s+base-sepolia\s+not said\s+https:\/\/seller\.example\/w/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ name: "Weather", chain: "base-sepolia", simulated: null, url: "https://seller.example/w" }] });
-    expect(r.result.next).toBe("check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy");
+    expect(r.result.next).toBe("check the price with superstables budget preflight --rail evm --testnet --chain base-sepolia --url U before you buy");
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);
@@ -772,12 +772,12 @@ describe("find", () => {
     const hostile = { name: "Weather", price: "0.001", url: "https://seller.example/w" };
     // the client's own key list is in the placeholder; nothing the listing said is
     const PLACEHOLDER_NEXT =
-      "check the price with superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana). A row on any other chain cannot be bought with a budget";
+      "check the price with superstables budget preflight --rail R --testnet --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: base-sepolia, arc-testnet, arbitrum-sepolia, polygon-amoy, skale-base-sepolia, ethereum-sepolia, robinhood-testnet (evm); moderato (tempo); devnet (solana). A row on any other chain cannot be bought with a budget";
     const cases: { rows: object[]; next: string; chain?: string; rail?: string }[] = [
       // an unknown network: the listing's chain and rail are data, so the command stays a placeholder
       { rows: [{ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" }], next: PLACEHOLDER_NEXT },
       // a known network under another chain's name: the client's table wins
-      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "check the price with superstables budget preflight --rail evm --chain base-sepolia --url U before you buy", chain: "base-sepolia", rail: "evm" },
+      { rows: [{ ...hostile, network: "eip155:84532", chain: "arc-testnet;id", rail: "tempo" }], next: "check the price with superstables budget preflight --rail evm --testnet --chain base-sepolia --url U before you buy", chain: "base-sepolia", rail: "evm" },
       // a network no rail pays
       { rows: [{ ...hostile, network: "cosmos:1", rail: "evm;id" }], next: PLACEHOLDER_NEXT },
       { rows: [1, 2, 3].map(() => ({ ...hostile, network: "eip155:999999", rail: "evm", chain: "base-sepolia;touch${IFS}/tmp/x;#" })), next: PLACEHOLDER_NEXT },
@@ -818,7 +818,7 @@ describe("find", () => {
       expect(r.result).toMatchObject({ state: "ok", rail: "tempo", chain: "moderato", services: [{ name: "Market data on Tempo", rail: "tempo", chain: "moderato", price: "0.001 pathUSD", simulated: false }] });
       expect(names(r)).toEqual(["Market data on Tempo"]);
       expect(r.stdout).toMatch(/Market data on Tempo\s+0\.001 pathUSD\s+moderato\s+no\s+https:\/\/seller\.example\/market\/tempo/);
-      expect(r.result.next).toBe("check the price with superstables budget preflight --rail tempo --chain moderato --url U before you buy");
+      expect(r.result.next).toBe("check the price with superstables budget preflight --rail tempo --testnet --chain moderato --url U before you buy");
     }, 30_000);
 
     it("--chain devnet lists the Solana sellers only", async () => {
@@ -827,7 +827,7 @@ describe("find", () => {
       const out = JSON.parse(r.stdout);
       expect(out).toMatchObject({ state: "ok", rail: "solana", chain: "devnet" });
       expect(out.services.map((s: { name: string }) => s.name)).toEqual(["Market data on Solana"]);
-      expect(out.next).toMatch(/preflight --rail solana --chain devnet --url U/);
+      expect(out.next).toMatch(/preflight --rail solana --testnet --chain devnet --url U/);
     }, 30_000);
 
     it("every EVM key works, and --rail narrows to a rail; the chain comes from the network when the site does not name it", async () => {
@@ -839,7 +839,7 @@ describe("find", () => {
       expect(none.code).toBe(0);
       expect(none.result.services).toEqual([]);
       expect(none.stdout).toMatch(/No services listed on polygon-amoy on /);
-      expect(none.result.next).toMatch(/run superstables budget find without --rail and --chain for every chain/);
+      expect(none.result.next).toMatch(/run superstables budget find --testnet without --rail and --chain for every chain/);
     }, 60_000);
 
     it("says yes or no for simulated, from the site's sample, simulated or mock flag, and explains the column", async () => {
@@ -851,7 +851,7 @@ describe("find", () => {
       expect(r.stdout).toMatch(/Market data on Solana\s+0\.01 USDC\s+devnet\s+no\s+/);
       expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output, no when it marks it as not sample output \(this does not verify that the data is real\)/);
       // several rails: next leaves the rail and chain to the listing
-      expect(r.result.next).toContain("--rail R --chain C --url U before you buy. C is a row's chain");
+      expect(r.result.next).toContain("--rail R --testnet --chain C --url U before you buy. C is a row's chain");
       expect(r.result.next).not.toContain("from the listing");
     }, 30_000);
 
@@ -1015,8 +1015,8 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
   }, 180_000);
 
   it.each([
-    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then\. The gas transfer is final once its block is/],
-    ["grant only", ["--grant", "0.01"], /^landed, not final yet: superstables budget status --rail evm .*later shows when the grant is final.* Do not rely on the budget until then$/],
+    ["grant and gas", ["--grant", "0.01", "--fund"], /^landed, not final yet: superstables budget status --rail evm --testnet .*later shows when the grant is final.* Do not rely on the budget until then\. The gas transfer is final once its block is/],
+    ["grant only", ["--grant", "0.01"], /^landed, not final yet: superstables budget status --rail evm --testnet .*later shows when the grant is final.* Do not rely on the budget until then$/],
     ["gas only", ["--fund"], /^landed, not final yet: the gas transfer is final once its block is.* Start the next owner command only then$/],
   ])("the final head below the owner's block (%s): steps are landed and next is whole sentences", async (_name, flags, want) => {
     await prepare("0x10");
@@ -1097,7 +1097,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     // the site's code in the client's words; the site's own sentence is not repeated
     expect(done.result.reason).toMatch(/^agent added: yes; gas: 0\.0001 ETH sent; budget: nothing was sent: rejected: 127\.0\.0\.1:\d+ gives the reason owner_rejected$/);
     expect(done.result.amount).toBeUndefined();
-    expect(done.result.next).toMatch(/the agent has been added to the account and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --amount A$/);
+    expect(done.result.next).toMatch(/the agent has been added to the account and has gas\. Tell the owner .* only if the owner asks: superstables budget grant --rail evm --testnet --amount A$/);
     const pub = publicFile();
     expect(pub).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(pub).toMatch(/^APPROVALS=hosted$/m);
@@ -1131,7 +1131,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     const done = await budget(["wait", "--shown", "--id", first.result.id, "--timeout", "120"]);
     expect(done.code, done.stderr).toBe(5);
     expect(done.result).toMatchObject({ state: "unknown", linked: true, owner: OWNER, steps: [{ kind: "fund_agent", state: "settled" }, { kind: "grant", state: "unknown" }] });
-    expect(done.result.next).toMatch(/^superstables budget status --rail evm and the owner's wallet activity/);
+    expect(done.result.next).toMatch(/^superstables budget status --rail evm --testnet and the owner's wallet activity/);
     expect(publicFile()).toMatch(new RegExp(`^B4_OWNER_ADDRESS=${OWNER}$`, "m"));
     expect(publicFile()).not.toMatch(/^B4_CAP=/m);
   }, 180_000);
@@ -1194,7 +1194,7 @@ describe("setup --hosted --grant --fund: one link for the link, the gas and the 
     expect(r.code, r.stderr).toBe(3);
     expect(r.result.state).toBe("refused_precheck");
     expect(r.result.reason).toMatch(new RegExp(`this agent already belongs to an account on .* \\(${OWNER}\\).*nothing was sent`));
-    expect(r.result.next).toMatch(/superstables budget fund-agent --rail evm, then superstables budget grant --rail evm --amount A/);
+    expect(r.result.next).toMatch(/superstables budget fund-agent --rail evm --testnet, then superstables budget grant --rail evm --testnet --amount A/);
     expect(r.approve).toBeNull();
   }, 60_000);
 });

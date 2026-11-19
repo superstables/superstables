@@ -340,7 +340,7 @@ export const WALLET_PAGE_SCRIPT = `
       "<p>" + status + "</p>" +
       '<dl class="rows">' +
       "<dt>Site</dt><dd class=\\"mono\\">" + esc(preview.site) + "</dd>" +
-      "<dt>Enabled chains</dt><dd>" + esc(preview.enabledChains.length ? preview.enabledChains.join(", ") : "none (not used: SUPERSTABLES_ALLOW_MAINNET decides mainnet)") + "</dd>" +
+      "<dt>Enabled chains</dt><dd>" + esc(preview.enabledChains.length ? preview.enabledChains.join(", ") : "none (not used: --testnet decides the kind of chain)") + "</dd>" +
       "<dt>Policy</dt><dd class=\\"mono\\">" + esc(view.policyFile) + "<br>" + esc(preview.policyHash) + "</dd>" +
       "<dt>Retired agents</dt><dd class=\\"mono\\">" + esc(preview.retiredHash) + "</dd>" +
       "<dt>Settings</dt><dd class=\\"mono\\">" + esc(preview.settingsHash) + "</dd>" +

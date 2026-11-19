@@ -35,6 +35,8 @@ import { encodeFunctionData, parseUnits, type Hex } from "viem";
 import { pendingJournalsFor, makeSafe, readJournal, checkOpId, scanJournals, sweepBlockers, atomicUsdc, type Journal, type SweepBlockers } from "./ops.ts";
 import { OPS_DIR, SYM, CFG, GAS, AGENT_ENV, OWNER_KEY_FILE, arg, flag, cmd, emit, agentCtx, ownerCtx, escrowCtx, ownerPlanCtx, allowanceOf, usdcBalance, nativeBalance, usdc, oneLine, gasFmt, send, sendNative, selfRevokeCore, readUntil, writePublic, erc20Abi, USDC, assertRpcChain, assertReadChain, allowanceAgreed, finalityOf, agentGas, gasWords, gasRound, GasShort, type Wallet, type SelfRevoke, type GasOp, type GasNeed } from "./lib.ts";
 import { revokeInWallet, fundInWallet } from "./owner.ts";
+import { evmChainFlags } from "./chains.mjs";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 const plan = flag("plan");
 const opId = arg("op") ? checkOpId(arg("op")!) : undefined;
@@ -89,7 +91,7 @@ if (plan) {
   else console.log("  2. no journaled operation has funds stranded");
   for (const u of scan.unreadable) console.log(`  !  ${named(u.file)} cannot be read (${u.why})`);
   console.log(opId ? "  3. sweep: skipped (--op)" : !sweepPlanned ? `  3. sweep: skipped: ${scan.unreadable.length} journal file(s) cannot be read` : `  3. sweep: whatever the agent key holds above ${usdc(KEEP)} ${SYM} after step 2 goes to the owner, once every journal of this agent is read again and none can still move money (agent key; now ${usdc(held)} ${SYM})`);
-  process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: plannedGas && !plannedGas.ok ? gasFmt(topUpFor(plannedGas)) : null, ownerRevoke: allowance === 0n || !agentHasGas, unreadable: scan.unreadable, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: sweepPlanned }, next: `run superstables budget recover --rail evm --chain ${CFG.key}${opId ? ` --op ${opId}` : ""} to send these steps` }));
+  process.exit(emit("recover", 0, { state: "planned", op: opId ?? null, plan: { gasTopUp: plannedGas && !plannedGas.ok ? gasFmt(topUpFor(plannedGas)) : null, ownerRevoke: allowance === 0n || !agentHasGas, unreadable: scan.unreadable, allowance: usdc(allowance), pendingOps: pending.map((j) => ({ op: j.op, state: j.state, pulled: j.pulled ?? null, returned: j.returned ?? "0" })), agentHolds: usdc(held), sweep: sweepPlanned }, next: `run superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key}${opId ? ` --op ${opId}` : ""} to send these steps` }));
 }
 
 // One process at a time sends from this agent key on this chain: a purchase holds the key lock to its end, and recover takes it
@@ -104,7 +106,7 @@ if (existsSync(AGENT_ENV)) agentWallet = (await agentCtx()).wallet;
 else if (OWNER_KEY_FILE) agentWallet = (await escrowCtx()).escrow;
 else {
   console.log(`REFUSED: there is no agent key file (${AGENT_ENV}) on this machine, so the agent-side steps cannot be signed. Nothing was sent.`);
-  process.exit(emit("recover", 3, { state: "refused_precheck", reason: `no agent key file at ${AGENT_ENV}`, next: "run recover where the agent key is; the owner can still revoke from any machine (superstables budget revoke --rail evm)" }));
+  process.exit(emit("recover", 3, { state: "refused_precheck", reason: `no agent key file at ${AGENT_ENV}`, next: "run recover where the agent key is; the owner can still revoke from any machine (superstables budget revoke --rail evm" + testnetArg() + ")" }));
 }
 const ownerKey = OWNER_KEY_FILE ? await ownerCtx() : null;
 
@@ -197,7 +199,7 @@ try {
   const reverted = (e as { txHash?: Hex }).txHash;
   const reason = `recover stopped at the gas step: ${oneLine(e instanceof Error ? e.message : String(e), 300)}`.slice(0, 300);
   console.log(`${reverted ? "FAILED" : "UNKNOWN"}: ${reason}`);
-  const doctor = `superstables budget doctor --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`;
+  const doctor = `superstables budget doctor --rail evm${evmChainFlags(CFG.key)}`;
   process.exit(emit("recover", reverted ? 1 : 5, { state: reverted ? "failed" : "unknown", ...(reverted ? { proof: "reverted" } : {}), op: opId ?? null, ...revoked, gasTx: reverted ?? gasTx, reason, next: `${revokedWords}. ${doctor}: read the agent's gas and the allowance, then run recover again` }));
 }
 

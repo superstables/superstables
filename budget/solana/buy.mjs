@@ -1,5 +1,5 @@
 // buy -- the agent, acting as the SPL-Token delegate on the owner's own USDC associated token
-// account, pays a real third-party x402 `exact` offer on Solana (devnet, or mainnet while the operator's switch is on). The amount and recipient come
+// account, pays a real third-party x402 `exact` offer on Solana (devnet, or mainnet unless the run is testnet-only (--testnet)). The amount and recipient come
 // from the seller's live 402 challenge; the caller's policy (--max, optional --pay-to) is checked
 // before anything is signed.
 //
@@ -418,7 +418,7 @@ const builtBlockhash = await retryRead(() => conn.getLatestBlockhashAndContext("
 const { blockhash, lastValidBlockHeight } = builtBlockhash.value;
 const message = new TransactionMessage({ payerKey: feePayerPk, recentBlockhash: blockhash, instructions }).compileToV0Message();
 const tx = new VersionedTransaction(message);
-// The mainnet boundary: the operator's switch, the manifest and the pause are read again right before the agent key signs,
+// The mainnet boundary: the network mode, the manifest and the pause are read again right before the agent key signs,
 // and again after, right before the payment leaves for the seller. A signature kept back is never sent or written down.
 const closedWords = (what) => { const closed = mainnetClosed(); return closed ? `${closed}; ${what}` : ""; };
 const closedBeforeSigning = closedWords("nothing was signed");

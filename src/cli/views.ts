@@ -11,6 +11,7 @@ import { railFor } from "../core/rails/index.js";
 import type { Records } from "../core/records.js";
 import type { Attempt, Receipt } from "../core/types.js";
 import { termsMoney } from "./format.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 /** Everything there is to say about an attempt, including the sentence to say it with. */
 export function attemptView(deps: { records: Records }, attempt: Attempt): Record<string, unknown> {
@@ -82,7 +83,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt): string {
   const hash = shownTransaction(attempt.transaction, terms.network).hash ?? shownTransaction(receipt?.transaction, terms.network).hash;
   const transaction = hash ? `transaction ${hash}` : "no transaction hash was given";
   const status = attempt.serviceStatus ?? "no status";
-  const check = `Run \`superstables status ${attempt.id}\` to see where it got to`;
+  const check = `Run \`superstables status${testnetArg()} ${attempt.id}\` to see where it got to`;
   const waiting = "Wait for the `superstables pay` command that started it; running `superstables status` again will not move it";
   switch (attempt.state) {
     case "awaiting_approval":
@@ -131,7 +132,7 @@ export function messageFor(attempt: Attempt, receipt?: Receipt): string {
       if (attempt.paymentIncluded) return "The earlier payment inclusion was removed; outcome unknown. Do not pay again.";
       return (
         `The payment may or may not have settled: ${attempt.reason ?? "no reason was recorded"}. ` +
-        `It was not retried. \`superstables status ${attempt.id}\` looks for it on chain; ` +
+        `It was not retried. \`superstables status${testnetArg()} ${attempt.id}\` looks for it on chain; ` +
         "do not pay again for this request until it says this payment was not made."
       );
   }
@@ -148,11 +149,11 @@ function pushes(attempt: Attempt): boolean {
  */
 function paidSentence(attempt: Attempt, amount: string, transaction: string): string {
   const network = attempt.terms.networkLabel;
-  if (attempt.chainFinal === false && attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}). The payment landed, but is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`;
+  if (attempt.chainFinal === false && attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}). The payment landed, but is not final on chain yet; \`superstables status${testnetArg()} ${attempt.id}\` checks again.`;
   if (attempt.chain === "verified") return `Paid ${amount} on ${network} (${transaction}); checked on chain: the transaction is this payment.`;
   return (
     `The seller reported it paid: ${amount} on ${network} (${transaction}). ` +
-    `The chain has not confirmed it yet (${attempt.chainReason ?? "it was not read"}); \`superstables status ${attempt.id}\` checks again.`
+    `The chain has not confirmed it yet (${attempt.chainReason ?? "it was not read"}); \`superstables status${testnetArg()} ${attempt.id}\` checks again.`
   );
 }
 

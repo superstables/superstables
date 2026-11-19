@@ -148,7 +148,7 @@ describe("a purchase read whose token expired", () => {
     const s = await settleOnce(record);
     expect(s).toMatchObject({ final: true, code: 5, result: { state: "unknown", final: false, paid: null, reasonCode: "token_expired" } });
     expect(s.result.next).toContain("the site no longer answers for this purchase (its access token expired); ask the owner to check it on their account;");
-    expect(s.result.next).toContain(`superstables budget wait --id ${record.id} --abandon`);
+    expect(s.result.next).toContain(`superstables budget wait --id ${record.id} --testnet --abandon`);
     const kept = approvals.readApproval(record.id);
     expect(kept.final).toBeUndefined();
     expect(kept.hosted.token).toBe(p.token);

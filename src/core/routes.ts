@@ -11,13 +11,14 @@
 //                         devnet).
 //
 // The budget table is written out here rather than read from budget/, which is its own program
-// with its own dependencies; the chain keys below are the ones its --chain flag takes. While the
-// operator's switch is off only explicit testnet names count: a listing that says "base",
-// "ethereum" or "solana" is on a mainnet, and nothing here claims it can be paid. While it is on,
-// the mainnets of the mainnet manifest count too: for `pay` and for budgets, on every rail.
+// with its own dependencies; the chain keys below are the ones its --chain flag takes. A run uses
+// one kind of chain (./mainnet-policy.js): by default the mainnets of the mainnet manifest count,
+// for `pay` and for budgets, on every rail, and no testnet does. In a testnet-only run (--testnet)
+// only explicit testnet names count: a listing that says "base", "ethereum" or "solana" is on a
+// mainnet, and nothing here claims it can be paid.
 
 import { networkFor, type NetworkInfo } from "./chain.js";
-import { mainnetChains } from "./mainnet-policy.js";
+import { mainnetChains, testnetRun } from "./mainnet-policy.js";
 import { SUPPORTED_NETWORKS } from "./rails/index.js";
 import type { BudgetRoute, PayRoutes } from "./types.js";
 
@@ -34,7 +35,7 @@ const EVM_BUDGET_CHAINS: Record<string, string[]> = {
   "robinhood-testnet": ["robinhood-testnet", "eip155:46630"],
 };
 
-/** The EVM mainnets the budget's evm rail takes while the operator's switch is on (none otherwise), with their names. */
+/** The EVM mainnets the budget's evm rail takes (none in a testnet-only run), with their names. */
 const EVM_BUDGET_MAINNETS: Record<string, string[]> = Object.fromEntries(
   mainnetChains("evm").map(([key, c]) => [key, [key, c.caip2, ...(c.v1Name ? [c.v1Name] : [])]]),
 );
@@ -45,7 +46,7 @@ const TEMPO_NAMES = new Set(["tempo-moderato", "moderato", "tempo:moderato", "ei
 /** budget --rail solana pays x402 sellers on Solana devnet. Plain "solana" is mainnet. */
 const SOLANA_DEVNET_NAMES = new Set(["solana-devnet", "solana:etwtrabzayq6imfeykouru166vu2xqa1"]);
 
-/** The Tempo and Solana mainnets the budget's tempo and solana rails take while the operator's switch is on (none otherwise), with their names. */
+/** The Tempo and Solana mainnets the budget's tempo and solana rails take (none in a testnet-only run), with their names. */
 const RAIL_BUDGET_MAINNETS = (rail: "tempo" | "solana"): Record<string, string[]> => Object.fromEntries(
   mainnetChains(rail).map(([key, c]) => [key, [key, c.caip2.toLowerCase(), ...(c.v1Name ? [c.v1Name] : [])]]),
 );
@@ -60,10 +61,16 @@ function payNames(network: NetworkInfo): string[] {
   return EVM_BUDGET_CHAINS[network.key] ?? [network.key, network.caip2];
 }
 
-/** The chain `pay` pays on that a listing's chain name stands for, or undefined. */
+/** The chains `pay` pays on in this run: the mainnets by default, the testnets in a testnet-only run (--testnet). */
+function runNetworks(): NetworkInfo[] {
+  const testnets = testnetRun();
+  return SUPPORTED_NETWORKS.filter((network) => (network.testnet === true) === testnets);
+}
+
+/** The chain `pay` pays on in this run that a listing's chain name stands for, or undefined. */
 export function payNetworkFor(name: string): NetworkInfo | undefined {
   const n = name.toLowerCase();
-  return SUPPORTED_NETWORKS.find((network) => payNames(network).includes(n));
+  return runNetworks().find((network) => payNames(network).includes(n));
 }
 
 /** The chain name a listing uses for a chain `pay` knows, spelled the way the index spells it (its budget key). */
@@ -81,19 +88,21 @@ export function routesFor(rails: string[] | undefined, chains: string[]): PayRou
   const x402 = protocols.has("x402");
   const mpp = protocols.has("mpp");
 
+  // the testnets only in a testnet-only run; the mainnet tables are empty in one
+  const testnets = testnetRun();
   const budget: BudgetRoute[] = [];
   if (x402) {
-    for (const [chain, aliases] of Object.entries({ ...EVM_BUDGET_CHAINS, ...EVM_BUDGET_MAINNETS })) {
+    for (const [chain, aliases] of Object.entries({ ...(testnets ? EVM_BUDGET_CHAINS : {}), ...EVM_BUDGET_MAINNETS })) {
       if (names.some((n) => aliases.includes(n))) budget.push({ rail: "evm", chain });
     }
-    if (names.some((n) => SOLANA_DEVNET_NAMES.has(n))) budget.push({ rail: "solana", chain: "devnet" });
+    if (testnets && names.some((n) => SOLANA_DEVNET_NAMES.has(n))) budget.push({ rail: "solana", chain: "devnet" });
     for (const [chain, aliases] of Object.entries(SOLANA_BUDGET_MAINNETS)) if (names.some((n) => aliases.includes(n))) budget.push({ rail: "solana", chain });
   }
-  if (mpp && names.some((n) => TEMPO_NAMES.has(n))) budget.push({ rail: "tempo", chain: "moderato" });
+  if (testnets && mpp && names.some((n) => TEMPO_NAMES.has(n))) budget.push({ rail: "tempo", chain: "moderato" });
   if (mpp) for (const [chain, aliases] of Object.entries(TEMPO_BUDGET_MAINNETS)) if (names.some((n) => aliases.includes(n))) budget.push({ rail: "tempo", chain });
 
-  // pay: a chain one of its rails pays on, in the protocol that rail speaks (MPP on Tempo, x402 elsewhere).
-  const pay = SUPPORTED_NETWORKS.some((network) => (network.rail === "tempo" ? mpp : x402) && names.some((n) => payNames(network).includes(n)));
+  // pay: a chain one of its rails pays on in this run, in the protocol that rail speaks (MPP on Tempo, x402 elsewhere).
+  const pay = runNetworks().some((network) => (network.rail === "tempo" ? mpp : x402) && names.some((n) => payNames(network).includes(n)));
   return { pay, budget };
 }
 

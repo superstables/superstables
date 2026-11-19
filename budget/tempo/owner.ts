@@ -33,7 +33,7 @@ export { closeOwnerPage }
 /**
  * This chain (Moderato, or Tempo mainnet) for wallet_addEthereumChain. decimals 18, not viem's 6: MetaMask refuses any other
  * value, and fees are priced in 1e-18 USD per unit, so a fee shows as a USD amount. `testnet` is what the owner page and its
- * server read to word the money as real and to read the operator's switch and the pause again before the wallet is asked.
+ * server read to word the money as real and to read the network mode and the pause again before the wallet is asked.
  */
 export const TEMPO_OWNER_CHAIN: OwnerChain = {
   chainId: CHAIN_ID,

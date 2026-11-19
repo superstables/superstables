@@ -23,7 +23,7 @@ const GATE = /not ready for mainnet signing|mainnet is off|is a mainnet|does not
 const AGENT = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
 const PLAIN = `SOLANA_AGENT_SECRET_BASE58=${"1".repeat(88)}\nSOLANA_AGENT_ADDRESS=${AGENT}\n`;
 const KEYCHAINED = `SOLANA_AGENT_KEY_STORE=os-keychain\nSOLANA_AGENT_ADDRESS=${AGENT}\n`;
-const ON = { SUPERSTABLES_ALLOW_MAINNET: "1", SUPERSTABLES_BUDGET_CHAIN: "solana", SUPERSTABLES_SOLANA_RPC: DEAD };
+const ON = { SUPERSTABLES_TESTNET: "", SUPERSTABLES_BUDGET_CHAIN: "solana", SUPERSTABLES_SOLANA_RPC: DEAD };
 
 let home: string;
 let keychainDir: string;
@@ -63,7 +63,7 @@ describe("with the switch off", () => {
       const r = budget(c);
       expect(r.code, c[0]).toBe(3);
       expect(r.result, c[0]).toMatchObject({ ok: false, state: "refused_precheck" });
-      expect(said(r), c[0]).toMatch(/SUPERSTABLES_ALLOW_MAINNET|mainnet/);
+      expect(said(r), c[0]).toMatch(/testnet-only|mainnet/);
     }
     expect(existsSync(join(home, "keys", "budget", "solana-agent.env"))).toBe(false);
   }, 60_000);
@@ -202,7 +202,7 @@ describe("the seller's chain (precheck)", () => {
   }
 
   it("on mainnet takes the mainnet's CAIP-2 and v1 name with its mint, and never devnet's", () => {
-    const out = precheck({ SUPERSTABLES_ALLOW_MAINNET: "1", SUPERSTABLES_BUDGET_CHAIN: "solana" });
+    const out = precheck({ SUPERSTABLES_TESTNET: "", SUPERSTABLES_BUDGET_CHAIN: "solana" });
     expect(out["MAIN_FACTS/caip2"]).toEqual({ picked: true, ok: true });
     expect(out["MAIN_FACTS/v1"]).toEqual({ picked: true, ok: true });
     expect(out["DEVNET/caip2"].picked).toBe(false);

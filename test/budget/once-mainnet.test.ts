@@ -1,8 +1,8 @@
 // buy-once on the mainnets the site's purchase API pays on (Base, Arc and Robinhood Chain), through the real dispatcher
-// against a fake superstables.com on 127.0.0.1. With SUPERSTABLES_ALLOW_MAINNET off, a mainnet listing or --chain is refused
-// before the site is asked for anything; with it on, the purchase is asked for and the owner is told the amount and the mainnet. A
-// mainnet purchase read once the switch is off again is never called unpaid on the site's word and never read as Base
-// Sepolia. No network, no key, no transaction.
+// against a fake superstables.com on 127.0.0.1. By default (no --testnet) the purchase is asked for and the owner is told the
+// amount and the mainnet, and a testnet listing is refused until --testnet is given. In a testnet-only run a mainnet listing or
+// --chain is refused before the site is asked for anything, and a mainnet purchase read there is never called unpaid on the
+// site's word and never read as Base Sepolia. No network, no key, no transaction.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,7 +40,6 @@ function budget(args: string[], env: Record<string, string> = {}): Promise<Run> 
   return new Promise((done, fail) => {
     const all: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home, B4_RPC: site.chainUrl, ...env };
     for (const k of ["SUPERSTABLES_SITE", "SUPERSTABLES_BUDGET_APPROVAL_ID", "SUPERSTABLES_MAINNET_PAUSE"]) delete all[k];
-    if (env.SUPERSTABLES_ALLOW_MAINNET === undefined) delete all.SUPERSTABLES_ALLOW_MAINNET;
     const child = spawn(process.execPath, [CLI, ...args], { cwd: ROOT, env: all });
     let stdout = "";
     let stderr = "";
@@ -54,25 +53,40 @@ function budget(args: string[], env: Record<string, string> = {}): Promise<Run> 
     });
   });
 }
-const ON = { SUPERSTABLES_ALLOW_MAINNET: "1" };
+const ON = { SUPERSTABLES_TESTNET: "" };
 const buy = (key: string, extra: string[] = [], env: Record<string, string> = {}) =>
   budget(["buy-once", "--site", site.url, "--service", `market-${key}`, "--param", "asset=BTC", "--max", "0.01", ...extra], env);
 
-describe("buy-once on a mainnet, switch off", () => {
+describe("buy-once on a mainnet, in a testnet-only run", () => {
   it.each(["base", "arc", "robinhood"] as const)("a %s listing is refused before the site is asked, and so is --chain %s", async (key) => {
     site.services.push(listing(key));
     const r = await buy(key);
     expect(r.code, r.stderr).toBe(3);
     expect(r.result).toMatchObject({ ok: false, state: "refused_precheck", paid: false });
-    expect(r.result.reason).toMatch(/a mainnet, and mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1/);
+    expect(r.result.reason).toMatch(/a mainnet, and this run is testnet-only/);
     const named = await buy(key, ["--chain", key]);
     expect(named.code).toBe(3);
-    expect(named.result.reason).toMatch(new RegExp(`"${key}" is a mainnet, and mainnet is off`));
+    expect(named.result.reason).toMatch(new RegExp(`"${key}" is a mainnet, and this run is testnet-only`));
     expect(site.purchases).toEqual([]);
   }, 30_000);
 });
 
-describe("buy-once on a mainnet, switch on", () => {
+describe("buy-once on a mainnet, the default", () => {
+  it.each([["the default", ""], ["--testnet", "1"]] as const)("names Tempo Moderato by its own chain id, %s", async (_label, mode) => {
+    // buy-once's network table, loaded in a fresh process in each kind of run
+    const code = 'const { ONCE_NETWORKS } = await import("./budget/once.mjs"); console.log(JSON.stringify(Object.fromEntries(Object.entries(ONCE_NETWORKS).map(([k, n]) => [k, n.chain]))));';
+    const out = await new Promise<string>((done, fail) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", code], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_TESTNET: mode } });
+      let text = "";
+      child.stdout.on("data", (c) => (text += String(c)));
+      child.once("error", fail);
+      child.once("close", () => done(text));
+    });
+    const chains = JSON.parse(out) as Record<string, string>;
+    expect(chains["eip155:42431"]).toBe("moderato");
+    expect(chains["eip155:4217"]).toBeUndefined();
+  }, 30_000);
+
   it.each(["base", "arc", "robinhood"] as const)("a %s purchase is asked for, naming the mainnet and the amount", async (key) => {
     const m = MAINNET_MANIFEST.chains[key];
     site.services.push(listing(key));
@@ -85,9 +99,10 @@ describe("buy-once on a mainnet, switch on", () => {
       expect(text.split(`0.01 ${m.token.symbol}`).length - 1, text).toBe(1);
     };
     expect(r.approve.terms.summary).toContain(`One payment of 0.01 ${m.token.symbol} on ${m.label} (mainnet) to ${SELLER}`);
-    expect(r.approve.terms.summary).toContain("Only the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.");
+    expect(r.approve.terms.summary).toMatch(/You approve this one payment in your wallet\. No budget is set\.$/);
     once(r.approve.terms.summary);
-    expect(r.result.message_for_owner).toContain(`0.01 ${m.token.symbol} on ${m.label} (mainnet). Only the operator turns mainnet on`);
+    expect(r.result.message_for_owner).toContain(`0.01 ${m.token.symbol} on ${m.label} (mainnet).`);
+    expect(r.result.message_for_owner).not.toMatch(/SUPERSTABLES_|operator/);
     once(r.result.message_for_owner);
     expect(r.result.message_for_owner).not.toMatch(/test USDC|test USDG|Test tokens|real money/);
   }, 30_000);
@@ -103,15 +118,22 @@ describe("buy-once on a mainnet, switch on", () => {
     expect(site.purchases).toEqual([]);
   }, 30_000);
 
-  it("testnets are unchanged with the switch on", async () => {
-    const r = await budget(["buy-once", "--site", site.url, "--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01"], ON);
+  it("a testnet listing is refused without --testnet, naming the flag, and asked for with it", async () => {
+    const args = ["buy-once", "--site", site.url, "--service", "demo-market-data", "--param", "asset=BTC", "--max", "0.01"];
+    const refused = await budget(args, ON);
+    expect(refused.code, refused.stderr).toBe(3);
+    expect(refused.result.reason).toMatch(/is on Base Sepolia, a testnet, and testnets need --testnet/);
+    expect(refused.result.next).toContain("--testnet");
+    expect(site.purchases).toEqual([]);
+    const r = await budget(["--testnet", ...args], ON);
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ chain: "base-sepolia", state: "waiting_owner" });
     expect(r.result.message_for_owner).toMatch(/test USDC on Base Sepolia/);
+    expect(r.result.message_for_owner).toContain("This uses test tokens.");
   }, 30_000);
 });
 
-describe("a mainnet purchase read after the switch is off", () => {
+describe("a mainnet purchase read in a testnet-only run", () => {
   it("the site saying paid is not taken as paid, and the purchase is never read as Base Sepolia", async () => {
     site.services.push(listing("base"));
     const first = await buy("base", [], ON);

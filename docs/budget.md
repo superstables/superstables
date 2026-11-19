@@ -6,8 +6,8 @@ Use this when the agent should buy without asking each time. The owner grants a 
 their own wallet. The agent then buys on its own, purchase by purchase, until the budget is spent
 or the owner revokes it. The chain enforces the allowance; no Superstables server authorizes purchases. To approve each payment instead, see [Single purchase](buy-once.md).
 
-**Testnet by default.** Mainnet is refused unless the operator has turned it on; then an agent uses it only when you ask. This page uses the `evm` rail, where the budget is a
-USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the default; buying there
+**Mainnet by default.** This page uses `--testnet` and the `evm` rail, where the budget is a
+USDC allowance, on Arc Testnet. Leave out `--chain arc-testnet` to use Base Sepolia, the testnet default; buying there
 needs a seller that takes payment on Base Sepolia.
 The same rail also runs on Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia and Robinhood Chain Testnet
 (test USDG).
@@ -70,7 +70,7 @@ balances, transaction hashes and ids will differ: use the values from your own r
 ## 1. Set up (owner)
 
 ```bash
-superstables budget setup --rail evm --chain arc-testnet
+superstables budget setup --rail evm --testnet --chain arc-testnet
 ```
 
 This creates the agent key on this machine and opens a page where the owner connects their wallet
@@ -88,7 +88,7 @@ watch it run.
 ## 2. Give the agent gas (owner)
 
 ```bash
-superstables budget fund-agent --rail evm --chain arc-testnet
+superstables budget fund-agent --rail evm --testnet --chain arc-testnet
 ```
 
 The owner reviews the transfer on the page and approves it in their wallet, which sends it to the
@@ -98,7 +98,7 @@ agent's transaction fees and grants no allowance; the agent controls what it rec
 ## 3. Check (anyone)
 
 ```bash
-superstables budget doctor --rail evm --chain arc-testnet
+superstables budget doctor --rail evm --testnet --chain arc-testnet
 ```
 
 ```
@@ -113,7 +113,7 @@ RESULT {"ok":true,"command":"doctor","rail":"evm","chain":"arc-testnet","state":
 ## 4. Grant the budget (owner)
 
 ```bash
-superstables budget grant --rail evm --chain arc-testnet --amount 0.06
+superstables budget grant --rail evm --testnet --chain arc-testnet --amount 0.06
 ```
 
 The page shows the cap, the agent, the chain, and what the chain enforces and does not. The owner
@@ -135,8 +135,8 @@ first, then grant the amount they requested.
 Check the budget, then read the seller's price and address without signing anything:
 
 ```bash
-superstables budget status --rail evm --chain arc-testnet
-superstables budget preflight --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold"
+superstables budget status --rail evm --testnet --chain arc-testnet
+superstables budget preflight --rail evm --testnet --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold"
 ```
 
 ```
@@ -149,7 +149,7 @@ Buy only if the price is within what the owner allows. Set `--max` to that maxim
 0.06 USDC:
 
 ```bash
-superstables budget buy --rail evm --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold" \
+superstables budget buy --rail evm --testnet --chain arc-testnet --url "https://www.watchevelive.com/print?q=gold" \
   --max 0.06 --pay-to 0x0e56d191219fa7a4a8a50d17d4ce838e80bf566e --op gold-001
 ```
 
@@ -172,7 +172,7 @@ not such a request.
 ## 6. Check what is left (anyone)
 
 ```bash
-superstables budget status --rail evm --chain arc-testnet
+superstables budget status --rail evm --testnet --chain arc-testnet
 ```
 
 ```
@@ -185,7 +185,7 @@ the owner's steps.
 ## 7. Revoke (owner)
 
 ```bash
-superstables budget revoke --rail evm --chain arc-testnet
+superstables budget revoke --rail evm --testnet --chain arc-testnet
 ```
 
 Once it is confirmed on chain, the owner's transaction sets the allowance to 0 and stops further
@@ -206,7 +206,7 @@ Report the refusal and stop. A fresh grant starts only when the owner explicitly
 
 ## Recovery and ending use
 
-`superstables budget recover --rail evm --chain arc-testnet` first brings the allowance to 0,
+`superstables budget recover --rail evm --testnet --chain arc-testnet` first brings the allowance to 0,
 then returns the USDC it can from the agent key to the owner. On Arc Testnet it leaves up to 2 USDC
 there as gas. Recovery is EVM only, needs the agent key on this runtime, and any owner approvals
 use its local page even after setup on superstables.com. Forward the page's port when connecting over SSH.
@@ -246,7 +246,7 @@ The [owner guide](https://www.superstables.com/docs/owner) covers the approval h
 and account checkpoints. At step 1, choose setup on superstables.com instead of local setup:
 
 ```bash
-superstables budget setup --rail evm --chain arc-testnet --hosted
+superstables budget setup --rail evm --testnet --chain arc-testnet --hosted
 superstables budget setup --rail tempo --hosted
 superstables budget setup --rail solana --hosted
 ```
@@ -310,7 +310,7 @@ superstables budget wait --id <id> --shown
 If the approval link expires before the wallet is asked to send, the command ends `refused_precheck`
 (exit 3) with nothing sent: run it again for a new one. If the wallet was already asked, the outcome can be
 unknown (exit 5): check the wallet's activity and
-`superstables budget status --rail evm --chain arc-testnet` before trying again. Run one owner
+`superstables budget status --rail evm --testnet --chain arc-testnet` before trying again. Run one owner
 command at a time per rail and chain.
 
 ## Exit codes

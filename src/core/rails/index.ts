@@ -2,7 +2,7 @@
 // step for the approval page (../signer/steps/), and one line in each list. A chain no registered rail names is
 // refused before the owner is asked.
 
-import { chainGate } from "../chain-gate.js";
+import { chainGate, testnetRun } from "../chain-gate.js";
 import { describeNetwork, mainnetName, mainnetUnsupported, networkFor, shortLabel, type NetworkInfo } from "../chain.js";
 import type { MppChallenge } from "../mpp.js";
 import type { SignRequest } from "../signer/types.js";
@@ -39,12 +39,13 @@ function pushRailFor(network: string | NetworkInfo | undefined): PushRail | unde
   return rail?.flow === "push" ? rail : undefined;
 }
 
-/** The chains `pay` pays on, as people read them. */
+/** The chains `pay` pays on in this run (mainnets, or testnets with --testnet), as people read them. */
 export function payableLabels(): string[] {
-  return SUPPORTED_NETWORKS.map((n) => n.label.replace(/\s*\(testnet\)\s*/i, "").trim() || n.label);
+  const testnets = testnetRun();
+  return SUPPORTED_NETWORKS.filter((n) => (n.testnet === true) === testnets).map((n) => n.label.replace(/\s*\(testnet\)\s*/i, "").trim() || n.label);
 }
 
-/** Why a chain is refused: a mainnet says so (and names the mainnet switch); anything else is simply not one `pay` pays on. */
+/** Why a chain is refused: a mainnet says so (and why mainnets are off); anything else is simply not one `pay` pays on. */
 export function networkRefusal(named: string): string {
   const shown = untrustedText(describeNetwork(named), 60);
   const only = payableLabels().join(", ");

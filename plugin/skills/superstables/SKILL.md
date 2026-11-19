@@ -1,18 +1,18 @@
 ---
 name: superstables
-description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked about x402, pay per call, a paid API, finding a service, quoting or paying for one, or setting up, granting, checking, revoking or recovering a budget, on a testnet or, once the operator has turned mainnet on, on a mainnet. Testnet-first.
+description: Finds services that charge per request, requests a single purchase the owner approves on superstables.com, and reads or follows a budget and gets the owner's link to revoke it, through the Superstables tools; runs the superstables CLI for what needs a signature from this machine, or when the tools are missing. Use when this chat has the Superstables tools, or when asked about x402, pay per call, a paid API, finding a service, quoting or paying for one, or setting up, granting, checking, revoking or recovering a budget, on a mainnet or a testnet.
 ---
 
 # Superstables
 
 Use the connected Superstables tools to find a service and request a purchase.
-Testnet-first. On a testnet: test tokens. Mainnet is refused unless the operator has turned it on. Agents never turn it on. Use a mainnet only when the owner asks for it, and name the mainnet and the amount before the owner approves; if the CLI refuses it, report the refusal and offer a testnet. A connector listing on a mainnet follows the same rule.
+Mainnet by default. A single purchase through the connector can be on a mainnet; the owner approves it in their wallet. The CLI uses a testnet only with `--testnet`, and only when the owner asks for one. Name the network and the amount before the owner approves.
 
 Only operations needing a local signature go through the CLI; everything else goes through the connector.
 
 ## First run
 
-Ask what service the owner needs and, in an agent that can run commands, whether they want a budget or a single purchase, unless they already said; in a chat app, offer a single purchase the owner approves on superstables.com. Explain that payments use test tokens unless the operator has turned mainnet on, and that the owner approves in their wallet. Follow the route they choose; ask for a budget amount before starting a grant. In Claude Code with the plugin installed, `/superstables:setup` guides this choice and `/superstables:status` checks an existing account or budget.
+Ask what service the owner needs and, in an agent that can run commands, whether they want a budget or a single purchase, unless they already said; in a chat app, offer a single purchase the owner approves on superstables.com. Explain that payments use mainnet unless the owner asks for a testnet, and that the owner approves in their wallet. Follow the route they choose; ask for a budget amount before starting a grant. In Claude Code with the plugin installed, `/superstables:setup` guides this choice and `/superstables:status` checks an existing account or budget.
 
 ## Update or remove
 

@@ -28,6 +28,7 @@ import { requestFact, resuming, signingOnly } from "../owner-page.ts";
 import { askTransaction, endUnapproved, closeOwnerPage, readSent, approvalsIn, findApproval, grantMismatchSteps, tokenRow, approveRow, approveShows, capWords, REVOKE_HINT, grantTx, grantSteps, approveResetHostedProblem, grantEnforced, GRANT_NOT_ENFORCED, landedGrant, chainFlag } from "./owner.ts";
 import { differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 const cap = toUsdc(arg("cap")!);
 if (cap === 0n) { console.error("error: --cap must be above 0 (use revoke.ts to end a budget)"); process.exit(2); }
@@ -49,7 +50,7 @@ console.log(`owner ${pub.owner}${ownerBal === null ? "" : ` ${SYM} ${usdc(ownerB
 const liveRefusal = () => {
   const reason = `an allowance of ${usdc(beforeAllow)} ${SYM} is already live for this agent. approve overwrites it in place, and an agent that sees the pending transaction can spend the old amount and then the new one. Revoke first, then grant again.`;
   console.log(`REFUSED: ${reason}`);
-  process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: "revoke first (superstables budget revoke --rail evm), then grant again" }));
+  process.exit(result(3, { state: "refused_precheck", reason, allowance: usdc(beforeAllow), next: "revoke first (superstables budget revoke --rail evm" + testnetArg() + "), then grant again" }));
 };
 
 // The grant needs the allowance at 0 at the chain's final block, not only on the first endpoint: a revoke still short of final could be
@@ -122,7 +123,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   if (!GAS.isUsdc && ownerGas === 0n && !resuming()) {
     const reason = `the owner ${pub.owner} has no ${GAS.symbol} to pay the fee for the approval`;
     console.log(`REFUSED: ${reason}`);
-    process.exit(result(3, { state: "refused_precheck", reason, next: `fund the owner with ${CFG.label} ${GAS.symbol}, then grant again (superstables budget doctor --rail evm names the faucet)` }));
+    process.exit(result(3, { state: "refused_precheck", reason, next: `fund the owner with ${CFG.label} ${GAS.symbol}, then grant again (superstables budget doctor --rail evm${testnetArg()} names the faucet)` }));
   }
   // the block the owner's transaction must be mined after: kept with the approval for a worker that finishes it later
   const startBlock = await requestFact("grant", () => publicClient.getBlockNumber());
@@ -164,7 +165,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   if (!sent) {
     handle.finish({ outcome: "unknown", message: "The transaction did not show up on chain. Check your wallet's activity; the command reports it as unknown.", hash: outcome.hash });
     await closeOwnerPage();
-    process.exit(result(5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: "superstables budget status --rail evm: read the allowance before granting again" }));
+    process.exit(result(5, { state: "unknown", tx: outcome.hash, reason: "the wallet reported a transaction the chain does not show (replaced, dropped or still pending)", next: "superstables budget status --rail evm" + testnetArg() + ": read the allowance before granting again" }));
   }
   approveTx = sent.hash;
   approveBlock = { blockNumber: sent.blockNumber, blockHash: sent.blockHash, final: sent.final };
@@ -173,7 +174,7 @@ if (!verifyOnly && OWNER_KEY_FILE) {
   if (sent.status !== "success" && !differsFromRequest(sent.problems, sent.siteFailed)) {
     handle.finish({ outcome: "failed", proof: "reverted", message: "The transaction reverted. No allowance was granted by it, but a network fee may have been charged.", hash: sent.hash });
     await closeOwnerPage();
-    process.exit(result(1, { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" }));
+    process.exit(result(1, { state: "failed", proof: "reverted", tx: sent.hash, reason: "the approve reverted on chain", next: "superstables budget status --rail evm" + testnetArg() }));
   }
   // Any difference from the plan is a mismatch, whatever the allowance reads now: an edited higher allowance can be spent
   // down to the requested cap before the readback. The wallet already sent it, so the owner has to revoke it.
@@ -184,14 +185,14 @@ if (!verifyOnly && OWNER_KEY_FILE) {
     const steps = grantMismatchSteps(sent.logs, pub.owner, pub.agent, sent.hash);
     handle.finish({ outcome: "unknown", message: `${mismatchPage(sent.problems, sent.siteFailed, sent.hash, { ended: sent.status !== "success" ? "reverted on chain" : undefined })} The budget was not recorded. ${steps?.page ?? `Revoke it: ${REVOKE_HINT}`}`, hash: sent.hash });
     await closeOwnerPage();
-    process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: steps?.next ?? "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
+    process.exit(result(3, { state: "mismatch", tx: sent.hash, reason, requested: usdc(cap), allowance: now === null ? null : usdc(now), next: steps?.next ?? "revoke (superstables budget revoke --rail evm" + testnetArg() + ") to bring the allowance to 0, then grant again" }));
   }
   if (sent.unresolved) {
     const reason = `the transaction is on chain, but whether it set the allowance is not known yet: ${sent.unresolved}. The budget was not recorded.`;
     console.log(`UNKNOWN: ${reason}`);
     handle.finish({ outcome: "unknown", message: "The transaction is on chain, but the command could not yet confirm what it did. The budget was not recorded; the command reports it as unknown.", hash: sent.hash });
     await closeOwnerPage();
-    process.exit(result(5, { state: "unknown", tx: sent.hash, reason, requested: usdc(cap), next: "superstables budget status --rail evm: read the allowance before granting again" }));
+    process.exit(result(5, { state: "unknown", tx: sent.hash, reason, requested: usdc(cap), next: "superstables budget status --rail evm" + testnetArg() + ": read the allowance before granting again" }));
   }
 }
 
@@ -202,7 +203,7 @@ if (allowance !== cap) {
   console.log(`REFUSED: ${reason}`);
   finishPage?.({ outcome: "unknown", message: `The chain now shows an allowance of ${usdc(allowance)} ${SYM}, not ${capWords(cap)}. The budget was not recorded. Revoke it: ${REVOKE_HINT}`, hash: approveTx ?? undefined });
   await closeOwnerPage();
-  process.exit(result(3, { state: "mismatch", tx: approveTx, reason, requested: usdc(cap), allowance: usdc(allowance), next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" }));
+  process.exit(result(3, { state: "mismatch", tx: approveTx, reason, requested: usdc(cap), allowance: usdc(allowance), next: "revoke (superstables budget revoke --rail evm" + testnetArg() + ") to bring the allowance to 0, then grant again" }));
 }
 
 // Final only when this approve's block is final and the endpoints agree the allowance is the cap at a final block at or after it

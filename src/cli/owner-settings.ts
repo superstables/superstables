@@ -22,7 +22,7 @@ const USE_ON_DEV = "Use it on a development machine only.";
 const WARNINGS: Record<string, string> = {
   site: `Any program on this computer can then serve the approval pages budget commands send the owner to. ${USE_ON_DEV}`,
   rpc: `An RPC variable that names this computer then counts as yours for owner actions: any program on this computer can answer as the chain. ${USE_ON_DEV}`,
-  sellers: `A seller on this computer can then be paid on a mainnet while the operator's switch is on. ${USE_ON_DEV}`,
+  sellers: `A seller on this computer can then be paid on a mainnet. ${USE_ON_DEV}`,
 };
 
 export interface ChangeOptions { ownNode?: boolean; quorum?: string | number; clear?: boolean }

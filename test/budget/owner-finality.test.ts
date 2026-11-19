@@ -129,7 +129,7 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.result).toMatchObject({ command: "revoke", state: "landed", final: false, revoked: false });
     expect(r.result.tx.revoke).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(r.result.next).toMatch(/superstables budget status --rail evm later: the revoke is final when status says so/);
+    expect(r.result.next).toMatch(/superstables budget status --rail evm --testnet later: the revoke is final when status says so/);
     expect(c.pub()).toMatch(new RegExp(`^B4_REVOKED_TX=${r.result.tx.revoke}$`, "m"));
     expect(c.pub()).toMatch(/^B4_REVOKED_BLOCK=\d+$/m);
     expect(c.pub()).toMatch(/^B4_REVOKED_AT=\d+$/m);
@@ -155,7 +155,7 @@ describe("evm: a revoke is landed until the chain makes it final", () => {
     ownHeadDrift(c);
     const r = await c.run(["grant", "--rail", "evm", "--amount", "0.5", ...c.keyArgs]);
     expect(r.code, r.stdout + r.stderr).toBe(3);
-    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm; wait for a confirmed zero allowance before granting again" });
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm --testnet; wait for a confirmed zero allowance before granting again" });
     expect(approvals(c.chain)).toBe(0);
   }, 150_000);
 
@@ -339,7 +339,7 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     ownHeadDrift(c);
     const r = await c.run();
     expect(r.code, r.stdout + r.stderr).toBe(3);
-    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm; wait for a confirmed zero allowance before granting again" });
+    expect(r.result).toMatchObject({ state: "refused_precheck", reason: expect.stringContaining("we can't yet confirm a final zero allowance"), next: "superstables budget status --rail evm --testnet; wait for a confirmed zero allowance before granting again" });
     expect(c.site.posts).toEqual([]);
   }, 150_000);
 
@@ -377,7 +377,7 @@ describe("evm: setup --hosted --grant grants only over an allowance it can read"
     expect(r.code, r.stdout + r.stderr).toBe(3);
     expect(r.result.reason).toMatch(/this setup replaces the owner, so whether the new owner already gives this agent an allowance cannot be read before the link\. Set up first \(link\), then grant/);
     expect(r.result.reason).not.toMatch(/no owner is recorded/);
-    expect(r.result.next).toMatch(/setup --rail evm --hosted --new-owner, then superstables budget grant/);
+    expect(r.result.next).toMatch(/setup --rail evm --testnet --hosted --new-owner, then superstables budget grant/);
     expect(c.site.posts).toEqual([]);
   }, 150_000);
 

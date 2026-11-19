@@ -172,7 +172,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const retiredResult = {
       state: "refused_precheck", id, url: first.result.url,
       reason: "the approval link expired on the site without a completed approval",
-      next: `superstables budget setup --rail evm --chain ${record(id).chain} --hosted --site ${site.url}`,
+      next: `superstables budget setup --rail evm --testnet --chain ${record(id).chain} --hosted --site ${site.url}`,
     };
     expect(record(id).chain).toEqual(expect.any(String));
     expect(retired.result).toMatchObject({ ...retiredResult, final: true });
@@ -233,7 +233,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
         expect(retry.result).toMatchObject({
           state: "refused_precheck",
           reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
-          next: `superstables budget wait --id ${id} --shown`,
+          next: `superstables budget wait --id ${id} --shown --testnet`,
         });
       }
       expect(record(id).final).toBeUndefined();
@@ -269,7 +269,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
       expect(retry.result).toMatchObject({
         state: "refused_precheck", id,
         reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
-        next: `superstables budget wait --id ${id} --shown`,
+        next: `superstables budget wait --id ${id} --shown --testnet`,
       });
     }
     expect(record(id).final).toBeUndefined();
@@ -315,7 +315,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     expect(retry.result).toMatchObject({
       state: "refused_precheck", id,
       reason: `the pending approval ${id} is not replaced because the wallet may already be sending money`,
-      next: `superstables budget wait --id ${id} --shown`,
+      next: `superstables budget wait --id ${id} --shown --testnet`,
     });
     expect(record(id).final).toBeUndefined();
     expect(record(id).hosted.token).toBeTruthy();
@@ -408,7 +408,7 @@ describe("setup --hosted --grant --fund, when the host ends the worker before th
     const retry = await budget(["setup", "--rail", "evm", "--hosted", "--site", site.url]);
     expect(retry.code).toBe(3);
     expect(retry.result).toMatchObject({ state: "refused_precheck", id });
-    expect(retry.result.next).toContain(`superstables budget wait --id ${id} --shown`);
+    expect(retry.result.next).toContain(`superstables budget wait --id ${id} --shown --testnet`);
     const grant = await budget(["grant", "--rail", "evm", "--amount", "0.01"]);
     expect(grant.result).toMatchObject({ state: "refused_precheck", id });
     expect(site.requests).toHaveLength(1);

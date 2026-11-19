@@ -1,5 +1,5 @@
 // The mainnet boundary at the moment of signing and sending, and the pause file it reads. Right before a key or a wallet
-// is asked to sign on a mainnet, and right before a signature made on one is sent, the operator's switch, the mainnet
+// is asked to sign on a mainnet, and right before a signature made on one is sent, the network mode, the mainnet
 // manifest and the pause are read again (./mainnet-policy.js): a switch turned off or a pause set while the owner was
 // signing stops what comes next. There are no caps here: the owner's spend policy and budgets set how much may move.
 //
@@ -32,7 +32,7 @@ export interface MainnetChainRef {
 }
 
 /**
- * Why nothing may be signed or sent on `chain` right now, or "": the operator's switch, the manifest and the pause, read
+ * Why nothing may be signed or sent on `chain` right now, or "": the network mode, the manifest and the pause, read
  * at this moment. A signature kept back is never sent by this client; it stays valid on chain until it expires.
  */
 export function mainnetSendRefusal(chain: MainnetChainRef, opts: { manifest?: MainnetManifest; env?: Record<string, string | undefined> } = {}): string {

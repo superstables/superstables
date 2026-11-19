@@ -494,7 +494,6 @@ export function approvalPage(facts: ApprovalPageFacts, step: WalletStep = eip300
     You can still reject the payment without one.
   </div>
 
-  ${facts.testnet !== false ? "" : `<div id="real-money" class="note bad">This payment is on ${esc(facts.networkLabel)} (mainnet). A payment cannot be undone.</div>\n`}
   <div class="card">
     <div class="amount">${esc(facts.amountDecimal)}<span>${esc(facts.asset)}</span></div>
     ${sellerLine(facts)}

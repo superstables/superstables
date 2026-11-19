@@ -43,7 +43,7 @@ import { LocalKeySigner } from "../../src/core/signer/local.js";
 import { SignRefused } from "../../src/core/signer/types.js";
 import { termsFor, type RawAccept, type SellerChallenge } from "../../src/core/x402.js";
 
-const REFUSED = /^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET.*; the evm chain gated-base is not marked as a testnet/;
+const REFUSED = /^this run is testnet-only \(--testnet\), so mainnets are off; the evm chain gated-base is not marked as a testnet/;
 const PAY_TO = `0x${"22".repeat(20)}`;
 const GATED = networkFor("eip155:8453") as EvmNetwork;
 const gatedOffer = () => usdcRequirement(0.01, PAY_TO, GATED);
@@ -62,10 +62,10 @@ function tempoCharge(): MppChallenge {
 
 describe("chainGate", () => {
   it("lets a testnet through and refuses anything else while SUPERSTABLES_ALLOW_MAINNET is not set", () => {
-    vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", undefined as unknown as string);
+    vi.stubEnv("SUPERSTABLES_TESTNET", "1");
     expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true })).toBe("");
     for (const testnet of [false, undefined, "true", 1, null]) {
-      expect(chainGate({ rail: "evm", key: "base", testnet }), String(testnet)).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
+      expect(chainGate({ rail: "evm", key: "base", testnet }), String(testnet)).toMatch(/^this run is testnet-only \(--testnet\), so mainnets are off/);
     }
   });
 
@@ -93,7 +93,7 @@ describe("a chain table entry that is not a testnet", () => {
     state.tempoTestnet = false;
     const mpp = judgeMppChallenge(tempoCharge());
     expect(mpp.supported).toBe(false);
-    if (!mpp.supported) expect(mpp.reason).toMatch(/^mainnet is off: .*; the tempo chain tempo-moderato/);
+    if (!mpp.supported) expect(mpp.reason).toMatch(/^this run is testnet-only \(--testnet\), so mainnets are off.*; the tempo chain tempo-moderato/);
     expect(judgeSignRequest({ kind: "tempo-transfer", challenge: tempoCharge() }).supported).toBe(false);
   });
 

@@ -191,7 +191,7 @@ describe("solana: status after a recorded revoke", () => {
     expect(r.stdout).toContain("maximum the delegate can still move: unknown");
     const s = await budget(["status", "--rail", "solana"], solEnv(a));
     expect(s.result).toMatchObject({ revoked: false, remaining: null, atRisk: null, reason: expect.stringMatching(/disagree/) });
-    expect(s.result.next).toMatch(/could not be confirmed on chain \(.*disagree.*\): count it as live; run superstables budget status --rail solana again later/);
+    expect(s.result.next).toMatch(/could not be confirmed on chain \(.*disagree.*\): count it as live; run superstables budget status --rail solana --testnet again later/);
   }, 120_000);
 
   it("the primary shows a delegate that can move 0 and a second endpoint shows 0.5 USDC: unknown, not 'nothing to spend'", async () => {
@@ -206,7 +206,7 @@ describe("solana: status after a recorded revoke", () => {
     expect(r.stdout).toContain("maximum the delegate can still move: unknown");
     const s = await budget(["status", "--rail", "solana"], solEnv(a));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ state: "ok", remaining: null, atRisk: null });
-    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail solana again later/);
+    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail solana --testnet again later/);
     expect(s.result.reason).toMatch(/disagree/);
   }, 120_000);
 
@@ -378,7 +378,7 @@ describe("tempo: readBudget", () => {
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(a));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ revoked: false, remaining: null, atRisk: null, expired: false });
     expect(s.result.reason).toMatch(/disagree/);
-    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail tempo again later/);
+    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail tempo --testnet again later/);
   }, 120_000);
 
   it("the primary says the key expired and a second endpoint says it is live: unknown, never atRisk 0", async () => {
@@ -394,7 +394,7 @@ describe("tempo: readBudget", () => {
     const s = await budget(["status", "--rail", "tempo"], tempoEnv(a));
     expect(s.result, s.stdout + s.stderr).toMatchObject({ expired: false, atRisk: "5", remaining: "5" });
     expect(s.result.atRisk).not.toBe("0");
-    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail tempo again later/);
+    expect(s.result.next).toMatch(/count it as live; run superstables budget status --rail tempo --testnet again later/);
     expect(s.result.reason).toMatch(/disagree/);
   }, 120_000);
 

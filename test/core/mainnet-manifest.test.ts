@@ -17,7 +17,8 @@ afterAll(() => { for (const h of homes) rmSync(h, { recursive: true, force: true
 afterEach(() => vi.unstubAllEnvs());
 const home = () => { const h = mkdtempSync(join(tmpdir(), "mainnet-manifest-")); homes.push(h); vi.stubEnv("SUPERSTABLES_HOME", h); return h; };
 
-const ON = { SUPERSTABLES_ALLOW_MAINNET: "1" };
+const ON = { SUPERSTABLES_TESTNET: "" };
+const OFF = { SUPERSTABLES_TESTNET: "1" };
 const copy = (): MainnetManifest => structuredClone(MAINNET_MANIFEST) as MainnetManifest;
 const base = (m: MainnetManifest) => m.chains.base as unknown as Record<string, any>;
 const baseRef = (m: MainnetManifest = MAINNET_MANIFEST as MainnetManifest) => ({ rail: "evm", key: "base", chainId: 8453, token: m.chains.base.token });
@@ -66,13 +67,13 @@ describe("the shipped mainnet manifest", () => {
     expect(EVM_NETWORKS.map((n) => n.key)).toEqual(["base-sepolia", "arc-testnet", "arbitrum-sepolia", "polygon-amoy", "skale-base-sepolia", "ethereum-sepolia", "robinhood-testnet"]);
     expect(KNOWN_NETWORKS.map((n) => n.key)).toEqual([...EVM_NETWORKS.map((n) => n.key), "tempo-moderato", "solana-devnet"]);
     expect(KNOWN_NETWORKS.every((n) => n.testnet === true)).toBe(true);
-    expect(mainnetChains(undefined, {})).toEqual([]);
+    expect(mainnetChains(undefined, OFF)).toEqual([]);
     expect(mainnetChains(undefined, ON).map(([k]) => k)).toEqual(Object.keys(MAINNET_MANIFEST.chains));
     expect(mainnetChains("tempo", ON).map(([k]) => k)).toEqual(["tempo"]);
   });
 
-  it("refuses Base at the gate while the switch is off, with the switch named", () => {
-    expect(chainGate({ ...baseRef(), testnet: false })).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET=1/);
+  it("refuses Base at the gate in a testnet-only run, with the flag named", () => {
+    expect(chainGate({ ...baseRef(), testnet: false })).toMatch(/^this run is testnet-only \(--testnet\), so mainnets are off/);
     expect(chainGate({ rail: "evm", key: "base-sepolia", testnet: true })).toBe("");
   });
 });
@@ -110,7 +111,7 @@ describe("the manifest check", () => {
     setMainnetPauseSource(() => "");
     try {
       expect(mainnetRefusal({ rail: "evm", key: "base", chainId: 8453, token }, m, ON)).toBe("");
-      expect(mainnetRefusal({ rail: "evm", key: "base", chainId: 8453, token }, m, {})).toMatch(/^mainnet is off/);
+      expect(mainnetRefusal({ rail: "evm", key: "base", chainId: 8453, token }, m, OFF)).toMatch(/^this run is testnet-only/);
       expect(mainnetRefusal({ rail: "evm", key: "base", chainId: 1, token }, m, ON)).toMatch(/chain id 1 here/);
       expect(mainnetRefusal({ rail: "tempo", key: "base", chainId: 8453, token }, m, ON)).toMatch(/on the tempo rail here/);
       expect(mainnetRefusal({ rail: "evm", key: "base", chainId: 8453, token: { ...token, domain: { name: "USDC", version: "2" } } }, m, ON)).toMatch(/token here is not the one/);
@@ -144,6 +145,6 @@ describe("the pause", () => {
     vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "1");
     expect(mainnetSendRefusal(BASE_SEPOLIA)).toBe("");
     vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "");
-    expect(mainnetSendRefusal({ ...baseRef(), testnet: false })).toMatch(/^mainnet is off/);
+    expect(mainnetSendRefusal({ ...baseRef(), testnet: false })).toMatch(/^this run is testnet-only/);
   });
 });

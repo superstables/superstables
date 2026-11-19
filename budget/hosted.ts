@@ -90,6 +90,9 @@ import type { OwnerActionOutcome, OwnerTerms, OwnerVerdict } from "../src/core/s
 import { isProof } from "../src/core/proofs.mjs";
 import { readCapped } from "./response.mjs";
 import { BUDGET_API, LINK_FRAGMENT, MATCH_CODE, SITE_MAX_BYTES, UNSAFE_URL, accountRefusalNext, call, cancelSiteRequest, isSiteRequestId, isSiteToken, readSiteRequest, scrub, siteFailedWords, siteFailure, siteName, siteRequestProblem, siteText, siteWord } from "./site.mjs";
+import { evmChainFlags } from "./evm/chains.mjs";
+import { TEMPO_CHAINS } from "./tempo/lib/constants.mjs";
+import { SOLANA_CHAINS } from "./solana/chains.mjs";
 
 export { scrub, siteFailedWords, siteWord };
 
@@ -592,7 +595,7 @@ type Poll = { /** a request taken over: read it before any expiry is acted on */
 const FINAL_STATES = new Set(["linked", "confirmed", "failed", "rejected", "expired", "cancelled", "unknown"]);
 const STEP_FINAL = new Set(["confirmed", "failed", "rejected", "expired", "unknown", "skipped", "cancelled"]);
 /** The rail and chain flags of a command: no --chain on a rail's default chain. */
-const railFlags = (rail: HostedRail, chain: string) => (rail === "evm" ? `--rail evm${chain === "base-sepolia" ? "" : ` --chain ${chain}`}` : `--rail ${rail}`);
+const railFlags = (rail: HostedRail, chain: string) => (rail === "evm" ? `--rail evm${evmChainFlags(chain)}` : `--rail ${rail}${({ ...TEMPO_CHAINS, ...SOLANA_CHAINS } as Record<string, { testnet?: boolean }>)[chain]?.testnet === true ? " --testnet" : ""}`);
 
 /** The budget API's announcement that a link may name its owner (superstables-app lib/budget/features.ts). */
 export const EXPECTED_OWNER_FEATURE = "expected_owner";

@@ -19,7 +19,7 @@ import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.t
 
 const USAGE = `Usage: npx tsx budget/solana/fundAgent.ts [--amount <sol>] [--timeout <s>] [--no-open] [--owner-key-file <path>]
 
-Owner command. Sends the agent SOL for transaction fees (default 0.01). Devnet, or mainnet while the operator's switch is on.
+Owner command. Sends the agent SOL for transaction fees (default 0.01). Solana, or devnet with --testnet.
 The owner approves it in their own wallet on a page this command opens on 127.0.0.1, or on
 superstables.com when the chain was set up with --hosted.
 

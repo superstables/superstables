@@ -3,7 +3,7 @@
 Superstables lets coding agents find paid services, check prices and pay for what they need.
 With Budgets, you approve an amount in your wallet and the agent can spend within it. Single purchase lets you approve each purchase, both available on superstables.com or on your machine.
 
-**Testnet by default.** Uses test tokens. Mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then every supported mainnet is open.
+**Mainnet by default.** `--testnet` (or `SUPERSTABLES_TESTNET=1`) uses the testnets and test tokens instead.
 
 ## Choose an install
 
@@ -70,7 +70,7 @@ For one purchase instead, ask it to find a service, check the price and request 
 The agent starts the request; you approve in your wallet.
 
 Keep budgets small. A stolen agent key can spend the remaining budget.
-Mainnet is off unless the operator sets `SUPERSTABLES_ALLOW_MAINNET=1`; then budgets and single purchases can use a mainnet. Agents never set it. Which site and which RPCs your approvals use is set in your own terminal with `superstables owner settings`.
+Budgets and single purchases use a mainnet unless you ask for a testnet. Which site and which RPCs your approvals use is set in your own terminal with `superstables owner settings`.
 Read the [security model](docs/security.md) before granting a budget: it says what each way of paying protects and what it doesn't, and what mainnet needs.
 
 ## Use the CLI
@@ -78,7 +78,7 @@ Read the [security model](docs/security.md) before granting a budget: it says wh
 Install the CLI from npm:
 
 ```bash
-npm install -g @superstables/client@1.4.1
+npm install -g @superstables/client@1.4.2
 superstables --help
 superstables budget --help
 superstables seller credit

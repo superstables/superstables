@@ -3,13 +3,13 @@
 The Superstables client is a command, `superstables`, and the `superstables` agent skill
 that guides an agent through it. Start with [Budget](budget.md), where the owner
 grants an on-chain budget once, or [Single purchase](buy-once.md), where the owner approves
-each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Testnet by default. Test USDC, USDG or pathUSD (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato). Mainnet stays off until the operator opens it, by setting `SUPERSTABLES_ALLOW_MAINNET`, which opens every supported mainnet at once.
+each purchase (Single purchase on superstables.com, or Single purchase on your machine: `pay` on a page on this machine). Mainnet by default. `--testnet` uses test USDC, USDG or pathUSD instead (USDG on Robinhood Chain Testnet, pathUSD on Tempo Moderato).
 
 ## What you need
 
 - Node 22 or newer.
 - Linux or macOS. On Windows, use WSL: `superstables budget` refuses to run on native Windows.
-- Network access to sellers and testnet RPCs (mainnet RPCs too while the operator's switch is on), and to the approval site when using approvals on superstables.com.
+- Network access to sellers and chain RPCs (testnet RPCs with `--testnet`), and to the approval site when using approvals on superstables.com.
 - For **local approvals**, an owner browser wallet that can reach the client's `127.0.0.1` page:
   an EVM wallet for EVM/Tempo, or a Solana wallet for a Solana budget. On the same machine, use
   a browser extension wallet. Over SSH, forward the approval link's port first:
@@ -21,7 +21,7 @@ each purchase (Single purchase on superstables.com, or Single purchase on your m
   wallet cannot sign. Choose [Budget on superstables.com](budget.md#approve-on-superstablescom-instead)
   or [Single purchase on superstables.com](buy-once.md#hosted-buy-once-superstables-budget-buy-once).
 
-These instructions describe **client 1.4.1** and require that release build. Install it from npm
+These instructions describe **client 1.4.2** and require that release build. Install it from npm
 as `@superstables/client`, or use the released commit and skill from
 [GitHub Releases](https://github.com/superstables/superstables/releases).
 The CLI/skill runs on your own machine or server,
@@ -30,7 +30,7 @@ agent key on that runtime. Test-token and gas requirements belong to the chosen
 [Budget](budget.md#what-you-need) or [Single purchase](buy-once.md) flow.
 
 The client runs on your machine and contacts sellers, the facilitators that settle x402 payments,
-testnet RPCs (mainnet RPCs too while the operator's switch is on), the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
+chain RPCs (testnet RPCs with `--testnet`), the Superstables index and, when switched on, the demo catalogue on superstables.com and, in an
 interactive `superstables doctor`, the npm registry (`SUPERSTABLES_NO_UPDATE_CHECK=1` turns that off).
 
 ## Install
@@ -73,7 +73,7 @@ client. The client's package is `@superstables/client`.
 ### From npm
 
 ```bash
-npm install -g @superstables/client@1.4.1
+npm install -g @superstables/client@1.4.2
 superstables --version
 ```
 
@@ -84,7 +84,7 @@ the command, not the agent skill: to connect an agent, also install the skill, a
 ### From a checkout
 
 To run the client from its sources, for example to work on it, replace `<commit>` with the full
-commit hash of the 1.4.1 release:
+commit hash of the 1.4.2 release:
 
 ```bash
 git clone https://github.com/superstables/superstables.git
@@ -104,7 +104,7 @@ checkout's command, it downloads whatever package the npm registry has under tha
 
 ### With npm, from git
 
-In any folder, with `<commit>` replaced by the full commit hash of the 1.4.1 release (its
+In any folder, with `<commit>` replaced by the full commit hash of the 1.4.2 release (its
 page on GitHub names the commit):
 
 ```bash
@@ -121,7 +121,7 @@ Run it as `npx --no superstables …` in that folder, or as `node_modules/.bin/s
 ### The agent skill, with the whole CLI bundled
 
 `npm run skill` in a checkout builds `build/superstables-skill-<version>.zip`, and
-the 1.4.1 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
+the 1.4.2 release uses that versioned zip. Unzip it into your agent's skills folder, `~/.claude/skills/` for
 Claude Code or `~/.agents/skills/` for Codex. It unpacks to `superstables/`, and needs
 only Node:
 
@@ -183,7 +183,7 @@ which account last connected, that the approval port is free, and that the demo 
 index and the facilitators answer:
 
 ```
-  client version           1.4.1
+  client version           1.4.2
   home                     /home/you/.superstables
 
 ✓ home directory           /home/you/.superstables (writable)
@@ -322,7 +322,7 @@ wallet, `pay` fails with "the wallet is not running", and nothing can be signed.
 | `SUPERSTABLES_DEMO_SERVICES` | unset (off) | `on` includes Superstables' testnet services from the catalogue on superstables.com in discovery. Most return prepared sample output, carry `mock: true` and come after the listings not marked simulated; the market data service returns live prices. `find --demo` does the same for one search; leave it off to list no simulated services |
 | `SUPERSTABLES_CATALOGUE_URL` | `https://www.superstables.com/api/demo/catalogue` | Where those services are published, read only when `SUPERSTABLES_DEMO_SERVICES` is on. Point it at another deployment, or set it to `off` |
 | `SUPERSTABLES_SITE` | `https://www.superstables.com` | The site `setup --hosted` uses when `--site` is not given; `budget find` and `buy-once` use it before the site a setup on superstables.com recorded. `setup --hosted` records its site as `SITE=` in the chain's public file, and later owner commands on that chain use that one and refuse a different `--site`. The owner's approvals happen on this site. It counts only when the owner's settings allow it (`superstables owner settings`); `www.superstables.com` always does |
-| `SUPERSTABLES_ALLOW_MAINNET` | unset (off) | The operator's switch for mainnet. `1` or `true` opens every supported mainnet; unset, empty, `0` or `false` keeps mainnet off, and any other value is an error that names the variable. Agents never set it. Each mainnet must still pass the chain gate's checks ([Mainnet](security.md#mainnet)) |
+| `SUPERSTABLES_TESTNET` | unset (mainnet) | `1` or `true` makes the run testnet-only, as `--testnet` does; unset, empty, `0` or `false` keeps the default, mainnet, and any other value is an error that names the variable and refuses every chain. Each mainnet must still pass the chain gate's checks ([Mainnet](security.md#mainnet)) |
 | `SUPERSTABLES_ALLOW_SITE` | unset | No longer read; a warning is printed when it is set. Use `superstables owner settings site <origin>` |
 | `SUPERSTABLES_DOCTOR_OFFLINE` | unset | `1` makes `doctor` skip every check that needs network access |
 | `SUPERSTABLES_NO_UPDATE_CHECK` | unset | `1` skips the interactive doctor check for a newer client release |

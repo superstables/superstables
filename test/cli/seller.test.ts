@@ -117,7 +117,7 @@ describe("superstables seller", () => {
     expect(value.balance).toBe("12.5");
     expect(value.asset).toBe("USDC");
     expect(value.top_ups[0]?.id).toBe(ID);
-    expect(value.next).toBe("superstables seller top-up");
+    expect(value.next).toBe("superstables seller top-up --testnet");
   });
 
   it("refuses a top-up whose pay link is another site, pays nothing and names that site", async () => {

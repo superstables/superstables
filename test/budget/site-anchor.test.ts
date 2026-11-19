@@ -221,7 +221,7 @@ describe("a recorded site", () => {
     const r = await budget(BUY, account(null));
     expect(r.code).toBe(3);
     expect(r.result.reason).toMatch(/no new purchase was started.*nothing was read from it/);
-    expect(r.result.next).toContain(`wait --id ${id} --abandon`);
+    expect(r.result.next).toContain(`wait --id ${id} --testnet --abandon`);
     expect(gets).toBe(0);
     expect(purchases.purchases.length).toBe(polls);
     await neverPaid(id);
@@ -234,7 +234,7 @@ describe("a recorded site", () => {
     purchases.onPoll = () => { gets += 1; };
     const r = await budget([...BUY, "--replace"], account(null));
     expect(r.code).toBe(3);
-    expect(r.result.next).toContain(`wait --id ${id} --abandon`);
+    expect(r.result.next).toContain(`wait --id ${id} --testnet --abandon`);
     expect(gets).toBe(0);
     expect(purchases.purchases[0].state).toBe("denied");
     expect(purchases.purchases[0].cancels).toBe(0);

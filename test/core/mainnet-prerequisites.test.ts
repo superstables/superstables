@@ -1,7 +1,7 @@
 // The chain gate's mainnet prerequisites (src/core/chain-gate.js): each is missing only when its own check fails. Two checks
 // need files and are registered by the modules that own those facts (src/core/rpc-endpoints.mjs and budget/os-keychain.mjs);
 // the other two are computed in the gate. The last part loads the chain tables with the operator's switch on, as a process
-// started with SUPERSTABLES_ALLOW_MAINNET=1 does, and checks every mainnet of the manifest end to end, short of signing.
+// started without --testnet does, and checks every mainnet of the manifest end to end, short of signing.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -147,12 +147,12 @@ describe("load order", () => {
   });
 });
 
-describe("with the operator's switch on when the tables load", () => {
+describe("with the default, mainnet, when the tables load", () => {
   const PAY_TO_EVM = `0x${"22".repeat(20)}`;
   const PAY_TO_SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
   const FEE_PAYER = "2wmVCSfPxGPjrnMMn7rchp4uaeoTqN39mXFC2zhPdri9";
   async function load(env: Record<string, string> = {}) {
-    vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "1");
+    vi.stubEnv("SUPERSTABLES_TESTNET", "");
     vi.stubEnv("SUPERSTABLES_HOME", scratch());
     vi.stubEnv("SUPERSTABLES_TEST_ACCOUNT_HOME", accountHomeWith(null));
     for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
@@ -189,7 +189,8 @@ describe("with the operator's switch on when the tables load", () => {
     const { chain, gate } = await load();
     for (const n of chain.KNOWN_NETWORKS) {
       const why = gateOf(gate, n);
-      if (OWN_NODE.includes(n.key)) expect(why, n.key).toBe(`the evm chain ${n.key} is not ready for mainnet signing: ${RPC}`);
+      if (n.testnet) expect(why, n.key).toBe(`the ${n.rail} chain ${n.key} is a testnet, and testnets need --testnet (or SUPERSTABLES_TESTNET=1)`);
+      else if (OWN_NODE.includes(n.key)) expect(why, n.key).toBe(`the evm chain ${n.key} is not ready for mainnet signing: ${RPC}`);
       else expect(why, n.key).toBe("");
     }
   });
@@ -239,13 +240,13 @@ describe("with the operator's switch on when the tables load", () => {
     expect(rails.judgeAccept(wrong as never, 2).supported).toBe(false);
   });
 
-  it("stops every mainnet during a pause, and every one again once the switch is off, while testnets go on", async () => {
+  it("stops every mainnet during a pause, and every one again in a testnet-only run, while testnets go on there", async () => {
     const { chain, gate } = await load({ SUPERSTABLES_MAINNET_PAUSE: "1" });
     for (const n of chain.KNOWN_NETWORKS) {
-      expect(gateOf(gate, n), n.key).toMatch(n.testnet ? /^$/ : /mainnet signing is paused: SUPERSTABLES_MAINNET_PAUSE is set/);
+      expect(gateOf(gate, n), n.key).toMatch(n.testnet ? /is a testnet, and testnets need --testnet/ : /mainnet signing is paused: SUPERSTABLES_MAINNET_PAUSE is set/);
     }
     vi.stubEnv("SUPERSTABLES_MAINNET_PAUSE", "");
-    vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "0");
-    for (const n of chain.KNOWN_NETWORKS) expect(gateOf(gate, n), n.key).toMatch(n.testnet ? /^$/ : /^mainnet is off: /);
+    vi.stubEnv("SUPERSTABLES_TESTNET", "1");
+    for (const n of chain.KNOWN_NETWORKS) expect(gateOf(gate, n), n.key).toMatch(n.testnet ? /^$/ : /^this run is testnet-only \(--testnet\), so mainnets are off/);
   });
 });

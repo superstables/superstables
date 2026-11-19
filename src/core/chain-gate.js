@@ -1,10 +1,11 @@
 // The chain gate: one check in front of every signature, wallet request and broadcast, in both builds (`pay` and its
-// signers here, and every rail of `superstables budget`). A chain its own table marks as a testnet is always signed on.
-// Any other chain is refused unless all of these hold: the operator allows mainnet in the environment
-// (SUPERSTABLES_ALLOW_MAINNET, off unless set, read by ./mainnet-policy.js), the mainnet manifest (./mainnet-manifest.js)
-// is valid and states the same chain and token facts as the chain table, mainnet signing is not paused, and the chain
-// has what signing on it correctly needs (MAINNET_PREREQUISITES). The switch opens every mainnet in the manifest at once:
-// there is no per-chain approval and no cap beyond the owner's own. Each check only closes: none turns signing on.
+// signers here, and every rail of `superstables budget`). A run uses one kind of chain (./mainnet-policy.js): mainnets by
+// default, testnets only with --testnet (SUPERSTABLES_TESTNET=1). A chain its own table marks as a testnet is signed on
+// only in a testnet-only run. Any other chain is refused unless all of these hold: the run is not testnet-only, the
+// mainnet manifest (./mainnet-manifest.js) is valid and states the same chain and token facts as the chain table, mainnet
+// signing is not paused, and the chain has what signing on it correctly needs (MAINNET_PREREQUISITES). Every mainnet in
+// the manifest is open at once: there is no per-chain approval and no cap beyond the owner's own. Each check only
+// closes: none turns signing on.
 //
 // Plain JavaScript with JSDoc types, so the budget's .mjs files, its TypeScript and src/ share it; tsc emits it to dist
 // with its declaration, and scripts/budget-build.mjs bundles it into dist/budget. It imports only ./token-facts.js,
@@ -14,9 +15,9 @@
 
 import { tokenFactsProblem } from "./token-facts.js";
 import { finalityProfile } from "./finality-policy.js";
-import { MAINNET_ENV, mainnetRefusal, mainnetSwitch, mainnetSwitchRefusal, parseMainnetSwitch } from "./mainnet-policy.js";
+import { TESTNET_ENV, TESTNET_FLAG, mainnetOffReason, mainnetRefusal, networkMode, parseNetworkMode, testnetOffReason, testnetRun } from "./mainnet-policy.js";
 
-export { MAINNET_ENV, mainnetSwitch, mainnetSwitchRefusal, parseMainnetSwitch };
+export { TESTNET_ENV, TESTNET_FLAG, mainnetOffReason, networkMode, parseNetworkMode, testnetOffReason, testnetRun };
 
 /**
  * @typedef {object} GateChain  A chain as its own table describes it.
@@ -29,7 +30,7 @@ export { MAINNET_ENV, mainnetSwitch, mainnetSwitchRefusal, parseMainnetSwitch };
  */
 
 /**
- * What signing on a mainnet needs besides the operator's switch, one entry each. `chainPrerequisitesMissing` checks each
+ * What signing on a mainnet needs besides the network mode, one entry each. `chainPrerequisitesMissing` checks each
  * one; the text of each is what a refusal names. The last applies only where an agent key signs.
  */
 export const MAINNET_PREREQUISITES = Object.freeze([
@@ -89,8 +90,11 @@ const chainName = (/** @type {GateChain} */ chain) => `${typeof chain?.rail === 
  * @returns {string}
  */
 export function chainGate(chain) {
-  if (chain?.testnet === true) return "";
-  const off = mainnetSwitchRefusal();
+  if (chain?.testnet === true) {
+    const testnetOff = testnetOffReason();
+    return testnetOff ? `the ${chainName(chain)} is a testnet, and ${testnetOff}` : "";
+  }
+  const off = mainnetOffReason();
   if (off) return `${off}; the ${chainName(chain)} is not marked as a testnet`;
   const refusal = mainnetRefusal(chain);
   if (refusal) return `this client does not sign on the ${chainName(chain)}: ${refusal}`;

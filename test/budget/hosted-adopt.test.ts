@@ -655,7 +655,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     const early = await budget(["wait", "--id", id]);
     expect(early.code, early.stderr).toBe(0);
     expect(early.result).toMatchObject({ state: "signed", final: false, id, expires: signed.result.expires });
-    expect(early.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
+    expect(early.result.next).toContain(`superstables budget wait --id ${id} --testnet --site-request REQUEST_ID`);
     // the connector may already have sent it: never a bare "nothing was sent"
     expect(early.result.next).toMatch(/This machine did not submit the signed approval request, but if submit_budget_request already sent it, the owner may be approving it now/);
     expect(JSON.stringify(early.result)).not.toMatch(/nothing was sent(?! from this machine)/i);
@@ -671,7 +671,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(late.result).toMatchObject({ command: "grant", state: "unknown", final: false, id });
     expect(late.result.reason).toMatch(/expired.*This machine did not submit the signed approval request, but if submit_budget_request sent it in time/);
     expect(late.result.next).toContain("--sign-only");
-    expect(late.result.next).toContain(`superstables budget wait --id ${id} --site-request REQUEST_ID`);
+    expect(late.result.next).toContain(`superstables budget wait --id ${id} --testnet --site-request REQUEST_ID`);
     // not final: had the connector sent it in time, --site-request would still adopt that request
     expect(record(id).final).toBeUndefined();
     expect(site.posts).toEqual([]);
@@ -764,7 +764,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(adopted.code, adopted.stderr).toBe(0);
     expect(adopted.result).toMatchObject({ command: "setup", state: "waiting_owner", final: false, id, url: v.approval_link, matchCode: v.match_code });
     expect(adopted.result.message_for_owner).toContain(v.approval_link);
-    expect(adopted.result.next).toContain(`superstables budget wait --id ${id} --shown`);
+    expect(adopted.result.next).toContain(`superstables budget wait --id ${id} --shown --testnet`);
     const r = site.requests[0];
     expect(record(id).hosted).toMatchObject({ requestId: v.request_id, token: r.token, signed: { nonce: signed.result.request.headers["superstables-agent-nonce"] } });
     expect(statSync(recordPath(id)).mode & 0o777).toBe(0o600);
@@ -957,7 +957,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
     expect(first.code, first.stderr).toBe(5);
     expect(first.result).toMatchObject({ command: "wait", state: "unknown", final: false, id });
     expect(first.result.next).toMatch(/could not be read, so the owner's wallet may have sent its transaction/);
-    expect(first.result.next).toContain(`only the owner runs superstables budget wait --id ${id} --abandon in their own terminal`);
+    expect(first.result.next).toContain(`only the owner runs superstables budget wait --id ${id} --testnet --abandon in their own terminal`);
     expect(record(id).hosted.signed).toMatchObject({ mayHaveSent: true, submitted: { requestId: v.request_id } });
     site.renewAnswer = () => ({ status: 404, body: { error: { code: "not_found" } } });
     const later = await budget(["wait", "--id", id, "--shown", "--timeout", "0"]);
@@ -1032,7 +1032,7 @@ describe("signed here, adopted by id (the dispatcher)", () => {
         site.readAnswer = () => ({ status: 503, body: { error: { code: "unavailable", money_moved: "unknown" } } });
         const first = await budget(adoptArgs(id, v));
         unknown(first, "the adoption");
-        expect(first.result.next).toContain(`superstables budget wait --id ${id} --shown`);
+        expect(first.result.next).toContain(`superstables budget wait --id ${id} --shown --testnet`);
         expect(record(id).hosted.signed).toMatchObject({ walletAsked: true, submitted: { requestId: v.request_id, link: v.approval_link, matchCode: v.match_code } });
         // the chain stays held: no other owner command starts while the wallet may be sending
         expect(existsSync(lockPath())).toBe(true);

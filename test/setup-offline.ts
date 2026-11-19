@@ -26,8 +26,9 @@ try {
 // developer set is kept.
 process.env.NODE_COMPILE_CACHE ??= join(tmpdir(), `superstables-test-compile-cache-${process.getuid?.() ?? 0}`);
 
-// Mainnet stays off in every test unless the test turns it on (SUPERSTABLES_ALLOW_MAINNET, src/core/chain-gate.js): an inherited
-// value must not change what a test sees.
+// Every test runs testnet-only unless it says otherwise (SUPERSTABLES_TESTNET, src/core/mainnet-policy.js): the client's
+// default is mainnet, and a test that checks it unsets the variable itself. An inherited value must not change what a test sees.
+process.env.SUPERSTABLES_TESTNET = "1";
 delete process.env.SUPERSTABLES_ALLOW_MAINNET;
 
 if (!process.env.SUPERSTABLES_LIVE) {

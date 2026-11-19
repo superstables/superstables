@@ -10,8 +10,8 @@ afterEach(() => {
 
 const load = async (on: boolean) => {
   vi.resetModules();
-  if (on) vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "1");
-  else vi.stubEnv("SUPERSTABLES_ALLOW_MAINNET", "");
+  if (on) vi.stubEnv("SUPERSTABLES_TESTNET", "");
+  else vi.stubEnv("SUPERSTABLES_TESTNET", "1");
   return import("../../src/core/routes.js");
 };
 

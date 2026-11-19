@@ -8,12 +8,13 @@
 //   budget   superstables budget preflight (signs nothing; prints the price and payTo), then
 //            superstables budget buy, on every rail (evm, tempo, solana).
 //
-// The ways come from the listing's routes, which name a mainnet only while the operator's switch is
-// on: with it off, a mainnet listing gets no command at all. A listing several ways can pay gets each: buy once, then pay, then budgets.
+// The ways come from the listing's routes, which name only the kind of chain this run uses: in a
+// testnet-only run (--testnet) a mainnet listing gets no command at all, and otherwise a testnet one gets none. A listing several ways can pay gets each: buy once, then pay, then budgets.
 
 import type { BudgetRoute, ServiceListing } from "../core/types.js";
 import { shellWord } from "./outcome.js";
 import { LISTING_IDENTIFIER, untrustedText } from "../core/text.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 /** One way to pay a listing: the commands to run, in order. */
 export interface ListingCommands {
@@ -63,13 +64,13 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
   if (service.actionable) {
     commands.push({
       way: "pay",
-      run: [quoteCommand(service), "superstables pay <quote-id>"],
+      run: [quoteCommand(service), "superstables pay" + testnetArg() + " <quote-id>"],
       ...(paramsNote ? { note: paramsNote } : {}),
     });
   } else if (service.routes?.pay && unknownParams) {
     commands.push({
       way: "pay",
-      run: [`superstables quote ${shellWord(requestUrl(service))}`, "superstables pay <quote-id>"],
+      run: [`superstables quote${testnetArg()} ${shellWord(requestUrl(service))}`, "superstables pay" + testnetArg() + " <quote-id>"],
       ...(paramsNote ? { note: paramsNote } : {}),
     });
   }
@@ -79,7 +80,7 @@ export function listingCommands(service: ServiceListing): ListingCommands[] {
   const price = listed === undefined ? undefined : untrustedText(listed, 60) || undefined;
   for (const route of service.routes?.budget ?? []) {
     const url = shellWord(requestUrl(service));
-    const on = `--rail ${route.rail} --chain ${route.chain}`;
+    const on = `--rail ${route.rail}${testnetArg()} --chain ${route.chain}`;
     if (route.rail === "evm") {
       commands.push({
         way: "budget",
@@ -137,7 +138,7 @@ export function buyOnceCommand(service: ServiceListing): string {
   const params = service.params
     .filter((p) => p.required)
     .map((p) => ` --param ${shellWord(`${p.name}=${paramValue(p)}`)}`);
-  return `superstables budget buy-once --service ${shellWord(service.id)}${params.join("")} --max <ceiling>`;
+  return `superstables budget buy-once${testnetArg()} --service ${shellWord(service.id)}${params.join("")} --max <ceiling>`;
 }
 
 /** A listing's id, parameter name or value that the client may repeat in a command of its own. */
@@ -175,7 +176,7 @@ export function isPlainListing(service: ServiceListing): boolean {
 export function exampleQuoteCommand(service: ServiceListing): string | undefined {
   const required = service.params.filter((p) => p.required);
   if (!LISTING_IDENTIFIER.test(service.id) || required.some((p) => !LISTING_IDENTIFIER.test(p.name))) return undefined;
-  return `superstables quote --service ${service.id}${required.map((p) => ` --param ${p.name}=<value>`).join("")}`;
+  return `superstables quote${testnetArg()} --service ${service.id}${required.map((p) => ` --param ${p.name}=<value>`).join("")}`;
 }
 
 /** The command that quotes a listing, with an example or a placeholder for each required parameter. */
@@ -183,7 +184,7 @@ export function quoteCommand(service: ServiceListing): string {
   const params = service.params
     .filter((p) => p.required)
     .map((p) => ` --param ${shellWord(`${p.name}=${paramValue(p)}`)}`);
-  return `superstables quote --service ${shellWord(service.id)}${params.join("")}`;
+  return `superstables quote${testnetArg()} --service ${shellWord(service.id)}${params.join("")}`;
 }
 
 /**

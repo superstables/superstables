@@ -199,7 +199,7 @@ export class BrowserWalletSigner implements Signer {
     // Last word before the page exists: the page's start may have taken long enough for the caller's cap reservation
     // to lapse (pay.ts renews it, or refuses).
     await hooks?.beforeAsk?.();
-    // On a mainnet the operator's switch, the manifest and the pause are read again before the page can offer anything to
+    // On a mainnet the network mode, the manifest and the pause are read again before the page can offer anything to
     // a wallet; the page prepares one authorization for one wallet only (approval-server.ts).
     const closed = mainnetSendRefusal(network);
     if (closed) throw new SignRefused("policy", closed);

@@ -975,7 +975,7 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"c8".repeat(32)}`, message: "The transaction was not accepted as the planned step: its call approves the spender 0x5555555555555555555555555555555555555555, not 0x19E7E376E7C213B7E7e7e46cc70A5dD086DAff2A. The budget was not recorded. superstables budget revoke cannot end this approval. Send from your wallet: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC." } },
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` }, next: "superstables budget revoke --rail evm cannot end this: it sets only the agent's USDC allowance to 0. The owner sends from their own wallet, by hand: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC. Grant again only if the owner asks" } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, tx: { grant: `0x${"c8".repeat(32)}` }, next: "superstables budget revoke --rail evm --testnet cannot end this: it sets only the agent's USDC allowance to 0. The owner sends from their own wallet, by hand: approve(0x5555555555555555555555555555555555555555, 0) on token 0x036CbD53842c5426634e7929541eC2318f3dCF7e, which this transaction approved for 1 USDC. Grant again only if the owner asks" } },
     ],
     timeout: 150_000,
   },
@@ -996,8 +996,8 @@ const ROWS: Row[] = [
     },
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
-      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"ca".repeat(32)}`, message: "The chain now shows an allowance of 2 USDC, not 1 USDC. The budget was not recorded. Revoke it: superstables budget revoke --rail evm. You approve that in your wallet too." } },
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: "revoke (superstables budget revoke --rail evm) to bring the allowance to 0, then grant again" } },
+      { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"ca".repeat(32)}`, message: "The chain now shows an allowance of 2 USDC, not 1 USDC. The budget was not recorded. Revoke it: superstables budget revoke --rail evm --testnet. You approve that in your wallet too." } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, next: "revoke (superstables budget revoke --rail evm --testnet) to bring the allowance to 0, then grant again" } },
     ],
     timeout: 150_000,
   },
@@ -1019,7 +1019,7 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"cb".repeat(32)}`, message: "" } },
-      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } },
+      { verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm --testnet: read whether it landed before running this again" } },
     ],
     timeout: 150_000,
   },
@@ -1040,7 +1040,7 @@ const ROWS: Row[] = [
       writeFileSync(keyFile, `B4_OWNER_KEY=${evmOwnerKey("22")}\n`, { mode: 0o600 });
       return [seenBudget("grant --owner-key-file --yes", "grant", await budget(b.home, ["grant", "--rail", "evm", "--amount", "1", "--owner-key-file", keyFile, "--yes"], b.env))];
     },
-    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", reason: "the rail script exited 1", next: "superstables budget status --rail evm --testnet: read whether it landed before running this again" } }],
     timeout: 90_000,
   },
   {
@@ -1093,7 +1093,7 @@ const ROWS: Row[] = [
     expect: [
       { verdict: "unknown", match: { http: 200, status: "sent" } },
       { verdict: "unknown", match: { http: 200, status: "unknown", sending: true, hash: `0x${"cf".repeat(32)}`, message: "The chain still shows an allowance of 1 USDC. Run the revoke again." } },
-      { verdict: "unknown", match: { exit: 5, command: "revoke", state: "unknown", final: true, reason: "the allowance still reads above 0", next: "superstables budget status --rail evm: read whether it landed before running this again" } },
+      { verdict: "unknown", match: { exit: 5, command: "revoke", state: "unknown", final: true, reason: "the allowance still reads above 0", next: "superstables budget status --rail evm --testnet: read whether it landed before running this again" } },
     ],
     timeout: 150_000,
   },
@@ -1131,7 +1131,7 @@ const ROWS: Row[] = [
       writeFileSync(join(home, "budget", "owner-approvals.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), id: page, kind: "evm-transaction", title: "Grant a spending budget", status: "sent", sending: true })}\n`, { mode: 0o600 });
       return [seenBudget("wait --shown", "wait", await budget(home, ["wait", "--shown", "--id", id, "--timeout", "0"]))];
     },
-    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm: read whether it landed before running this again" } }],
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "grant", state: "unknown", final: true, reason: "the rail script exited 1", next: "superstables budget status --rail evm --testnet: read whether it landed before running this again" } }],
   },
   {
     path: "budget wait after a recover's background worker stopped: its first page's wallet was asked, its second page's never was",
@@ -1366,7 +1366,7 @@ const ROWS: Row[] = [
       return [answer, replay, seenBudget("wait, after every process is gone", "wait", await budget(c.home, ["wait", "--id", r2.id, "--timeout", "10"], c.env))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction", next: "superstables budget status --rail evm --chain base-sepolia: read whether it landed before running this again" } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction", next: "superstables budget status --rail evm --testnet --chain base-sepolia: read whether it landed before running this again" } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped before it opened a page, after its command was about to broadcast a transaction" } },
       { verdict: "unknown", match: { exit: 5, command: "recover", state: "unknown", final: true, reason: "the background approval stopped after its command was about to broadcast a transaction (last page state: none)" } },
     ],
@@ -1420,7 +1420,7 @@ const ROWS: Row[] = [
       }
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), next: expect.stringMatching(/^the background approval could not be stopped, so it may still send a transaction\. Check wallet activity and superstables budget status --rail evm before retrying, and do not start another owner command on this chain\. The log is /), reason: expect.stringMatching(/^the background approval stopped before it opened a page, but process group \d+ would not stop; the chain stays held$/) } },
+      { verdict: "unknown", match: { exit: 5, command: "recover", rail: "evm", state: "unknown", id: expect.stringMatching(/^oa-/), next: expect.stringMatching(/^the background approval could not be stopped, so it may still send a transaction\. Check wallet activity and superstables budget status --rail evm --testnet before retrying, and do not start another owner command on this chain\. The log is /), reason: expect.stringMatching(/^the background approval stopped before it opened a page, but process group \d+ would not stop; the chain stays held$/) } },
     ],
     timeout: 90_000,
   },
@@ -1528,7 +1528,7 @@ const ROWS: Row[] = [
       writeFileSync(join(b.home, "budget", "ops", "evm-base-sepolia", `${op}.json`), JSON.stringify({ ...purchase(op), state: "unknown" }));
       return [seenBudget("buy again", "buy", await budget(b.home, ["buy", "--rail", "evm", "--url", "https://seller.example/x", "--max", "0.01", "--op", op], b.env))];
     },
-    expect: [{ verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-ab12", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-ab12/) } }],
+    expect: [{ verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-ab12", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --testnet --chain base-sepolia --op rb-20261010120000-ab12/) } }],
   },
   {
     path: "budget buy with the --op of a purchase whose outcome is unknown, without its agent key or with an unsafe key file; and with an op another buy holds before it wrote a journal",
@@ -1559,7 +1559,7 @@ const ROWS: Row[] = [
       }
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-cd34", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --chain base-sepolia --op rb-20261010120000-cd34/) } },
+      { verdict: "unknown", match: { exit: 5, command: "buy", op: "rb-20261010120000-cd34", state: "unknown", paid: null, amount: null, reason: "op_already_unknown", next: expect.stringMatching(/^superstables budget reconcile --rail evm --testnet --chain base-sepolia --op rb-20261010120000-cd34/) } },
       { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_already_unknown" } },
       { verdict: "unknown", match: { exit: 5, command: "buy", state: "unknown", paid: null, amount: null, reason: "op_in_progress", next: expect.stringMatching(/Another process \(buy or reconcile\) may be working on this op; wait for its RESULT, then superstables budget reconcile .* Never pay again for this op while its outcome is unknown$/) } },
     ],
@@ -1577,7 +1577,7 @@ const ROWS: Row[] = [
       return [stranded, returned, emptied];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
+      { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, tx: { pull: PULL }, reason: expect.stringMatching(/the payment authorization is expired on chain .*; the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm --testnet/) } },
       { verdict: "evm-funds-returned", match: { exit: 1, command: "reconcile", state: "failed", paid: false, amount: "0", tx: { pull: PULL, return: RETURN } } },
       { verdict: "unknown", match: { exit: 5, command: "reconcile", state: "unknown", paid: null, amount: null, next: "the agent key holds 0 USDC; check the owner balance by hand. Never pay again for this op." } },
     ],
@@ -1604,7 +1604,7 @@ const ROWS: Row[] = [
       return [partial, await reconciled("the rest returned by recover", ops, ops.readJournal("pull-partly-returned"))];
     },
     expect: [
-      { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, returned: "0.004", reason: expect.stringMatching(/the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm/) } },
+      { verdict: "unknown", match: { exit: 5, state: "unknown", paid: null, returned: "0.004", reason: expect.stringMatching(/the price 0\.01 USDC pulled from the owner has not been returned$/), next: expect.stringMatching(/superstables budget recover --rail evm --testnet/) } },
       { verdict: "evm-funds-returned", match: { exit: 1, state: "failed", paid: false, debit: "0", returned: "0.01", tx: { pull: PULL, return: `0x${"15".repeat(32)}` } } },
     ],
   },

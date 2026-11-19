@@ -1,4 +1,4 @@
-const OFF = "mainnet is off: it needs SUPERSTABLES_ALLOW_MAINNET=1 from the operator";
+const OFF = "this run is testnet-only (--testnet), so mainnets are off";
 // The seven EVM testnets `pay` signs on. Their facts are written twice, once here (src/core/chain.ts) and once for the
 // budget (budget/evm/chains.mjs), so the first test holds the two tables together field by field. The rest pin what the
 // owner's wallet signs on each chain: the token's own EIP-712 domain (Arbitrum's is "USD Coin", SKALE's "Bridged USDC

@@ -1,6 +1,7 @@
-// What the mainnet manifest (./mainnet-manifest.js) says, checked, and the operator's switch that decides whether any of
-// it is used. The switch is SUPERSTABLES_ALLOW_MAINNET: off unless the operator sets it, and it opens every mainnet in
-// the manifest together. The manifest is read once, frozen and checked whole: one malformed fact closes every mainnet,
+// What the mainnet manifest (./mainnet-manifest.js) says, checked, and the network mode that decides which kind of chain a
+// run uses. Mainnet is the default: every mainnet in the manifest is open together. SUPERSTABLES_TESTNET=1 (the CLI's
+// --testnet sets it) makes the run testnet-only: no mainnet is offered or signed on, and only test tokens move. Without
+// it, a testnet is refused. The manifest is read once, frozen and checked whole: one malformed fact closes every mainnet,
 // so a half-written entry never signs. On top of both sits the pause, read on every call: SUPERSTABLES_MAINNET_PAUSE in
 // the environment, or the pause file that ./mainnet-spend.ts registers when it loads. Either stops every new mainnet
 // signature and send at once. A pause can only stop: nothing here turns signing on, and a pause check no loaded module
@@ -48,46 +49,72 @@ import { tokenFactsProblem } from "./token-facts.js";
  * @property {Record<string, MainnetChain>} chains
  */
 
-/** The environment variable that lets this client sign on a chain that is not a testnet. Only the operator sets it. */
-export const MAINNET_ENV = "SUPERSTABLES_ALLOW_MAINNET";
+/** The environment variable that makes a run testnet-only. The CLI's --testnet flag sets it for the run. */
+export const TESTNET_ENV = "SUPERSTABLES_TESTNET";
+/** The flag that sets TESTNET_ENV, as the CLI and every message name it. */
+export const TESTNET_FLAG = "--testnet";
 /** What a mainnet's name carries where the client names the network, as a testnet's label carries " (testnet)". One string, so its wording changes here only. */
 export const MAINNET_MARK = " (mainnet)";
 const PAUSE_ENV = "SUPERSTABLES_MAINNET_PAUSE";
 const RAILS = ["evm", "tempo", "solana"];
 
 /**
- * The one reading of MAINNET_ENV. Exact strings, no trimming and no case folding: "1" or "true" allow mainnet; unset, "",
- * "0" or "false" keep it off; any other value is an error that names the variable. A guess ("yes", "TRUE", " 1") would turn
- * a typo into either a silent no or an unintended yes, and this switch guards money.
+ * The one reading of TESTNET_ENV. Exact strings, no trimming and no case folding: "1" or "true" make the run
+ * testnet-only; unset, "", "0" or "false" keep the default, mainnet; any other value is an error that names the variable
+ * and closes both kinds of chain. A guess ("yes", "TRUE", " 1") would turn a typo into real money or into test tokens the
+ * owner did not mean, and this setting decides which.
  * @param {string | undefined} raw
- * @returns {{ enabled: boolean } | { error: string }}
+ * @returns {{ testnet: boolean } | { error: string }}
  */
-export function parseMainnetSwitch(raw) {
-  if (raw === undefined || raw === "" || raw === "0" || raw === "false") return { enabled: false };
-  if (raw === "1" || raw === "true") return { enabled: true };
+export function parseNetworkMode(raw) {
+  if (raw === undefined || raw === "" || raw === "0" || raw === "false") return { testnet: false };
+  if (raw === "1" || raw === "true") return { testnet: true };
   const shown = JSON.stringify(raw.length > 24 ? `${raw.slice(0, 24)}...` : raw);
-  return { error: `${MAINNET_ENV} is ${shown}, a value it does not take, so mainnet stays off; stop and ask the owner to check it` };
+  return { error: `${TESTNET_ENV} is ${shown}, a value it does not take, so no chain is open; unset it, or set it to 1 for testnets` };
 }
 
 /**
- * MAINNET_ENV as the process has it now.
+ * TESTNET_ENV as the process has it now.
  * @param {Record<string, string | undefined>} [env]
- * @returns {{ enabled: boolean } | { error: string }}
+ * @returns {{ testnet: boolean } | { error: string }}
  */
-export function mainnetSwitch(env = globalThis.process?.env ?? {}) {
-  return parseMainnetSwitch(env[MAINNET_ENV]);
+export function networkMode(env = globalThis.process?.env ?? {}) {
+  return parseNetworkMode(env[TESTNET_ENV]);
+}
+
+/** True only when the run is testnet-only. An invalid TESTNET_ENV is not testnet-only (and closes both kinds of chain). */
+export function testnetRun(env) {
+  const m = networkMode(env);
+  return !("error" in m) && m.testnet;
+}
+
+/** What a printed command adds so it runs on the same kind of chain as this run: " --testnet" in a testnet-only run, else "". */
+export function testnetArg(env) {
+  return testnetRun(env) ? " --testnet" : "";
 }
 
 /**
- * Why mainnet is refused whatever the chain, in words, or "" when the operator has allowed it. Every refusal of a mainnet
- * asks this, so each one names MAINNET_ENV. An invalid value refuses like an off switch.
+ * Why mainnet is refused whatever the chain, in words, or "" when it is open (the default). Every refusal of a mainnet
+ * asks this. An invalid TESTNET_ENV refuses too.
  * @param {Record<string, string | undefined>} [env]
  * @returns {string}
  */
-export function mainnetSwitchRefusal(env) {
-  const s = mainnetSwitch(env);
-  if ("error" in s) return s.error;
-  return s.enabled ? "" : `mainnet is off: it needs ${MAINNET_ENV}=1 from the operator`;
+export function mainnetOffReason(env) {
+  const m = networkMode(env);
+  if ("error" in m) return m.error;
+  return m.testnet ? `this run is testnet-only (${TESTNET_FLAG}), so mainnets are off` : "";
+}
+
+/**
+ * Why a testnet is refused, in words, or "" when the run is testnet-only. Every refusal of a testnet asks this, so each
+ * one names the flag. An invalid TESTNET_ENV refuses too.
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {string}
+ */
+export function testnetOffReason(env) {
+  const m = networkMode(env);
+  if ("error" in m) return m.error;
+  return m.testnet ? "" : `testnets need ${TESTNET_FLAG} (or ${TESTNET_ENV}=1)`;
 }
 
 const isObject = (/** @type {unknown} */ v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);
@@ -203,16 +230,16 @@ export function manifestRefusal(manifest = SHIPPED) {
 }
 
 /**
- * The mainnets the chain tables hold right now: every manifest entry while the operator's switch is on and the manifest
- * is valid, none otherwise. Chain tables read it once, as they load, so a process started with the switch off never
- * names a mainnet as one it pays on. The gate (./chain-gate.js) still checks the switch on every signature.
+ * The mainnets the chain tables hold right now: every manifest entry unless the run is testnet-only or the manifest is
+ * invalid, none otherwise. Chain tables read it once, as they load, so a testnet-only process never names a mainnet as
+ * one it pays on. The gate (./chain-gate.js) still checks the mode on every signature.
  * @param {"evm" | "tempo" | "solana"} [rail]  only that rail's
  * @param {Record<string, string | undefined>} [env]
  * @param {MainnetManifest} [manifest]
  * @returns {[string, MainnetChain][]}
  */
 export function mainnetChains(rail, env, manifest = SHIPPED) {
-  if (mainnetSwitchRefusal(env) || manifestRefusal(manifest)) return [];
+  if (mainnetOffReason(env) || manifestRefusal(manifest)) return [];
   return Object.entries(manifest.chains).filter(([, c]) => rail === undefined || c.rail === rail);
 }
 
@@ -258,7 +285,7 @@ export function mainnetPauseReason(env = globalThis.process?.env ?? {}) {
 }
 
 /**
- * Why nothing new may be signed or sent on the mainnet `chain` (a chain table's entry), or "" when the operator's switch,
+ * Why nothing new may be signed or sent on the mainnet `chain` (a chain table's entry), or "" when the network mode,
  * the manifest and the pause allow it. The prerequisites are chain-gate.js's to check. The chain table's rail, chain id
  * and token must be the manifest's own, fact for fact.
  * @param {{ rail?: unknown, key?: unknown, chainId?: unknown, token?: unknown }} chain
@@ -267,7 +294,7 @@ export function mainnetPauseReason(env = globalThis.process?.env ?? {}) {
  * @returns {string}
  */
 export function mainnetRefusal(chain, manifest = SHIPPED, env) {
-  const off = mainnetSwitchRefusal(env);
+  const off = mainnetOffReason(env);
   if (off) return off;
   const invalid = manifestRefusal(manifest);
   if (invalid) return invalid;

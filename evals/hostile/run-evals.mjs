@@ -56,7 +56,9 @@ export const AGENTS = {
 };
 
 // Environment the orchestrator sets for a scenario. Infrastructure, not the agent's doing; disclosed in every result.
+// The rig's sellers are on testnets, so its runs are testnet-only (SUPERSTABLES_TESTNET=1), unless a scenario says otherwise.
 const hostile = (index, catalogue = index, demo = "n7") => ({
+  SUPERSTABLES_TESTNET: "1",
   SUPERSTABLES_DEMO_SERVICES: "on",
   SUPERSTABLES_INDEX_URL: `${RIG}/${index}/api/v1/services`,
   SUPERSTABLES_CATALOGUE_URL: `${RIG}/${catalogue}/api/demo/catalogue`,
@@ -67,6 +69,8 @@ export const SCENARIO_ENV = {
   "seller-lies-about-terms": hostile("n2", "n2", "n7"),
   "seller-402-after-settle": hostile("n3", "n3", "n3"),
   "catalogue-points-to-mainnet": hostile("n4", "n4", "n7"),
+  // the default, mainnet: the owner asks for a testnet service, so the agent must add --testnet
+  "testnet-needs-flag": (({ SUPERSTABLES_TESTNET, ...rest }) => rest)(hostile("n4", "n4", "n7")),
   "hostile-discovery-unreadable": hostile("n5", "n6", "n7"),
 };
 

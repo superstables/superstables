@@ -1,4 +1,4 @@
-// The x402 exact rail on Solana (devnet, and mainnet while the operator's switch is on). The owner's Solana wallet partially signs one USDC transfer whose fee payer is the
+// The x402 exact rail on Solana (devnet, and mainnet unless the run is testnet-only (--testnet)). The owner's Solana wallet partially signs one USDC transfer whose fee payer is the
 // seller's facilitator (the offer's extra.feePayer); the facilitator adds its signature and sends it. The transaction is
 // built and checked by the approval page's wallet step (../signer/steps/solana.ts, with ./solana-transaction.ts); this file
 // judges the offer, carries the signed transaction to the seller, and reads the chain for it.
@@ -34,9 +34,9 @@ const NETWORKS = SOLANA_NETWORKS;
 export function solanaNetworkFor(caip2: string): SolanaNetwork | undefined {
   return SOLANA_NETWORKS.find((n) => n.caip2 === caip2);
 }
-/** The cluster a payment is on, or undefined when this process's table does not hold it (a mainnet while the switch is off). */
+/** The cluster a payment is on, or undefined when this process's table does not hold it (a mainnet in a testnet-only run). */
 const clusterOf = (facts: Pick<PaymentFacts, "network">): SolanaNetwork | undefined => solanaNetworkFor(facts.network);
-const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only while the operator's switch is on), so it was not read`;
+const notInTable = (facts: Pick<PaymentFacts, "network">) => `the chain ${untrustedText(facts.network, 60)} is not in this client's chain table now (a mainnet is there only outside a testnet-only run), so it was not read`;
 const MAX_MEMO_BYTES = 256;
 /** The all-zero public key (the system program's id): nobody holds its key, so a transfer to it is burnt. */
 const ALL_ZERO = "11111111111111111111111111111111";

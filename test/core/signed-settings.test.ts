@@ -217,7 +217,7 @@ describe("the chain gate", () => {
   it("does not read the owner's signed chain list: only the operator's switch opens a mainnet", async () => {
     await signEvm(owner, ["base", "arbitrum"]);
     await primeSignedSettings();
-    expect(chainGate({ rail: "evm", key: "base", testnet: false })).toMatch(/^mainnet is off: .*SUPERSTABLES_ALLOW_MAINNET/);
+    expect(chainGate({ rail: "evm", key: "base", testnet: false })).toMatch(/^this run is testnet-only \(--testnet\), so mainnets are off/);
   });
 });
 

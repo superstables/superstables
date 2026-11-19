@@ -8,13 +8,14 @@ import { privateKeyToAccount } from "viem/accounts";
 import { DEFAULT_SITE, differsFromRequest, mismatchPage, mismatchReason } from "../site.mjs";
 import { ownerRpcNext, ownerRpcProblem } from "../rpc.mjs";
 import { rpcFacts } from "../page-facts.mjs";
-import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_CHAINS, evmChainFlags } from "./chains.mjs";
 import { CHAINS } from "./chains.ts";
 import type { OwnerChain } from "../../src/core/signer/owner-approval-server.ts";
 import { closeOwnerPage, ownerPageFor, requestFact } from "../owner-page.ts";
 import { ownerEvidence, plannedCall, type EvidenceReads } from "./delegation.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
 import { CFG, GAS, SYM, USDC, USDC_DECIMALS, AGENT_ENV, emit, erc20Abi, publicClient, retry, sleep, usdc, gasFmt, allowanceOf, usdcBalance, nativeBalance, readUntil, publicEnv, agentFileValues, need, allowanceAgreed, finalityOf, thatTakes, agreementWords } from "./lib.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 export { closeOwnerPage };
 
@@ -37,8 +38,8 @@ export const OWNER_CHAIN: OwnerChain = {
   nativeCurrency: { name: GAS.symbol, symbol: GAS.symbol, decimals: GAS.decimals },
   testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true,
 };
-/** A flag for next-step commands: nothing on the default chain. */
-export const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+/** The flags for next-step commands: --testnet on a testnet, --chain unless it is the default of its kind. */
+export const chainFlag = evmChainFlags(CFG.key);
 /** How the owner revokes, in words the page and the logs share. */
 export const REVOKE_HINT = `superstables budget revoke --rail evm${chainFlag}. You approve that in your wallet too.`;
 
@@ -504,14 +505,14 @@ export async function fundInWallet(command: string, owner: Address, agent: Addre
   if (c.state === "unknown") {
     handle.finish({ outcome: "unknown", message: "The command could not confirm this transfer on chain yet. Check your wallet's activity.", hash: outcome.hash });
     await closeOwnerPage();
-    process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: c.tx, reason: c.reason, next: "superstables budget doctor --rail evm: read the agent's gas" })));
+    process.exit(emit(command, 5, withEarlier(earlier, { state: "unknown", tx: c.tx, reason: c.reason, next: "superstables budget doctor --rail evm" + testnetArg() + ": read the agent's gas" })));
   }
   if (c.state !== "settled") {
     // the RESULT's reason, as a sentence for the page: a chain mismatch about the transfer, or the site's verdict as it is
     const prefix = "the transaction was not accepted as the planned step: ";
     handle.finish({ outcome: c.state === "mismatch" ? "unknown" : "failed", proof: c.proof, message: c.reason!.startsWith(prefix) ? `The transfer was not confirmed as the planned step: ${c.reason!.slice(prefix.length)}.` : `${c.reason}.`, hash: c.tx });
     await closeOwnerPage();
-    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, proof: c.proof, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" })));
+    process.exit(emit(command, c.state === "mismatch" ? 3 : 1, withEarlier(earlier, { state: c.state, proof: c.proof, tx: c.tx, reason: c.reason, next: "check wallet activity, then superstables budget doctor --rail evm" + testnetArg() })));
   }
   const final = c.final === true;
   handle.finish({ outcome: "confirmed", message: final ? `Done. Your agent received ${amt} ${GAS.symbol} and now has ${gasFmt(c.agentGas!)} ${GAS.symbol}. You can close this page.` : landedFund(), hash: c.tx });

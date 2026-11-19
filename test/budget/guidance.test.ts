@@ -79,7 +79,7 @@ describe("a buy with no budget set up here", () => {
     expect(r.result).toMatchObject({ state: "refused_precheck", op: "half-1", paid: false, amount: "0" });
     expect(r.result.reason).toContain("no owner has connected a wallet");
     expect(r.result.reason).not.toContain("no agent key");
-    expect(r.result.next).toContain("superstables budget setup --rail evm --chain arc-testnet");
+    expect(r.result.next).toContain("superstables budget setup --rail evm --testnet --chain arc-testnet");
   });
 
   it("is a refusal, not an unknown, when the rail stops before it records a purchase", async () => {
@@ -103,14 +103,14 @@ describe("status with no budget set up here", () => {
     expect(r.code).toBe(1);
     expect(r.stderr.split("\n")[0]).toContain("no budget has been set up here for evm on base-sepolia");
     expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine; no owner has connected a wallet");
-    expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm, superstables budget doctor --rail evm, superstables budget grant --rail evm --amount A");
+    expect(r.result.next).toContain("superstables budget setup --rail evm --testnet, superstables budget fund-agent --rail evm --testnet, superstables budget doctor --rail evm --testnet, superstables budget grant --rail evm --testnet --amount A");
     expect(`${r.stderr}${r.stdout}`.replaceAll(home, "<home>")).not.toMatch(/B4/);
   });
 
   const hosted = {
-    evm: "superstables budget setup --rail evm --chain arc-testnet --hosted --grant A --fund",
-    tempo: "superstables budget setup --rail tempo --hosted --grant A",
-    solana: "superstables budget setup --rail solana --hosted --grant A --fund",
+    evm: "superstables budget setup --rail evm --testnet --chain arc-testnet --hosted --grant A --fund",
+    tempo: "superstables budget setup --rail tempo --testnet --hosted --grant A",
+    solana: "superstables budget setup --rail solana --testnet --hosted --grant A --fund",
   } as const;
   for (const rail of ["evm", "tempo", "solana"] as const) {
     it(`offers the one-link set-up on superstables.com on ${rail} when no owner is on record`, async () => {
@@ -125,7 +125,7 @@ describe("status with no budget set up here", () => {
     writeFileSync(join(home, "budget", "public", "evm-base-sepolia.env"), `B4_OWNER_ADDRESS=0x${"22".repeat(20)}\n`);
     const r = await budget(["status", "--rail", "evm"]);
     expect(r.result.reason).toBe("no budget has been set up here for evm on base-sepolia: no agent key on this machine");
-    expect(r.result.next).toContain("superstables budget setup --rail evm, superstables budget fund-agent --rail evm");
+    expect(r.result.next).toContain("superstables budget setup --rail evm --testnet, superstables budget fund-agent --rail evm --testnet");
     expect(r.result.next).not.toContain("--hosted");
   });
 
@@ -167,7 +167,7 @@ describe("preflight on tempo and solana", () => {
       expect(r.code).toBe(0);
       expect(r.result).toMatchObject({ ok: true, command: "preflight", rail: "tempo", state: "ok", amount: "0.001", payTo: TEMPO_SELLER, offer: { token: "pathUSD", network: "tempo-moderato", feePayer: true } });
       expect(r.result.next).toContain("the seller asks 0.001 pathUSD");
-      expect(r.result.next).toContain(`superstables budget buy --rail tempo --chain moderato --url '${s.url}' --method POST --body '{"id":1}' --max <your ceiling> --pay-to ${TEMPO_SELLER}`);
+      expect(r.result.next).toContain(`superstables budget buy --rail tempo --testnet --chain moderato --url '${s.url}' --method POST --body '{"id":1}' --max <your ceiling> --pay-to ${TEMPO_SELLER}`);
       expect(s.seen).toEqual([{ method: "POST", body: '{"id":1}' }]);
       expect(existsSync(join(home, "keys"))).toBe(false);
     } finally {
@@ -183,7 +183,7 @@ describe("preflight on tempo and solana", () => {
       expect(a.code).toBe(1);
       expect(a.result).toMatchObject({ ok: false, state: "failed", amount: null });
       // a seller that offers only Tempo mainnet: the mainnet switch, off by default, refuses it first (tempo-mainnet-gate.test.ts)
-      expect(a.result.reason).toContain("mainnet is off");
+      expect(a.result.reason).toContain("testnet-only");
       const b = await budget(["preflight", "--rail", "tempo", "--url", memo.url]);
       expect(b.code).toBe(1);
       expect(b.result.reason).toContain("a payment memo of its own");
@@ -201,7 +201,7 @@ describe("preflight on tempo and solana", () => {
       const r = await budget(["preflight", "--rail", "solana", "--url", s.url]);
       expect(r.code).toBe(0);
       expect(r.result).toMatchObject({ ok: true, rail: "solana", state: "ok", amount: "0.01", payTo, offer: { token: "USDC", network: "solana-devnet", feePayer: true } });
-      expect(r.result.next).toContain(`superstables budget buy --rail solana --chain devnet --url '${s.url}' --max <your ceiling> --pay-to ${payTo}`);
+      expect(r.result.next).toContain(`superstables budget buy --rail solana --testnet --chain devnet --url '${s.url}' --max <your ceiling> --pay-to ${payTo}`);
       expect(existsSync(join(home, "keys"))).toBe(false);
     } finally {
       s.close();

@@ -11,7 +11,7 @@ import "./cli-guard.mjs";
 import { domainSeparator, parseAbi, formatUnits, type Address } from "viem";
 import { SYM, CFG, GAS, emit, oneLine, USDC, NETWORK, usdc, gasFmt, publicClient, nativeBalance, usdcBalance, arg, toUsdc, publicEnv, usageError, cmd, rpcHost } from "./lib.ts";
 import { checkAccept, MIN_AUTH_LIFETIME_S, MAX_AUTH_LIFETIME_S } from "./purchase.ts";
-import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_CHAINS, evmChainFlags } from "./chains.mjs";
 import { readCapped } from "../response.mjs";
 import { isAddress } from "viem";
 import { sellerUrlProblem } from "../../src/core/seller-url.mjs";
@@ -43,7 +43,7 @@ console.log(`gas: token ${GAS.symbol}${GAS.isUsdc ? " (native, ${GAS.decimals} d
 
 const p = publicEnv();
 for (const [who, addr] of [["owner", p.B4_OWNER_ADDRESS], ["agent", p.B4_AGENT_ADDRESS]] as const) {
-  if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file, so no ${who} balance to show. Not an error: preflight needs no setup; a budget starts with superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}`); continue; }
+  if (!addr || !isAddress(addr)) { console.log(`note: no ${who} address in the public file, so no ${who} balance to show. Not an error: preflight needs no setup; a budget starts with superstables budget setup --rail evm${evmChainFlags(CFG.key)}`); continue; }
   const [n, e] = [await nativeBalance(addr as Address), await usdcBalance(addr as Address)];
   console.log(`${who} ${addr}: native ${gasFmt(n)} ${GAS.symbol}, ERC-20 ${SYM} ${usdc(e)}`);
   if (GAS.isUsdc) {

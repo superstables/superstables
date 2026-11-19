@@ -47,7 +47,7 @@ export const RPC_ENDPOINTS = /** @type {Record<string, TableEndpoint[]>} */ ({
   "robinhood-testnet": [{ url: "https://rpc.testnet.chain.robinhood.com", operator: "robinhood" }],
   "tempo-moderato": [{ url: "https://rpc.moderato.tempo.xyz", operator: "tempo" }],
   "solana-devnet": [{ url: "https://api.devnet.solana.com", operator: "solana-foundation" }],
-  // The mainnets of ./mainnet-manifest.js, while the operator's switch is on (none otherwise).
+  // The mainnets of ./mainnet-manifest.js, unless the run is testnet-only (--testnet) (none otherwise).
   ...Object.fromEntries(mainnetChains().map(([key, c]) => [key, c.rpc.map((e) => ({ url: e.url, operator: e.operator }))])),
 });
 

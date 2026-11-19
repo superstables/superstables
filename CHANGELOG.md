@@ -7,6 +7,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.2] - Mainnet by default
+
+Mainnet by default; `--testnet` makes a run testnet-only.
+
+### Changed
+
+- **Mainnet by default:** The client uses mainnets with no setting: Base, Tempo and Solana are the default chains. `--testnet` (or `SUPERSTABLES_TESTNET=1`) makes a run testnet-only, with test tokens; without it a testnet chain is refused, and the refusal names the flag. `SUPERSTABLES_ALLOW_MAINNET` is no longer read. Existing testnet budgets need `--testnet` on every command, and commands the client prints for a testnet carry it. A mainnet budget's agent key must be in the OS keychain, so a first `budget setup` on a mainnet needs `--key-store os-keychain`, as the refusal says. An invalid `SUPERSTABLES_TESTNET` refuses every chain.
+- **Skill and plugin:** A single purchase through the connector can be on a mainnet, and the owner approves it in their wallet. The skill uses a testnet only when the owner asks for one, with `--testnet`, and still names the network and the amount before the owner approves.
+- **Mainnet notes removed:** The local approval pages no longer show a note under a mainnet payment, and messages to the owner no longer add a line after the mainnet amount. The network and the amount stay. On a testnet the line is "This uses test tokens."
+- **Testnet-only commands:** `seller top-up` (Base Sepolia) and Solana `budget rotate` (devnet) say to run again with `--testnet`.
+
 ## [1.4.1] - Mainnet quote label and find notes
 
 Testnet by default. Only the operator opens mainnet, with `SUPERSTABLES_ALLOW_MAINNET=1`; agents never set it.
@@ -396,7 +407,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.2...HEAD
+[1.4.2]: https://github.com/superstables/superstables/compare/v1.4.1...v1.4.2
 [1.4.1]: https://github.com/superstables/superstables/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/superstables/superstables/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/superstables/superstables/compare/v1.2.0...v1.3.0

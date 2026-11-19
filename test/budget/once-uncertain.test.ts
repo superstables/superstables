@@ -141,7 +141,7 @@ describe("buy once: an outcome that is not established is unknown, on every rail
         expect(Boolean(w.final), "final").toBe(row.final);
         expect(w.result.reason).toMatch(row.reason);
         if (row.withHash) expect(w.result.tx).toEqual({ settle: rail.hash });
-        if (!row.final) expect(w.result.next).toMatch(/^do not buy again\. Check again later with superstables budget wait --id \S+ --shown/);
+        if (!row.final) expect(w.result.next).toMatch(/^do not buy again\. Check again later with superstables budget wait --id \S+ --shown --testnet/);
         clean(JSON.stringify(w.result), "wait");
 
         // the next buy-once: an open one blocks it, as unknown, with no approval link to show again
@@ -325,7 +325,7 @@ describe("buy once, as the CLI: wait and the next buy-once never say waiting for
     expect(w.code, w.stderr).toBe(5);
     expect(w.result).toMatchObject({ command: "buy-once", rail: "tempo", chain: "moderato", state: "unknown", final: false, paid: null, delivered: null, amount: null, tx: {} });
     expect(w.result.reason).toBe("a transfer was prepared for the owner's wallet; the chain does not show it yet, and it could still arrive");
-    expect(w.result.next).toBe(`do not buy again. Check again later with superstables budget wait --id ${first.result.id} --shown. Tell the owner the payment outcome is not known yet`);
+    expect(w.result.next).toBe(`do not buy again. Check again later with superstables budget wait --id ${first.result.id} --shown --testnet. Tell the owner the payment outcome is not known yet`);
     clean(w.stdout + w.stderr, "battery repro");
     site.readAnswer = undefined;
   }, 120_000);

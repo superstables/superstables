@@ -10,6 +10,7 @@ import { SETUP_KEYS } from "../owner-binding.mjs";
 import { isAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { AGENT_ENV, CFG, PUBLIC_ENV, agentFileValues, arg, emit, flag, publicEnv, usageError, writePublic } from "./lib.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 /** What a rotated chain forgets about the old agent: its address, its budget terms and the link that named it. */
 export const CLEARED_KEYS = ["B4_AGENT_ADDRESS", "B4_CAP", "B4_SET_AT", "B4_SET_TX", "B4_SET_BLOCK", "B4_EXPIRY", "B4_REVOKED_AT", "B4_REVOKED_TX", "B4_REVOKED_BLOCK", "B4_REVOKED_BY", "LINK_ID", "LINK_CODE", ...SETUP_KEYS];
@@ -24,7 +25,7 @@ if (address) {
   // the address line setup writes, else derived from the key; the key is never printed
   const key = file.env.B4_AGENT_KEY;
   const agent = key ? privateKeyToAccount(key as Hex).address : file.env.B4_AGENT_ADDRESS;
-  if (!agent) process.exit(emit("rotate", 3, { state: "refused_precheck", reason: `no agent key in ${AGENT_ENV}`, next: "run superstables budget setup --rail evm" }));
+  if (!agent) process.exit(emit("rotate", 3, { state: "refused_precheck", reason: `no agent key in ${AGENT_ENV}`, next: "run superstables budget setup --rail evm" + testnetArg() }));
   process.exit(emit("rotate", 0, { state: "ok", agent }));
 }
 

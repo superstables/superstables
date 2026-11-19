@@ -1,4 +1,4 @@
-// `superstables seller top-up` as a whole, with the seller API and the payer replaced: what it pays, and above all
+// `superstables seller top-up --testnet` as a whole, with the seller API and the payer replaced: what it pays, and above all
 // what it refuses. The property under test is that a top-up which is not exactly the one this command asked for is
 // never paid, and that a payment the site calls pending, retired or unconfirmable is never paid a second time.
 
@@ -246,7 +246,7 @@ describe("seller top-up", () => {
     expect(made.pay).not.toHaveBeenCalled();
     expect(result.exitCode).toBe(1);
     expect(result.message).toContain("retired this top-up");
-    expect(result.next).toContain("superstables seller top-up 10");
+    expect(result.next).toContain("superstables seller top-up --testnet 10");
   });
 
   it("says a top-up is already paid when the pay link answers 200", async () => {
@@ -315,7 +315,7 @@ describe("seller top-up", () => {
       });
       const result = await run(made);
       expect(result.exitCode, String(status)).toBe(5);
-      expect(result.next, String(status)).not.toContain("superstables seller top-up");
+      expect(result.next, String(status)).not.toContain("superstables seller top-up --testnet");
       expect(result.message, String(status)).not.toMatch(/nothing was paid/i);
     }
   });
@@ -333,8 +333,8 @@ describe("seller top-up", () => {
       expect(result.exitCode).toBe(5);
       expect(result.message).toContain("unknown");
       expect(result.message).not.toContain("not started");
-      expect(result.next).toContain("superstables status a-1");
-      expect(result.next).not.toContain("superstables seller top-up");
+      expect(result.next).toContain("superstables status --testnet a-1");
+      expect(result.next).not.toContain("superstables seller top-up --testnet");
     }
     // A record that ended says how it ended.
     const settled = await run(started(attempt("settled", { chain: "verified", chainFinal: true })));

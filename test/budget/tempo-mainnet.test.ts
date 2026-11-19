@@ -36,7 +36,7 @@ beforeEach(() => {
 afterEach(() => rmSync(scratch, { recursive: true, force: true }));
 
 type Out = { code: number | null; stdout: string; stderr: string; result: any };
-const ON = { SUPERSTABLES_ALLOW_MAINNET: "1", SUPERSTABLES_TEMPO_RPC: "http://127.0.0.1:9" };
+const ON = { SUPERSTABLES_TESTNET: "", SUPERSTABLES_TEMPO_RPC: "http://127.0.0.1:9" };
 function run(cmd: string, args: string[], env: Record<string, string> = {}): Out {
   const base: Record<string, string | undefined> = { ...process.env, SUPERSTABLES_HOME: home };
   for (const k of ["SUPERSTABLES_MAINNET_PAUSE", "SUPERSTABLES_ALLOW_MAINNET", "SUPERSTABLES_BUDGET_CHAIN", "SUPERSTABLES_TEMPO_RPC", "SUPERSTABLES_SITE"]) delete base[k];
@@ -70,7 +70,7 @@ describe("the switch is off", () => {
     const r = budget(args);
     expect(r.code).toBe(3);
     expect(r.result).toMatchObject({ ok: false, state: "refused_precheck" });
-    expect(reasonOf(r)).toMatch(/SUPERSTABLES_ALLOW_MAINNET|mainnet/);
+    expect(reasonOf(r)).toMatch(/testnet-only|mainnet/);
     expect(existsSync(keysDir())).toBe(false);
   }, 60_000);
 
@@ -111,7 +111,7 @@ describe("the switch is on: the agent key must be in the keychain where it signs
     const r = onMainnet("setup", []);
     expect(r.code).toBe(3);
     expect(reasonOf(r)).toMatch(KEYCHAIN_PREREQ);
-    expect(r.result.next).toMatch(/--chain tempo --key-store os-keychain/);
+    expect(r.result.next).toMatch(/--rail tempo --key-store os-keychain/);
     expect(existsSync(mainnetFile())).toBe(false);
     expect(kc.calls()).toEqual([]);
   }, 60_000);
@@ -155,7 +155,8 @@ describe("the switch is on: the agent key must be in the keychain where it signs
     expect(r.code).toBe(3);
     expect(reasonOf(r)).toMatch(/agent_key_unavailable.*not in the keychain/);
     expect(r.result).toMatchObject({ state: "refused_precheck", chain: "tempo" });
-    expect(r.result.next).toMatch(/--chain tempo/);
+    expect(r.result.next).toMatch(/--rail tempo/);
+    expect(r.result.next).not.toMatch(/--testnet/);
   }, 60_000);
 
   it("a locked keychain refuses buy (exit 3) and the site call, signing nothing", () => {
@@ -200,7 +201,7 @@ describe("the switch is on: the agent key must be in the keychain where it signs
     const r = onMainnet("revokeBudget", []);
     expect(r.code).toBe(3);
     expect(r.result).toMatchObject({ state: "refused_precheck", chain: "tempo", reason: "the public file names no owner or no agent" });
-    expect(r.result.next).toBe("superstables budget setup --rail tempo --chain tempo");
+    expect(r.result.next).toBe("superstables budget setup --rail tempo");
   }, 60_000);
 
   it("doctor reads the mainnet's own files: the keychain entry is checked, a plain key fails, and no faucet is offered", () => {
@@ -214,7 +215,7 @@ describe("the switch is on: the agent key must be in the keychain where it signs
     expect(ok.stderr).not.toContain(SECRET);
     plainFile();
     const plain = budget(["doctor", "--rail", "tempo", "--chain", "tempo"], ON);
-    expect(plain.stderr).toMatch(/FAIL\s+key storage: .*plain-text file.*--chain tempo --key-store os-keychain/);
+    expect(plain.stderr).toMatch(/FAIL\s+key storage: .*plain-text file.*--rail tempo --key-store os-keychain/);
   }, 90_000);
 
   it("an owner key file is a plain-text key and is refused on the mainnet", () => {

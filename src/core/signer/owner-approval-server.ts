@@ -30,7 +30,7 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { isProof, type PROOFS } from "../proofs.mjs";
 import { pageCsp, scriptNonce } from "./look.js";
-import { mainnetPauseReason, mainnetSwitchRefusal } from "../mainnet-policy.js";
+import { mainnetPauseReason, mainnetOffReason } from "../mainnet-policy.js";
 import { dirname } from "node:path";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { getAddress, isAddress, verifyMessage, verifyTypedData } from "viem";
@@ -540,10 +540,10 @@ export class OwnerApprovalServer {
 
     if (record.kind === "connect") return this.json(res, 404, { error: "no such route for a connect" });
 
-    // On a mainnet the operator's switch and the pause are read again before anything is handed to the wallet or sent: a
+    // On a mainnet the network mode and the pause are read again before anything is handed to the wallet or sent: a
     // pause set while the page waited ends it here. Once the wallet was asked to send, /sent still records what it sent.
     if (record.chain.testnet !== true && !record.sending && ["/account", "/sending", "/prepare", "/signed"].includes(leaf ?? "")) {
-      const off = mainnetSwitchRefusal();
+      const off = mainnetOffReason();
       const paused = off ? "" : mainnetPauseReason();
       const closed = off || (paused ? `mainnet signing is paused: ${paused}` : "");
       if (closed) {

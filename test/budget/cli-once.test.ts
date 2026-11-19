@@ -120,7 +120,7 @@ describe("buy-once: account refusals and read failures", () => {
     expect(r.result).toMatchObject({ state: "unknown", final: false, paid: null, delivered: null, amount: null });
     expect(r.result.reason).toContain(`HTTP ${status} ${code}`);
     expect(r.result.next).toMatch(guidance);
-    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown again`);
+    expect(r.result.next).toContain(`wait --id ${first.result.id} --shown --testnet again`);
     expect(r.result.next).toMatch(/The payment outcome is unknown; do not start another purchase for this request/);
     expect(r.stdout + r.stderr).not.toMatch(/untrusted|sspt_|nothing was paid/);
     expect(reads).toBe(1);
@@ -341,7 +341,7 @@ describe("find --once", () => {
     expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, simulated: false, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
     // find --once lists before any purchase, so its note scopes test tokens to testnets (budget/command.mjs TESTNET_TOKENS_LINE)
-    expect(r.result.next).toContain("Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Payments on testnets use test tokens.");
+    expect(r.result.next).toContain("This run is testnet-only: payments use test tokens.");
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--once", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);
@@ -471,7 +471,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     expect(first.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: "base-sepolia", service: "demo-market-data", state: "waiting_owner", matchCode: "KPT-RWD", url: first.approve.url });
     expect(first.result.id).toMatch(/^oa-\d{14}-[0-9a-f]{8}$/);
     expect(first.result.purchase).toBe(site.purchases[0].id);
-    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown\\. .*${TESTNET}$`));
+    expect(first.result.next).toMatch(new RegExp(`^reply to the owner with message_for_owner, word for word \\(it has the approval link, the code and the amount\\), and end your turn there\\. When they say they've approved, run superstables budget wait --id ${first.result.id} --shown --testnet\\. .*${TESTNET}$`));
     expect(first.stderr).toMatch(/match code: KPT-RWD/);
     expect(first.stderr).toMatch(/first approval link they open asks them to sign in with their wallet \(a message, no fee\)/);
     expect(first.stderr).toMatch(new RegExp(TESTNET));
@@ -490,13 +490,13 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const refused = await budget(["wait", "--id", id, "--timeout", "0"]);
     expect(refused.code).toBe(2);
     expect(refused.result).toMatchObject({ ok: false, command: "wait", state: "show_owner_first", id, matchCode: "KPT-RWD", url: first.approve.url, service: "demo-market-data" });
-    expect(refused.result.next).toMatch(/^this wait did not read the approval, so whether the owner approved or paid is not known\. If you have not written the approval link for the owner yet, reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown\./);
+    expect(refused.result.next).toMatch(/^this wait did not read the approval, so whether the owner approved or paid is not known\. If you have not written the approval link for the owner yet, reply to the owner with message_for_owner, word for word \(it has the approval link, the code and the amount\), and end your turn there\. When they say they've approved, run superstables budget wait --id \S+ --shown --testnet\./);
     expect(site.purchases[0].polls).toBe(0);
 
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
     expect(pending.code).toBe(0);
     expect(pending.result).toMatchObject({ state: "waiting_owner", id, matchCode: "KPT-RWD", service: "demo-market-data" });
-    expect(pending.result.next).toMatch(/wait --id \S+ --shown again/);
+    expect(pending.result.next).toMatch(/wait --id \S+ --shown --testnet again/);
     expect(pending.result.reason).toMatch(/waiting for the owner to open the approval link on 127\.0\.0\.1:\d+, signed in with their wallet, and pick the match code/);
 
     site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 });

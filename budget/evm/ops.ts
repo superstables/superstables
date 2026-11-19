@@ -27,6 +27,7 @@ import {
   type Wallet,
 } from "./lib.ts";
 import { searchLogs } from "../../src/core/log-windows.mjs";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 export type OpState = "quoted" | "submitted" | "settled" | "failed" | "refused_precheck" | "refused_chain" | "unknown" | "not_found"; // not_found: reconcile only
 
@@ -617,20 +618,20 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
     }
     const held = await usdcBalance(j.agent);
     const next = held > 0n
-      ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
+      ? `${usdc(held)} ${SYM} is in the agent key (on a gas-in-${SYM} chain that includes its gas reserve). Owner: "superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key} --op ${j.op}" (stops the allowance first, cancels the authorization if it is still open, then returns the price to the owner). Never pay again for this op.`
       : `the agent key holds 0 ${SYM}; check the owner balance by hand. Never pay again for this op.`;
     // the owner's price left their wallet and is not back: not a purchase that moved nothing, so not failed until returned
     save("unknown", `${why}; the price ${j.pulled} ${SYM} pulled from the owner has not been returned`, next, "unknown (pull landed, not settled, not returned)");
     return { j, verdict: "unknown" };
   }
   const until = new Date(j.auth!.validBefore * 1000).toISOString();
-  save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${j.op}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
+  save("unknown", `the pull landed and a signed payment may still be settled by the seller until ${until} (chain time)`, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again after ${until}, or the owner runs "superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key} --op ${j.op}" to stop the allowance, cancel the authorization and return the price now. Never pay again for this op.`, "unknown (authorization still valid)");
   return { j, verdict: "unknown" };
 }
 
 /** Why an agent step was not sent for lack of gas, and the way out (recover sends the agent gas before its own steps). */
 const gasShortNote = (e: GasShort, what: string) =>
-  `${gasWords(e.g, what)}. Nothing was signed. The owner runs "superstables budget recover --rail evm --chain ${CFG.key}": it sends the agent gas first, then finishes this`;
+  `${gasWords(e.g, what)}. Nothing was signed. The owner runs "superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key}": it sends the agent gas first, then finishes this`;
 
 /** Agent signs CancelAuthorization for this op's nonce (EIP-712, USDC domain) and returns v, r, s. */
 async function signCancel(w: Wallet, nonce: Hex) {

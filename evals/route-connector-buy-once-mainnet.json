@@ -1,0 +1,14 @@
+{
+  "skills": [
+    "superstables"
+  ],
+  "query": "Find BTC market data on Base mainnet and buy it once. Don't spend more than 0.02 USDC.",
+  "files": [],
+  "expected_behavior": [
+    "With the Superstables connector signed in, calls `find_services`, then `request_purchase` for a listing on Base (mainnet); runs no `superstables` command and no `npx`",
+    "Does not refuse the purchase or ask for a client setting or flag: a single purchase through the connector can be on a mainnet, and the owner approves it in their wallet",
+    "Checks the price against the 0.02 ceiling before it calls `request_purchase`, and names the amount and Base (mainnet) before the owner approves",
+    "Shows the approval link, match code and account wallet line `request_purchase` returns, then follows the purchase with `get_purchase_status` as the connector says",
+    "Never approves for the owner, and never pays again after an unknown outcome"
+  ]
+}

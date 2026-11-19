@@ -56,7 +56,7 @@ const refuse = (reason, next) => {
 /**
  * The public files of Solana chains other than devnet that name an agent. Rotation replaces the one agent key on every chain, and
  * its steps (revoke, sweep, set up) run on devnet here, so a mainnet budget would be left standing on the old key: rotate refuses
- * while one is set up, and never skips it silently. Read whether or not the operator's switch is on.
+ * while one is set up, and never skips it silently. Read in either kind of run.
  */
 function mainnetBudgetFiles() {
   let names;
@@ -73,7 +73,9 @@ if (!flags.address) {
   if (CHAIN.key !== "devnet" || mainnet.length) {
     refuse(
       CHAIN.key !== "devnet" ? `rotate does not run on ${CHAIN.label}` : `a Solana mainnet budget is set up (${mainnet.join(", ")}), and rotate would replace the agent key on devnet only, leaving the mainnet delegate on the old key`,
-      "the owner revokes the mainnet budget (superstables budget revoke --rail solana --chain solana, and waits until it is final) and moves that public file away, then runs rotate again; it then covers devnet. Nothing was changed",
+      CHAIN.key !== "devnet" && !mainnet.length
+        ? "rotate runs on Solana devnet only: run it again with --testnet. Nothing was changed"
+        : "the owner revokes the mainnet budget (superstables budget revoke --rail solana --chain solana, and waits until it is final) and moves that public file away, then runs rotate again with --testnet; it then covers devnet. Nothing was changed",
     );
   }
 }

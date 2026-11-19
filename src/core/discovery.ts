@@ -18,7 +18,7 @@
 // than an error.
 
 import { z } from "zod";
-import { mainnetSwitchRefusal } from "./chain-gate.js";
+import { mainnetOffReason, testnetOffReason } from "./chain-gate.js";
 import { describeNetwork, networkFor, toCaip2 } from "./chain.js";
 import { readBody } from "./http.js";
 import { SUPPORTED_NETWORKS } from "./rails/index.js";
@@ -216,9 +216,16 @@ export function externalCoinPriceService(): ServiceListing {
   };
 }
 
+/** A testnet listing outside a testnet-only run: not actionable, with no routes, and the reason names --testnet. */
+function forThisRun(listing: ServiceListing): ServiceListing {
+  const off = listing.testnet === true ? testnetOffReason() : "";
+  if (!off || !listing.actionable) return listing;
+  return { ...listing, actionable: false, notActionableReason: `testnet only; ${off}`, routes: { pay: false, budget: [] } };
+}
+
 /** Every built-in listing this release can call as-is: ours first, then the third-party one. */
 export function catalogue(): ServiceListing[] {
-  return [demoService(), externalCoinPriceService()];
+  return [demoService(), externalCoinPriceService()].map(forThisRun);
 }
 
 /**
@@ -239,7 +246,7 @@ export async function allListings(
   const warnings: string[] = [];
   let hosted: ServiceListing[];
   try {
-    hosted = await fetchHostedCatalogue(url);
+    hosted = (await fetchHostedCatalogue(url)).map(forThisRun);
   } catch (err) {
     warnings.push(`The service catalogue could not be read (${message(err)}); showing the built-in listings only.`);
     return { listings: builtIn, warnings, catalogueRead: false };
@@ -725,7 +732,9 @@ function fromIndexRow(row: IndexRow): ServiceListing {
       : routes.pay
         ? "the index does not yet record the request parameters this service needs"
         : !testnet
-          ? `mainnet only (${describeOffer(rails, chains)}); ${mainnetSwitchRefusal() || "the chain tables hold no entry for it"}`
+          ? `mainnet only (${describeOffer(rails, chains)}); ${mainnetOffReason() || "the chain tables hold no entry for it"}`
+          : testnetOffReason()
+            ? `testnet only (${describeOffer(rails, chains)}); ${testnetOffReason()}`
           : routes.budget.length > 0
             ? `\`superstables pay\` does not pay ${describeOffer(rails, chains)}; a \`superstables budget\` rail could`
             : `this client does not pay ${describeOffer(rails, chains)}`,

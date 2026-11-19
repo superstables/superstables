@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { CFG, type GasOp } from "./chains.ts";
-import { EVM_CHAINS } from "./chains.mjs";
+import { EVM_CHAINS, evmChainFlags } from "./chains.mjs";
 import { EVM_RPC_MAX_BYTES, cappedRpcFetch, budgetCall, budgetVerdictSet, customRpc, evmEnvNameSet } from "../rpc.mjs";
 import { HOME, agentKeyFile, ensurePrivateDir, publicFile, opsDir } from "../paths.mjs";
 import { readAgentSecret } from "../os-keychain.mjs";
@@ -27,6 +27,7 @@ import { mainnetSendRefusal } from "../../src/core/mainnet-spend.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -58,7 +59,7 @@ export function emit(command: string, exit: number, o: Record<string, unknown>):
  */
 export const oneLine = (s: unknown, max = 300): string => String(s ?? "").replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/[\p{Cf}\u{E0000}-\u{E007F}\u2060-\u2064]/gu, "").trim().slice(0, max);
 /** A command line for a next step, with this chain selected. */
-export const cmd = (script: string, rest = "") => `superstables budget ${script.replace(/\.ts$/, "")} --rail evm --chain ${CFG.key}${rest ? ` ${rest}` : ""}`;
+export const cmd = (script: string, rest = "") => `superstables budget ${script.replace(/\.ts$/, "")} --rail evm${testnetArg()} --chain ${CFG.key}${rest ? ` ${rest}` : ""}`;
 
 // Key files (contract rule 1), shared by every EVM chain; paths come from ../paths.mjs.
 //   agent file: B4_AGENT_KEY, public addresses. The only key on the agent's machine.
@@ -160,8 +161,8 @@ export const agentEnv = (): Record<string, string> => {
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
-    console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm creates the agent key and the public file)`);
-    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
+    console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm${testnetArg()} creates the agent key and the public file)`);
+    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" + testnetArg() }));
   }
   return env[k];
 }
@@ -324,7 +325,7 @@ export function gasWords(g: GasNeed, what: string, extra = ""): string {
 export function fundAgentNext(g: GasNeed): string {
   const byDefault = parseUnits((EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent, GAS.decimals);
   const short = g.need - g.have;
-  return `owner: superstables budget fund-agent --rail evm --chain ${CFG.key}${short > byDefault ? ` --amount ${gasRound(short, "up")}` : ""}`;
+  return `owner: superstables budget fund-agent --rail evm${testnetArg()} --chain ${CFG.key}${short > byDefault ? ` --amount ${gasRound(short, "up")}` : ""}`;
 }
 
 /** The agent cannot pay for this transaction and what a failure would need after it. Nothing was signed. */
@@ -337,7 +338,7 @@ export class ChainRefused extends Error {
 }
 
 /**
- * On a mainnet, throws ChainRefused when the operator's switch, the manifest or the pause has closed it since the command
+ * On a mainnet, throws ChainRefused when the network mode, the manifest or the pause has closed it since the command
  * started; read right before each signature, broadcast and paid request. A testnet always passes.
  */
 export function assertMainnetOpen(what: string, signed = false): void {
@@ -641,7 +642,7 @@ export function readCtx(): Pub {
   const p = publicEnv();
   const owner = p.B4_OWNER_ADDRESS, agent = p.B4_AGENT_ADDRESS;
   if (!owner || !agent || !isAddress(owner) || !isAddress(agent)) {
-    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`} first)`);
+    console.error(`error: no budget has been set up here for ${CFG.label}: ${PUBLIC_ENV} records no owner and agent (the owner runs superstables budget setup --rail evm${evmChainFlags(CFG.key)} first)`);
     process.exit(1);
   }
   return {
@@ -748,11 +749,11 @@ export async function ownerPlanCtx({ retiredOk = false }: { retiredOk?: boolean 
   const b = await agentBinding("evm", { owner: pub.owner, agent: pub.agent, lines: publicEnv() }, { keyAgent, file: PUBLIC_ENV, retiredOk, testnet: (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true });
   if (b.state === "refused") return refusePlan(pub, b.problem);
   noteBinding(b); // the page this plan opens says whether the owner signed this agent
-  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`}${hostedFlags(publicEnv())}`));
+  if (b.state === "legacy") console.error(legacyWarning("evm", PUBLIC_ENV, pub.agent, `${evmChainFlags(CFG.key)}${hostedFlags(publicEnv())}`));
   return pub;
 }
 function refusePlan(pub: Pub, problem: string): never {
   console.log(`REFUSED: ${problem}. Nothing was asked or sent.`);
-  const chainFlag = CFG.key === "base-sepolia" ? "" : ` --chain ${CFG.key}`;
+  const chainFlag = evmChainFlags(CFG.key);
   process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 3, { state: "refused_precheck", reason: problem, agent: pub.agent, next: `check ${PUBLIC_ENV}: run superstables budget setup --rail evm${chainFlag}${hostedFlags(publicEnv())} where the agent key is, to record the owner's signature again. The owner can still end the allowance from any machine: superstables budget revoke --rail evm${chainFlag}` }));
 }

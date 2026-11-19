@@ -29,7 +29,7 @@ describe("nextFor", () => {
   it("never sends an uncertain payment back to quote: status searches the chain first, on the payment's own explorer", () => {
     for (const network of ["eip155:84532", TEMPO_MODERATO.caip2, SOLANA_DEVNET.caip2]) {
       const said = nextFor(attempt("uncertain", {}, network));
-      expect(said, network).toMatch(/^Do not pay again yet\. Run `superstables status a-1`: it searches the chain for this payment\./);
+      expect(said, network).toMatch(/^Do not pay again yet\. Run `superstables status --testnet a-1`: it searches the chain for this payment\./);
       expect(said, network).toContain("only quote again once `superstables status` says this payment was not made");
     }
     expect(nextFor(attempt("uncertain", {}, SOLANA_DEVNET.caip2))).toContain("https://explorer.solana.com/?cluster=devnet");
@@ -55,10 +55,10 @@ describe("nextFor", () => {
       "The local wallet did not answer. The owner starts it with `superstables --wallet local wallet serve`, then pays the same quote again with `superstables --wallet local pay q-1`. To approve in a browser wallet instead, run `superstables --wallet browser pay q-1`.",
     );
     expect(nextFor(attempt("failed", { refusal: "unavailable" }), used)).toBe(
-      "The local wallet did not answer. The owner starts it with `superstables --wallet local wallet serve`. Take a new quote with `superstables quote https://seller.example/x`, then run `superstables --wallet local pay <new-quote-id>`. To approve in a browser wallet instead, run `superstables --wallet browser pay <new-quote-id>` after taking the new quote.",
+      "The local wallet did not answer. The owner starts it with `superstables --wallet local wallet serve`. Take a new quote with `superstables quote --testnet https://seller.example/x`, then run `superstables --wallet local pay <new-quote-id>`. To approve in a browser wallet instead, run `superstables --wallet browser pay <new-quote-id>` after taking the new quote.",
     );
     const cap = nextFor(attempt("failed", { refusal: "cap_check" }), open);
-    expect(cap).toBe("The daily cap could not be checked, so the owner was not asked and nothing was signed. If another `pay` is running, let it finish; then pay the same quote again: `superstables pay q-1`.");
+    expect(cap).toBe("The daily cap could not be checked, so the owner was not asked and nothing was signed. If another `pay` is running, let it finish; then pay the same quote again: `superstables pay --testnet q-1`.");
     expect(cap).not.toMatch(/local wallet/);
     const chain = nextFor(attempt("failed", { refusal: "chain" }, TEMPO_MODERATO.caip2), used);
     expect(chain).toContain("`SUPERSTABLES_TEMPO_RPC` when it is set, otherwise https://rpc.moderato.tempo.xyz");
@@ -67,7 +67,7 @@ describe("nextFor", () => {
 
   it("points a payment the seller reported, and the chain has not confirmed, at status", () => {
     expect(nextFor(attempt("settled", { chain: "verified" }))).toBe("Nothing to do: the service's answer is above, and `superstables receipts` lists the payment.");
-    expect(nextFor(attempt("settled", { chain: "unchecked" }))).toContain("The seller reported the payment and the chain has not confirmed it yet; `superstables status a-1` checks again.");
+    expect(nextFor(attempt("settled", { chain: "unchecked" }))).toContain("The seller reported the payment and the chain has not confirmed it yet; `superstables status --testnet a-1` checks again.");
   });
 });
 
@@ -131,26 +131,26 @@ describe("requoteCommand", () => {
   const terms = attempt("denied", {}, "eip155:46630").terms;
   const base = { url: "https://seller.example/x", terms };
   it("keeps the quote's chain when the seller offers several, or when the agent asked for one", () => {
-    expect(requoteCommand({ ...base, otherChains: ["base-sepolia"] })).toBe("superstables quote https://seller.example/x --chain robinhood-testnet");
-    expect(requoteCommand({ ...base, chain: "robinhood-testnet" })).toBe("superstables quote https://seller.example/x --chain robinhood-testnet");
+    expect(requoteCommand({ ...base, otherChains: ["base-sepolia"] })).toBe("superstables quote --testnet https://seller.example/x --chain robinhood-testnet");
+    expect(requoteCommand({ ...base, chain: "robinhood-testnet" })).toBe("superstables quote --testnet https://seller.example/x --chain robinhood-testnet");
     expect(requoteCommand({ ...base, serviceId: "svc", request: { method: "GET", url: "https://seller.example/x?a=1", params: { a: "1" } }, otherChains: ["base-sepolia"] })).toBe(
-      "superstables quote --service svc --param a=1 --chain robinhood-testnet",
+      "superstables quote --testnet --service svc --param a=1 --chain robinhood-testnet",
     );
   });
   it("quotes a seller's https address again, never the plain http one the client would itself refuse", () => {
-    expect(requoteCommand({ ...base, url: "http://seller.example/x?a=1" })).toBe("superstables quote 'https://seller.example/x?a=1'");
-    expect(requoteCommand({ ...base, url: "HTTP://seller.example/x" })).toBe("superstables quote https://seller.example/x");
+    expect(requoteCommand({ ...base, url: "http://seller.example/x?a=1" })).toBe("superstables quote --testnet 'https://seller.example/x?a=1'");
+    expect(requoteCommand({ ...base, url: "HTTP://seller.example/x" })).toBe("superstables quote --testnet https://seller.example/x");
     for (const local of ["http://127.0.0.1:3000/x", "http://localhost/x", "http://[::1]:3000/x"]) {
       expect(requoteCommand({ ...base, url: local }), local).toContain(local);
     }
     // An explicit :80 goes with the scheme; another port stays; credentials in the address are not carried over.
-    expect(requoteCommand({ ...base, url: "http://seller.example:80/x" })).toBe("superstables quote https://seller.example/x");
-    expect(requoteCommand({ ...base, url: "http://seller.example:8080/x" })).toBe("superstables quote https://seller.example:8080/x");
+    expect(requoteCommand({ ...base, url: "http://seller.example:80/x" })).toBe("superstables quote --testnet https://seller.example/x");
+    expect(requoteCommand({ ...base, url: "http://seller.example:8080/x" })).toBe("superstables quote --testnet https://seller.example:8080/x");
     expect(requoteCommand({ ...base, url: "http://user:secret@seller.example/x" })).not.toContain("https:");
     expect(requoteCommand({ ...base, url: "http://user@seller.example/x" })).not.toContain("https:");
     expect(requoteCommand({ ...base, url: "not a url" })).toContain("not a url");
   });
   it("adds no chain for a seller on one chain", () => {
-    expect(requoteCommand(base)).toBe("superstables quote https://seller.example/x");
+    expect(requoteCommand(base)).toBe("superstables quote --testnet https://seller.example/x");
   });
 });

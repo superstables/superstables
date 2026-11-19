@@ -17,9 +17,10 @@ import { UNSAFE_SECRET_FILE, readRegularFile } from "./secret-file.mjs";
 import { EVM_CHAINS, DOCTOR_SPIKE } from "./evm/chains.mjs";
 import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
-import { SOLANA_CHAINS } from "./solana/chains.mjs";
+import { SOLANA_CHAINS, SOLANA_DEFAULT_CHAIN } from "./solana/chains.mjs";
 import { staleOwnerLine } from "./evm-owner-line.mjs";
-import { TEMPO_CHAINS, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
+import { TEMPO_CHAINS, TEMPO_DEFAULT_CHAIN, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
 
@@ -30,7 +31,7 @@ const solanaChain = (key) => {
   if (!c) throw new Error(`${key} is not a Solana chain this process holds`);
   return { ...c, rpc: rpcEnv("SUPERSTABLES_SOLANA_RPC", c.rpc, c.gateKey), usdcMint: c.mint, minOwnerSol: 0.01, minOwnerUsdc: 0.05, minAgentSol: 0.005 };
 };
-/** A Tempo chain's facts for doctor (tempo/lib/constants.mjs: the dispatcher's process has no CHAIN of its own), with its RPC. A mainnet is there only while the operator's switch is on. */
+/** A Tempo chain's facts for doctor (tempo/lib/constants.mjs: the dispatcher's process has no CHAIN of its own), with its RPC. A mainnet is there only unless the run is testnet-only (--testnet). */
 const tempoChain = (key) => {
   const c = TEMPO_CHAINS[key];
   if (!c) throw new Error(`${key} is not a Tempo chain this process holds`);
@@ -77,7 +78,7 @@ const RAILS = {
   evm: ({ chain }) => {
     // B4_RPC_<CHAIN>, then B4_RPC, then the owner's RPC for the chain, replaces the chain's RPC, as for the rail scripts (budget/rpc.mjs evmRpcFromEnv)
     const c = { ...EVM_CHAINS[chain], rpc: evmRpcFromEnv(chain, EVM_CHAINS[chain].rpc).url }, d = c.doctor, tok = c.token, g = c.gas, L = g.limits;
-    const flag = ` --chain ${chain}`;
+    const flag = `${EVM_CHAINS[chain]?.testnet ? " --testnet" : ""} --chain ${chain}`;
     return {
       ownerVars: null, agentVars: ["B4_AGENT_KEY"], ownerSecrets: ["B4_OWNER_KEY"], agentKeyVar: "B4_AGENT_KEY", storeVar: "B4_AGENT_KEY_STORE",
       pub: publicFile("evm", chain), ownerAddr: "B4_OWNER_ADDRESS", agentAddr: "B4_AGENT_ADDRESS",
@@ -115,9 +116,9 @@ const RAILS = {
       },
     };
   },
-  tempo: ({ agent = "", chain = "moderato" }) => {
+  tempo: ({ agent = "", chain = TEMPO_DEFAULT_CHAIN }) => {
     const c = tempoChain(chain);
-    const flag = c.testnet ? "" : ` --chain ${c.key}`;
+    const flag = c.testnet ? " --testnet" : "";
     return {
       ownerVars: null, agentVars: [`AGENT${agent}_PRIVATE_KEY`, "OWNER_ADDRESS"], ownerSecrets: ["OWNER_PRIVATE_KEY"], agentKeyVar: `AGENT${agent}_PRIVATE_KEY`,
       // the mainnet's agent file is its own (paths.mjs), and names the OS keychain with AGENT_KEY_STORE
@@ -129,13 +130,13 @@ const RAILS = {
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
       // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds. A mainnet has no faucet.
       balances: async (owner) => [
-        { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(c.rpc, c.pathUsd, owner, PATH_USD_DECIMALS), need: c.minOwner, hint: c.faucet ? "superstables budget setup --rail tempo --fund-only uses the Moderato faucet" : "the owner adds pathUSD to this wallet (network fees are paid in it)" },
+        { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(c.rpc, c.pathUsd, owner, PATH_USD_DECIMALS), need: c.minOwner, hint: c.faucet ? "superstables budget setup --rail tempo" + testnetArg() + " --fund-only uses the Moderato faucet" : "the owner adds pathUSD to this wallet (network fees are paid in it)" },
       ],
     };
   },
   solana: ({ chain }) => {
-    const c = solanaChain(chain ?? "devnet");
-    const flag = c.key === "devnet" ? "" : ` --chain ${c.key}`;
+    const c = solanaChain(chain ?? SOLANA_DEFAULT_CHAIN);
+    const flag = c.testnet ? " --testnet" : "";
     return {
       ownerVars: null, agentVars: ["SOLANA_AGENT_SECRET_BASE58", "SOLANA_OWNER_ADDRESS"], ownerSecrets: ["SOLANA_OWNER_SECRET_BASE58"], agentKeyVar: "SOLANA_AGENT_SECRET_BASE58", storeVar: "SOLANA_AGENT_KEY_STORE",
       pub: publicFile("solana", c.key), ownerAddr: "SOLANA_OWNER_ADDRESS", agentAddr: "SOLANA_AGENT_ADDRESS",
@@ -228,7 +229,7 @@ function ownerKeyFileProblem(path) {
  * --hosted and the recorded site: without them, setup would move the chain's approvals to the page on this computer.
  */
 function newOwnerCmd(r, f, pub) {
-  const base = r.newOwner ?? `superstables budget setup --rail ${f.rail} --new-owner`;
+  const base = r.newOwner ?? `superstables budget setup --rail ${f.rail}${testnetArg()} --new-owner`;
   const site = pub.APPROVALS === "hosted" && pub.SITE ? siteOrigin(pub.SITE, "read") : null;
   return site?.origin && !site.error ? base.replace(/ --new-owner$/, ` --hosted --site ${site.origin} --new-owner`) : base;
 }

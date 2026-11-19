@@ -1,5 +1,5 @@
 // The EVM chain table. The only place that names a chain: chains.ts (the rail), doctor.mjs and cli.mjs read it.
-// Plain data, plus the mainnets of the mainnet manifest while the operator's switch is on (src/core/mainnet-policy.js,
+// Plain data, plus the mainnets of the mainnet manifest unless the run is testnet-only (--testnet) (src/core/mainnet-policy.js,
 // which loads no file system code), so the CLI and doctor load it without the rail's dependencies.
 // Adding a chain is one entry here, after grant, buy, reconcile and revoke were proven on its testnet
 // against a third-party seller.
@@ -32,7 +32,7 @@
 //   Circle's FiatToken (Base Sepolia, Ethereum Sepolia): pull 68,380 (Base 0x60202bd6, Sepolia 68,368 0x4196419a), cancel 68,301
 //   (Base 0xcc2fe29f; Sepolia 68,281 0x62d3f6cb), return 40,247 (Base 0x37b3520b; Sepolia 40,235 0xa975a022), selfRevoke 40,880
 //   (Base 0x4b5ad344), approve 55,425 (Base 0x5b604be9, Sepolia 0xc7ca0d68), revoke 33,501 (Sepolia 0x025ef842).
-import { mainnetChains } from "../../src/core/mainnet-policy.js";
+import { mainnetChains, testnetRun } from "../../src/core/mainnet-policy.js";
 
 export const FIAT_TOKEN_GAS = { pull: 85000, cancel: 85000, return: 55000, selfRevoke: 55000, approve: 70000, revoke: 45000 };
 /** Doctor wants the agent to afford this many times one purchase and its cleanup at the current fee (fees jump: Amoy's tip went
@@ -168,7 +168,7 @@ const MAINNET_BUDGET = {
   },
 };
 
-// The mainnets join the table only while the operator's switch is on (none otherwise), with the manifest's facts.
+// The mainnets join the table unless the run is testnet-only (--testnet), with the manifest's facts.
 for (const [key, c] of mainnetChains("evm")) {
   const extra = /** @type {Record<string, any>} */ (MAINNET_BUDGET)[key];
   if (!extra) continue;
@@ -182,4 +182,13 @@ for (const [key, c] of mainnetChains("evm")) {
 }
 
 export const EVM_CHAIN_KEYS = Object.keys(EVM_CHAINS);
-export const EVM_DEFAULT_CHAIN = "base-sepolia";
+/** The chain when --chain is not given: Base, or Base Sepolia in a testnet-only run (--testnet). */
+export const EVM_DEFAULT_CHAIN = testnetRun() ? "base-sepolia" : "base";
+/**
+ * What a printed command adds after --rail evm to name `key`: --testnet on a testnet (a run without it uses mainnets),
+ * and --chain unless the chain is the default of its kind (base, or base-sepolia with --testnet).
+ */
+export const evmChainFlags = (key) => {
+  const testnet = /** @type {Record<string, any>} */ (EVM_CHAINS)[key]?.testnet === true;
+  return `${testnet ? " --testnet" : ""}${key === (testnet ? "base-sepolia" : "base") ? "" : ` --chain ${key}`}`;
+};
