@@ -15,7 +15,8 @@
 //   token        the token the testnet pair pays in, on this chain: every fact ./token-facts.js asks for, read on chain
 //   finality     kind: "finalized" (the RPC's finalized tag) or "instant" (every block is final; the RPC refuses the tag).
 //                typicalSeconds: how far finalized trailed the head. maxSpread: how far apart two RPCs' finalized
-//                heads may be, in blocks. Both measured on 18 Nov 2026 from the Superstables VPS.
+//                heads may be, in blocks. Both measured on 18 Nov 2026 from the Superstables VPS; typicalSeconds of Base,
+//                Arbitrum One, Robinhood Chain and Ethereum again on 19 Nov 2026 (RECHECKED), as the website's table.
 //   sources      where each fact comes from
 //
 // Facts read on 18 Nov 2026 with read-only calls (eth_chainId, eth_call of name, symbol, decimals, version and
@@ -23,6 +24,7 @@
 // or sent. Arc and Tempo use the same token address on mainnet as on their testnets: the chain id tells them apart.
 
 const MEASURED = "measured 18 Nov 2026 (latest minus finalized timestamp, finalized jumps over two minutes)";
+const RECHECKED = "measured 19 Nov 2026 (latest minus finalized block time on both endpoints, every 20 s for 10 minutes)";
 
 /** @type {import("./mainnet-policy.js").MainnetManifest} */
 export const MAINNET_MANIFEST = {
@@ -51,7 +53,7 @@ export const MAINNET_MANIFEST = {
         approveReset: false,
         source: ["https://developers.circle.com/stablecoins/usdc-contract-addresses"],
       },
-      finality: { kind: "finalized", typicalSeconds: 900, maxSpread: 5000, measured: `866 s; finalized jumped 1,768 blocks; ${MEASURED}` },
+      finality: { kind: "finalized", typicalSeconds: 1200, maxSpread: 5000, measured: `863 to 1,521 s; ${RECHECKED}; 866 s and finalized jumped 1,768 blocks, ${MEASURED}` },
       sources: {
         chainId: "https://docs.base.org/base-chain/quickstart/connecting-to-base",
         explorer: "https://docs.base.org/base-chain/quickstart/connecting-to-base",
@@ -110,7 +112,7 @@ export const MAINNET_MANIFEST = {
         approveReset: false,
         source: ["https://developers.circle.com/stablecoins/usdc-contract-addresses"],
       },
-      finality: { kind: "finalized", typicalSeconds: 900, maxSpread: 5000, measured: `882 s; finalized jumped 1,338 blocks; ${MEASURED}` },
+      finality: { kind: "finalized", typicalSeconds: 1020, maxSpread: 5000, measured: `820 to 1,190 s; ${RECHECKED}; 882 s and finalized jumped 1,338 blocks, ${MEASURED}` },
       sources: {
         chainId: "https://docs.arbitrum.io/for-devs/dev-tools-and-resources/chain-info",
         explorer: "https://docs.arbitrum.io/for-devs/dev-tools-and-resources/chain-info",
@@ -195,7 +197,7 @@ export const MAINNET_MANIFEST = {
         approveReset: false,
         source: ["https://developers.circle.com/stablecoins/usdc-contract-addresses"],
       },
-      finality: { kind: "finalized", typicalSeconds: 840, maxSpread: 1000, measured: `840 s; finalized jumped 32 blocks; ${MEASURED}` },
+      finality: { kind: "finalized", typicalSeconds: 960, maxSpread: 1000, measured: `780 to 1,140 s; ${RECHECKED}; 840 s and finalized jumped 32 blocks, ${MEASURED}` },
       sources: {
         chainId: "https://ethereum.org/developers/docs/networks/",
         explorer: "https://ethereum.org/developers/docs/networks/",
@@ -226,7 +228,7 @@ export const MAINNET_MANIFEST = {
         approveReset: false,
         source: ["https://docs.paxos.com/guides/stablecoin/usdg/mainnet"],
       },
-      finality: { kind: "finalized", typicalSeconds: 900, maxSpread: 10000, measured: `862 s; finalized jumped 3,335 blocks; ${MEASURED}` },
+      finality: { kind: "finalized", typicalSeconds: 1020, maxSpread: 10000, measured: `815 to 1,184 s; ${RECHECKED}; 862 s and finalized jumped 3,335 blocks, ${MEASURED}` },
       sources: {
         chainId: "https://docs.robinhood.com/chain/add-network-to-wallet",
         explorer: "https://docs.robinhood.com/chain/add-network-to-wallet",
