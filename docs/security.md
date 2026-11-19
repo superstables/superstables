@@ -1,6 +1,6 @@
 # Security model
 
-Superstables client 1.4.1 pays on mainnets by default; `--testnet` makes a run testnet-only, with test tokens. This page says what each way to pay protects
+Superstables client 1.4.2 pays on mainnets by default; `--testnet` makes a run testnet-only, with test tokens. This page says what each way to pay protects
 and what it does not.
 
 These payment flows have different boundaries:

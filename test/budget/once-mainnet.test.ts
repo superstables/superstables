@@ -72,6 +72,21 @@ describe("buy-once on a mainnet, in a testnet-only run", () => {
 });
 
 describe("buy-once on a mainnet, the default", () => {
+  it.each([["the default", ""], ["--testnet", "1"]] as const)("names Tempo Moderato by its own chain id, %s", async (_label, mode) => {
+    // buy-once's network table, loaded in a fresh process in each kind of run
+    const code = 'const { ONCE_NETWORKS } = await import("./budget/once.mjs"); console.log(JSON.stringify(Object.fromEntries(Object.entries(ONCE_NETWORKS).map(([k, n]) => [k, n.chain]))));';
+    const out = await new Promise<string>((done, fail) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", code], { cwd: ROOT, env: { ...process.env, SUPERSTABLES_TESTNET: mode } });
+      let text = "";
+      child.stdout.on("data", (c) => (text += String(c)));
+      child.once("error", fail);
+      child.once("close", () => done(text));
+    });
+    const chains = JSON.parse(out) as Record<string, string>;
+    expect(chains["eip155:42431"]).toBe("moderato");
+    expect(chains["eip155:4217"]).toBeUndefined();
+  }, 30_000);
+
   it.each(["base", "arc", "robinhood"] as const)("a %s purchase is asked for, naming the mainnet and the amount", async (key) => {
     const m = MAINNET_MANIFEST.chains[key];
     site.services.push(listing(key));

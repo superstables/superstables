@@ -276,7 +276,7 @@ Moves money: no. The owner signs a message, not a transaction. With --fund and -
   allowance of A from the owner's wallet, once the owner approves each in their wallet.
 Run by: the owner. An agent may start it and hand the owner the approval link.
 Example:
-  $ superstables budget setup --rail evm --hosted --chain base-sepolia --grant 5 --fund
+  $ superstables budget setup --rail evm --testnet --hosted --chain base-sepolia --grant 5 --fund
 Prints: the plan on stderr, the approval link once (APPROVE line), then a RESULT line with state waiting_owner, final
   false, id, url, matchCode (on superstables.com), expires and next; or, when it waited, the final RESULT: state settled (or ok), owner, agent, approvals (`local` or `hosted`), site, next;
   with --grant or --fund also linked (true once the agent is added), steps (kind, state, tx, amount, reason

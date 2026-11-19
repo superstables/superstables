@@ -50,7 +50,7 @@ describe("skill-source/cli.md", () => {
     expect(skill).toMatch(/setup --rail evm --hosted/);
     // a first budget goes to Base, or Base Sepolia when the owner asked for a testnet; a chain is proposed for a particular
     // service only after checking that the service takes a budget there
-    expect(skill).toMatch(/use the chain the owner named; otherwise propose Base \(Base Sepolia, with `--testnet`/);
+    expect(skill).toMatch(/use the chain the owner named; otherwise propose Base, or Base Sepolia with `--testnet`/);
     expect(skill).toMatch(/before you propose it or set it up, even one the owner chose/);
     expect(skill).toMatch(/do not switch chains without their agreement/);
     expect(skill).not.toMatch(/Base Sepolia or Arc Testnet/);
@@ -75,7 +75,7 @@ describe("skill-source/cli.md", () => {
     expect(budget).toMatch(/Offer Single purchase on superstables.com only if that service is in `superstables budget find --once`/);
     expect(budget).toMatch(/say the budget is spent and end your turn/);
     expect(budget).toMatch(/## A budget on superstables\.com/);
-    expect(budget).toMatch(/Use the chain the owner named; otherwise propose Base \(Base Sepolia, with `--testnet`/);
+    expect(budget).toMatch(/Use the chain the owner named; otherwise propose Base, or Base Sepolia with `--testnet`/);
     expect(budget).toMatch(/before you propose it or set it up, even one the owner chose/);
     expect(budget).toMatch(/offer them only if the owner asks, or if the service the budget is for takes a budget there and you checked it/);
     expect(budget).toMatch(/If superstables\.com\x27s setup page \(`start\.md`\) brought you here.*use approval on superstables\.com without asking the owner where to approve/);

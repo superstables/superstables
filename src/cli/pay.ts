@@ -13,6 +13,7 @@ import { untrustedText } from "../core/text.js";
 import type { Attempt } from "../core/types.js";
 import type { PaymentContext } from "./context.js";
 import { badInput, isFinalAttempt, requoteCommand, usedQuoteMessage } from "./outcome.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 /**
  * How long a command with no --wait waits. The signers' own windows end the attempt well before this; the
@@ -82,7 +83,7 @@ export async function approveAndPay(deps: PaymentContext, quoteId: string, optio
     throw badInput(
       quote
         ? `${messageOf(err)}: \`${requoteCommand(quote)}\`, then \`${command} <new-quote-id>\`.`
-        : `${messageOf(err)}; \`superstables quote --service <id>\` or \`superstables quote <url>\` takes one.`,
+        : `${messageOf(err)}; \`superstables quote${testnetArg()} --service <id>\` or \`superstables quote${testnetArg()} <url>\` takes one.`,
     );
   }
   // From here a payment exists. Whatever goes wrong next, the attempt's record says how far it got: a throw is never
@@ -163,7 +164,7 @@ export class PaymentStartedError extends Error {
     cause: unknown,
     readonly attempt?: Attempt,
   ) {
-    super(`${messageOf(cause)}. The payment (attempt ${attemptId}) had started: \`superstables status ${attemptId}\` says where it got to`, { cause });
+    super(`${messageOf(cause)}. The payment (attempt ${attemptId}) had started: \`superstables status${testnetArg()} ${attemptId}\` says where it got to`, { cause });
     this.name = "PaymentStartedError";
   }
 }

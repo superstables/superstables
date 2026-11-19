@@ -216,9 +216,16 @@ export function externalCoinPriceService(): ServiceListing {
   };
 }
 
+/** A testnet listing outside a testnet-only run: not actionable, with no routes, and the reason names --testnet. */
+function forThisRun(listing: ServiceListing): ServiceListing {
+  const off = listing.testnet === true ? testnetOffReason() : "";
+  if (!off || !listing.actionable) return listing;
+  return { ...listing, actionable: false, notActionableReason: `testnet only; ${off}`, routes: { pay: false, budget: [] } };
+}
+
 /** Every built-in listing this release can call as-is: ours first, then the third-party one. */
 export function catalogue(): ServiceListing[] {
-  return [demoService(), externalCoinPriceService()];
+  return [demoService(), externalCoinPriceService()].map(forThisRun);
 }
 
 /**
@@ -239,7 +246,7 @@ export async function allListings(
   const warnings: string[] = [];
   let hosted: ServiceListing[];
   try {
-    hosted = await fetchHostedCatalogue(url);
+    hosted = (await fetchHostedCatalogue(url)).map(forThisRun);
   } catch (err) {
     warnings.push(`The service catalogue could not be read (${message(err)}); showing the built-in listings only.`);
     return { listings: builtIn, warnings, catalogueRead: false };

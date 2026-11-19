@@ -106,7 +106,7 @@ export async function rotate({ rail, currentAgent, existing, chains, steps, plan
       plans[c] = r.result?.plan ?? {};
     }
   }
-  if (plan) return { code: 0, fields: { state: "planned", oldAgent, retired: false, chains: summary(record), next: `superstables budget rotate --rail ${rail} (the owner approves each step as it comes)` } };
+  if (plan) return { code: 0, fields: { state: "planned", oldAgent, retired: false, chains: summary(record), next: `superstables budget rotate --rail ${rail}${testnetArg()} (the owner approves each step as it comes)` } };
 
   // 2. retire the old address first
   // (on every run, not only the first: an entry removed from the list between two runs is put back before anything is sent)

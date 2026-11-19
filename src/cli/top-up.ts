@@ -40,6 +40,7 @@ import { field, table, termsMoney } from "./format.js";
 import { CliError, EXIT, exitCodeFor, isFinalAttempt, policyRefusalHelp, type ExitCode } from "./outcome.js";
 import { PaymentStartedError, approveAndPay } from "./pay.js";
 import { messageFor } from "./views.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 /** The command, as the help and every Next line names it. */
 export const TOP_UP_COMMAND = "superstables seller top-up";
@@ -504,7 +505,7 @@ function startedPayment(topUp: TopUp, amount: TopUpAmount, quote: Quote, err: Pa
     message:
       `The payment (attempt ${err.attemptId}) had started, and this command could not follow it (${untrustedText(messageOf(err.cause), 300)}): ` +
       "whether it was paid is unknown.",
-    next: `Do not pay again. \`superstables status ${err.attemptId}\` searches the payment on chain, and \`${CREDIT_COMMAND}\` shows the balance.`,
+    next: `Do not pay again. \`superstables status${testnetArg()} ${err.attemptId}\` searches the payment on chain, and \`${CREDIT_COMMAND}\` shows the balance.`,
     exitCode: EXIT.unknown,
   };
 }
@@ -532,7 +533,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
         message:
           `The payment for ${amount} was sent, but Superstables says it is still pending or could not confirm it` +
           `${status === undefined ? "" : ` (HTTP ${status})`}: whether the money moved is unknown.`,
-        next: `Do not pay again. \`${CREDIT_COMMAND}\` rechecks pending top-ups before it answers, and \`superstables status ${attempt.id}\` searches the payment on chain.`,
+        next: `Do not pay again. \`${CREDIT_COMMAND}\` rechecks pending top-ups before it answers, and \`superstables status${testnetArg()} ${attempt.id}\` searches the payment on chain.`,
         exitCode: EXIT.unknown,
       };
     }
@@ -547,14 +548,14 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
     }
     return {
       message: `The payment for ${amount} was sent, but Superstables answered HTTP ${status ?? "an error"}, so the credit is not confirmed.`,
-      next: `Do not pay again. \`superstables status ${attempt.id}\` shows the site's answer, and \`${CREDIT_COMMAND}\` shows the balance.`,
+      next: `Do not pay again. \`superstables status${testnetArg()} ${attempt.id}\` shows the site's answer, and \`${CREDIT_COMMAND}\` shows the balance.`,
       exitCode: EXIT.paidNotDelivered,
     };
   }
   if (attempt.state === "uncertain") {
     return {
       message: messageFor(attempt),
-      next: `Do not pay again until \`superstables status ${attempt.id}\` says this payment was not made; \`${CREDIT_COMMAND}\` shows the balance.`,
+      next: `Do not pay again until \`superstables status${testnetArg()} ${attempt.id}\` says this payment was not made; \`${CREDIT_COMMAND}\` shows the balance.`,
       exitCode: EXIT.unknown,
     };
   }
@@ -571,7 +572,7 @@ function paidOutcome(quote: Quote, attempt: Attempt, apiKey: string): { message:
     next: refusal
       ? policyRefusalHelp(attempt.reason)
       : attempt.transaction
-        ? `Do not pay again yet: \`superstables status ${attempt.id}\` looks for this payment.`
+        ? `Do not pay again yet: \`superstables status${testnetArg()} ${attempt.id}\` looks for this payment.`
         : `Nothing was charged. Run \`${TOP_UP_COMMAND} <amount>\` again to ask for another top-up, or \`${CREDIT_COMMAND}\` to see this one.`,
     exitCode: exitCodeFor(attempt),
   };

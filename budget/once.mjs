@@ -35,7 +35,7 @@ import { RECORD_GONE, claim, isApprovalId, newApprovalId, readApproval, readStri
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { MAINNET_MARK, TESTNET_FLAG, mainnetEntry, mainnetRefusal, testnetOffReason } from "../src/core/mainnet-policy.js";
 import "./mainnet-pause.mjs";
-import { CHAIN_ID as TEMPO_CHAIN_ID, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
+import { TEMPO_CHAINS, TOKEN_ADDRESS as PATH_USD, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
 import { DEFAULT_SITE, accountRefusalNext, accountWaitingWords, call, isOtherSite, siteName, siteOrigin, siteText } from "./site.mjs";
 import { readSettlement } from "./settlement.mjs";
 
@@ -56,7 +56,7 @@ export const ONCE_NETWORKS = {
   [`eip155:${ARC.chainId}`]: { rail: "evm", chain: "arc-testnet", label: ARC.label, asset: ARC.token.address, decimals: ARC.token.decimals, unit: "USDC", evm: true, tx: (h) => `${ARC.explorer}/tx/${h}` },
   // No public facilitator settles this chain: the seller submits the authorization itself and pays the gas.
   [`eip155:${ROBINHOOD.chainId}`]: { rail: "evm", chain: "robinhood-testnet", label: ROBINHOOD.label, asset: ROBINHOOD.token.address, decimals: ROBINHOOD.token.decimals, unit: ROBINHOOD.token.symbol, evm: true, gasPaidBy: "the seller", tx: (h) => `${ROBINHOOD.explorer}/tx/${h}` },
-  [`eip155:${TEMPO_CHAIN_ID}`]: { rail: "tempo", chain: "moderato", label: "Tempo Moderato", asset: PATH_USD, decimals: PATH_USD_DECIMALS, unit: "pathUSD", evm: true, tx: (h) => `https://explore.testnet.tempo.xyz/tx/${h}` },
+  [`eip155:${TEMPO_CHAINS.moderato.chainId}`]: { rail: "tempo", chain: "moderato", label: "Tempo Moderato", asset: PATH_USD, decimals: PATH_USD_DECIMALS, unit: "pathUSD", evm: true, tx: (h) => `https://explore.testnet.tempo.xyz/tx/${h}` },
   "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1": { rail: "solana", chain: "devnet", label: "Solana devnet", asset: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU", decimals: 6, unit: "USDC", evm: false, tx: (h) => `https://explorer.solana.com/tx/${h}?cluster=devnet` },
 };
 /**

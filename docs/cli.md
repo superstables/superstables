@@ -74,7 +74,7 @@ Commands:
                                  which the fees of referred sales come out of
   demo-service [options]         run the demo paid service, so there is
                                  something to buy on this machine
-  budget [args...]               on-chain budgets (testnet by default): the
+  budget [args...]               on-chain budgets (mainnet by default): the
                                  owner grants a budget once, then the agent buys
                                  alone. Start with `superstables budget setup
                                  --rail evm`; `superstables budget --help` lists

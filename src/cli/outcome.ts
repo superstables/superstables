@@ -12,6 +12,7 @@ import { defaultsReason } from "../core/policy.js";
 import { railFor } from "../core/rails/index.js";
 import type { Attempt, Quote } from "../core/types.js";
 import { FINAL_ATTEMPT_STATES } from "../core/types.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 export const EXIT = {
   done: 0,
@@ -67,15 +68,15 @@ export function exitCodeFor(attempt: Attempt): ExitCode {
 
 /** The command that takes a fresh quote for the same request, so a retry is one paste away. */
 export function requoteCommand(quote: Pick<Quote, "url" | "serviceId" | "request" | "terms" | "chain" | "otherChains"> | undefined): string {
-  if (!quote) return "superstables quote <url>";
+  if (!quote) return "superstables quote" + testnetArg() + " <url>";
   // A seller on several chains: the new quote keeps this quote's chain instead of falling back to the seller's first offer.
   const chain = quote.chain ?? (quote.otherChains?.length ? networkFor(quote.terms.network)?.key : undefined);
   const on = chain ? ` --chain ${chain}` : "";
   if (quote.serviceId && quote.request) {
     const params = Object.entries(quote.request.params).map(([key, value]) => ` --param ${shellWord(`${key}=${value}`)}`);
-    return `superstables quote --service ${shellWord(quote.serviceId)}${params.join("")}${on}`;
+    return `superstables quote${testnetArg()} --service ${shellWord(quote.serviceId)}${params.join("")}${on}`;
   }
-  return `superstables quote ${shellWord(retryUrl(quote.url))}${on}`;
+  return `superstables quote${testnetArg()} ${shellWord(retryUrl(quote.url))}${on}`;
 }
 
 /**
@@ -98,7 +99,7 @@ function retryUrl(url: string): string {
 
 /** The status command that searches the payment's chain for it, when its rail can search. */
 function searchCommand(attempt: Attempt): string {
-  return railFor(networkFor(attempt.terms?.network ?? ""))?.findPayment ? `Run \`superstables status ${attempt.id}\`: it searches the chain for this payment. ` : "";
+  return railFor(networkFor(attempt.terms?.network ?? ""))?.findPayment ? `Run \`superstables status${testnetArg()} ${attempt.id}\`: it searches the chain for this payment. ` : "";
 }
 
 /** An attempt whose matching payment was seen on chain and then removed from it. */
@@ -154,15 +155,15 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
       return "Nothing is signed yet. This record changes only while the `superstables pay` command that started it keeps running, so running `superstables status` again will not move it. Wait for that command, or ask the owner whether the approval is still open.";
     case "approved":
     case "submitting":
-      return `Run \`superstables status ${attempt.id}\` to see where it got to.`;
+      return `Run \`superstables status${testnetArg()} ${attempt.id}\` to see where it got to.`;
     case "settled":
       return attempt.chainFinal !== false && attempt.chain === "verified"
         ? "Nothing to do: the service's answer is above, and `superstables receipts` lists the payment."
         : attempt.paymentIncluded
-        ? `The payment landed and the service's answer is above. It is not final on chain yet; \`superstables status ${attempt.id}\` checks again.`
-        : `Nothing to do: the service's answer is above. The seller reported the payment and the chain has not confirmed it yet; \`superstables status ${attempt.id}\` checks again.`;
+        ? `The payment landed and the service's answer is above. It is not final on chain yet; \`superstables status${testnetArg()} ${attempt.id}\` checks again.`
+        : `Nothing to do: the service's answer is above. The seller reported the payment and the chain has not confirmed it yet; \`superstables status${testnetArg()} ${attempt.id}\` checks again.`;
     case "paid_service_failed":
-      return `Do not pay again. \`superstables status ${attempt.id}\` shows the service's answer; report it to the seller.`;
+      return `Do not pay again. \`superstables status${testnetArg()} ${attempt.id}\` shows the service's answer; report it to the seller.`;
     case "uncertain": {
       // The payment's own chain: its explorer (on the right cluster), and the command that searches that chain for it.
       const network = networkFor(attempt.terms?.network ?? "");
@@ -179,11 +180,11 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
       );
     }
     case "denied":
-      return `The owner said no. Do not retry unless the owner asks; then \`${requote}\` and \`superstables pay <new-quote-id>\`.`;
+      return `The owner said no. Do not retry unless the owner asks; then \`${requote}\` and \`superstables pay${testnetArg()} <new-quote-id>\`.`;
     case "expired":
     case "abandoned": {
       const again =
-        `To ask again, take a new quote (this one is used): \`${requote}\`, then \`superstables pay <new-quote-id>\` ` +
+        `To ask again, take a new quote (this one is used): \`${requote}\`, then \`superstables pay${testnetArg()} <new-quote-id>\` ` +
         "while the owner is ready to approve, with no --wait or a longer one.";
       // The owner never saw a decision to make: the process was ended under them. Say so, so
       // whoever ended it does not read it as the owner's answer and does it again.
@@ -226,11 +227,11 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
         );
       }
       if (attempt.chain === "unpaid") {
-        return `Nothing was paid: the chain shows it, and this attempt can no longer settle. To try again, take a new quote: \`${requote}\`, then \`superstables pay <new-quote-id>\`.`;
+        return `Nothing was paid: the chain shows it, and this attempt can no longer settle. To try again, take a new quote: \`${requote}\`, then \`superstables pay${testnetArg()} <new-quote-id>\`.`;
       }
       // a record that names a transaction is never "nothing was paid" (an earlier version could keep one on a failure)
       if (attempt.transaction) return `Do not pay again yet: this attempt names a transaction${/^0x[0-9a-fA-F]{64}$/.test(attempt.transaction) ? ` (${attempt.transaction})` : ""}. Check it, and \`superstables receipts\`, before taking a new quote.`;
-      return `Nothing was paid. To try again, take a new quote: \`${requote}\`, then \`superstables pay <new-quote-id>\`.`;
+      return `Nothing was paid. To try again, take a new quote: \`${requote}\`, then \`superstables pay${testnetArg()} <new-quote-id>\`.`;
   }
 }
 
@@ -240,7 +241,7 @@ export function nextFor(attempt: Attempt, quote?: Quote): string {
  * its link; `status` says what the record knows.
  */
 export function usedQuoteMessage(refusal: string, attempt: Attempt, quote?: Quote): string {
-  const status = `\`superstables status ${attempt.id}\``;
+  const status = `\`superstables status${testnetArg()} ${attempt.id}\``;
   if (!isFinalAttempt(attempt)) return `${refusal}. Follow that one: ${status}.`;
   return `${refusal}. ${status} shows how it ended. ${nextFor(attempt, quote)}`;
 }
@@ -248,8 +249,8 @@ export function usedQuoteMessage(refusal: string, attempt: Attempt, quote?: Quot
 /** The quote is handed back when the owner was never asked; otherwise a new one is needed. */
 function payAgain(attempt: Attempt, quote: Quote | undefined, requote: string): string {
   return quote?.status === "open"
-    ? `pay the same quote again: \`superstables pay ${attempt.quoteId}\`.`
-    : `take a new quote: \`${requote}\`, then \`superstables pay <new-quote-id>\`.`;
+    ? `pay the same quote again: \`superstables pay${testnetArg()} ${attempt.quoteId}\`.`
+    : `take a new quote: \`${requote}\`, then \`superstables pay${testnetArg()} <new-quote-id>\`.`;
 }
 
 /** Quote a word for a POSIX shell only when it needs it. */

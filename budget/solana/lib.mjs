@@ -114,7 +114,7 @@ const solanaGate = () => CHAIN_PROBLEM || chainGate({ rail: "solana", key: CHAIN
   const gate = solanaGate();
   if (gate) {
     console.error(`REFUSED: ${gate}. Nothing was signed or sent.`);
-    console.log(`RESULT ${JSON.stringify({ ok: false, command: SCRIPT || "solana", rail: "solana", chain: CHAIN_PROBLEM ? oneLine(process.env[CHAIN_ENV], 40) : CHAIN.key, state: "refused_precheck", reason: gate, next: CHAIN_PROBLEM ? "nothing was signed or sent; use --chain devnet, or ask the operator to open mainnet" : /paused/.test(gate) ? `nothing was signed or sent; the operator paused mainnet (SUPERSTABLES_MAINNET_PAUSE, or the file ${MAINNET_PAUSE_FILE} in the client's home folder): ask them` : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}`);
+    console.log(`RESULT ${JSON.stringify({ ok: false, command: SCRIPT || "solana", rail: "solana", chain: CHAIN_PROBLEM ? oneLine(process.env[CHAIN_ENV], 40) : CHAIN.key, state: "refused_precheck", reason: gate, next: CHAIN_PROBLEM ? "nothing was signed or sent; use --chain solana, or --testnet for devnet" : /paused/.test(gate) ? `nothing was signed or sent; the operator paused mainnet (SUPERSTABLES_MAINNET_PAUSE, or the file ${MAINNET_PAUSE_FILE} in the client's home folder): ask them` : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}`);
     process.exit(3);
   }
 }

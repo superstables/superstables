@@ -85,6 +85,7 @@ import {
   type SellerCredit,
   type TopUpAmount,
 } from "../seller/top-up.js";
+import { testnetArg } from "../core/mainnet-policy.js";
 
 /**
  * Where the test token comes from: Circle's faucet on every chain `pay` pays USDC on but SKALE Base Sepolia, whose USDC is
@@ -640,7 +641,7 @@ explain(
         taken = await takeQuote({ url: url as string }, { records, policy, chain: options.chain }).catch(unreachableNext);
       }
       const next = taken.policy.allowed
-        ? `superstables pay ${taken.id}`
+        ? `superstables pay${testnetArg()} ${taken.id}`
         : "superstables policy show";
       if (!taken.policy.allowed) process.exitCode = EXIT.refused;
       if (options.json) {
@@ -1151,7 +1152,7 @@ explain(
 program
   .command("budget")
   .description(
-    "on-chain budgets (testnet by default): the owner grants a budget once, then the agent buys alone. " +
+    "on-chain budgets (mainnet by default): the owner grants a budget once, then the agent buys alone. " +
       "Start with `superstables budget setup --rail evm`; `superstables budget --help` lists its commands",
   )
   .helpOption(false)
