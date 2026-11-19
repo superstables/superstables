@@ -15,14 +15,16 @@ describe("message_for_owner", () => {
     ].join("\n"));
   });
 
-  it("on a mainnet budget names the amount and the mainnet, never test tokens, even read while the operator's switch is off", () => {
+  it("on a mainnet budget names the amount on the mainnet once, never test tokens, even read while the operator's switch is off", () => {
     const grant = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "base", terms: { title: "Approve a budget", amount: "5", unit: "USDC" } })!;
-    expect(grant).toContain("5 USDC on Base. This is on Base (mainnet).");
-    expect(grant).toContain("Only the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.");
+    expect(grant).toContain("5 USDC on Base (mainnet). Only the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.");
+    expect(grant.match(/\bBase\b/g)).toHaveLength(1);
+    expect(grant.match(/\b5 USDC\b/g)).toHaveLength(1);
     expect(grant).not.toContain("SUPERSTABLES_ALLOW_MAINNET is on");
     expect(grant).not.toMatch(/test USDC|Test tokens|real money|\(testnet\)/);
     const gas = messageForOwner({ url: "http://127.0.0.1:4413/approve/x", rail: "evm", chain: "polygon", terms: { title: "Send gas to the agent", amount: "0.2", unit: "POL" } })!;
-    expect(gas).toContain("0.2 POL on Polygon. This is on Polygon (mainnet).");
+    expect(gas).toContain("0.2 POL on Polygon (mainnet). Only the operator turns mainnet on");
+    expect(gas.match(/\bPolygon\b/g)).toHaveLength(1);
   });
 
   it("the next step of an unshown mainnet approval names the mainnet too", () => {

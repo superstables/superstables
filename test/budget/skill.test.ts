@@ -174,7 +174,7 @@ describe("skill-source: mainnet with the operator's switch on", () => {
 
   it("relays the mainnet line of message_for_owner word for word", () => {
     expect(skill).not.toMatch(/the testnet line(?! or mainnet)/);
-    expect(skill).toMatch(/On a mainnet, that line names the mainnet: never drop or soften it/);
+    expect(skill).toContain('On a mainnet, the amount names the mainnet once, for example "5 USDC on Base (mainnet).", and the line after it says only the operator turns mainnet on: never drop or soften either.');
     for (const f of ["references/once.md", "references/budget.md"]) expect(ref(f), f).not.toMatch(/the testnet line(?! or mainnet)/);
   });
 });

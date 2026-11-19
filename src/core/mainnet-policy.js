@@ -50,6 +50,8 @@ import { tokenFactsProblem } from "./token-facts.js";
 
 /** The environment variable that lets this client sign on a chain that is not a testnet. Only the operator sets it. */
 export const MAINNET_ENV = "SUPERSTABLES_ALLOW_MAINNET";
+/** What a mainnet's name carries where the client names the network, as a testnet's label carries " (testnet)". One string, so its wording changes here only. */
+export const MAINNET_MARK = " (mainnet)";
 const PAUSE_ENV = "SUPERSTABLES_MAINNET_PAUSE";
 const RAILS = ["evm", "tempo", "solana"];
 

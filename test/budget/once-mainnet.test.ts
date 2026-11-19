@@ -80,10 +80,15 @@ describe("buy-once on a mainnet, switch on", () => {
     expect(r.code, r.stderr).toBe(0);
     expect(r.result).toMatchObject({ ok: true, command: "buy-once", rail: "evm", chain: key, state: "waiting_owner" });
     expect(site.purchases).toHaveLength(1);
-    expect(r.approve.terms.summary).toContain(`One payment of 0.01 ${m.token.symbol} on ${m.label} to ${SELLER}`);
-    expect(r.approve.terms.summary).toContain(`This is on ${m.label} (mainnet).`);
-    expect(r.result.message_for_owner).toMatch(new RegExp(`0\\.01 ${m.token.symbol} on ${m.label}\\b`));
-    expect(r.result.message_for_owner).toContain(`This is on ${m.label} (mainnet).`);
+    const once = (text: string) => {
+      expect(text.split(m.label).length - 1, text).toBe(1);
+      expect(text.split(`0.01 ${m.token.symbol}`).length - 1, text).toBe(1);
+    };
+    expect(r.approve.terms.summary).toContain(`One payment of 0.01 ${m.token.symbol} on ${m.label} (mainnet) to ${SELLER}`);
+    expect(r.approve.terms.summary).toContain("Only the operator turns mainnet on; agents never set SUPERSTABLES_ALLOW_MAINNET.");
+    once(r.approve.terms.summary);
+    expect(r.result.message_for_owner).toContain(`0.01 ${m.token.symbol} on ${m.label} (mainnet). Only the operator turns mainnet on`);
+    once(r.result.message_for_owner);
     expect(r.result.message_for_owner).not.toMatch(/test USDC|test USDG|Test tokens|real money/);
   }, 30_000);
 

@@ -340,7 +340,8 @@ describe("find --once", () => {
     expect(r.stdout).toMatch(/demo-wallet-briefing\s+0\.003 USDC\s+yes\s+Base Sepolia/);
     expect(r.stdout).toMatch(/simulated: yes when the listing marks the output as prepared sample output/);
     expect(r.result).toMatchObject({ command: "find", state: "ok", services: [{ id: "demo-market-data", price: "0.01", available: true, simulated: false, params: [{ name: "asset", required: true, values: ["BTC", "ETH"] }] }, { id: "demo-wallet-briefing", simulated: true }] });
-    expect(r.result.next).toMatch(new RegExp(TESTNET));
+    // find --once lists before any purchase, so its note scopes test tokens to testnets (budget/command.mjs TESTNET_TOKENS_LINE)
+    expect(r.result.next).toContain("Testnet by default.\nSUPERSTABLES_ALLOW_MAINNET is off by default.\nAgents never set the variable. Payments on testnets use test tokens.");
     // --json: stdout is the RESULT object alone (no table), which carries the services
     const j = await budget(["find", "--once", "--json", "--site", site.url]);
     expect(j.stdout.trim().split("\n")).toHaveLength(1);
