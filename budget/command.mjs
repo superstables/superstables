@@ -95,8 +95,7 @@ function versionLine() {
 // ---- rails ------------------------------------------------------------------------------------------
 const RAILS = {
   evm: { chains: EVM_CHAIN_KEYS, chain: EVM_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "USDC" },
-  // unit: the default chain's token; a Tempo chain's own is chainFacts(rail, chain).unit
-  tempo: { chains: TEMPO_CHAIN_KEYS, chain: TEMPO_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: TEMPO_CHAINS[TEMPO_DEFAULT_CHAIN].token.symbol },
+  tempo: { chains: TEMPO_CHAIN_KEYS, chain: TEMPO_DEFAULT_CHAIN, addr: /^0x[0-9a-fA-F]{40}$/, unit: "OUSD" }, // a chain's own token: chainFacts(rail, chain).unit
   solana: { chains: SOLANA_CHAIN_KEYS, chain: SOLANA_DEFAULT_CHAIN, addr: /^[1-9A-HJ-NP-Za-km-z]{32,44}$/, unit: "USDC" },
 };
 /**
