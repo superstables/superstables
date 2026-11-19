@@ -99,7 +99,7 @@ it("reports removed non-final delivered inclusion as uncertain, never a terminal
   const human = await run(process.execPath, ["--import", "tsx", new URL("../../src/cli/main.ts", import.meta.url).pathname, "status", attempt.id], { env: { ...process.env, SUPERSTABLES_HOME: home, SUPERSTABLES_RPC_URL: chain.url } }).then(r => r.stdout, (e: { stdout?: string }) => { if (!e.stdout) throw e; return e.stdout; });
   expect(human).toContain("\nPayment outcome unknown. Do not pay again.\n");
   expect(human).toMatch(/chain\s+unchecked: the earlier matching payment was removed from the chain\.\n/);
-  expect(human).toContain(`Next: Run \`superstables status ${attempt.id}\`: it searches the chain for this payment. This attempt stays uncertain even after expiry. Ask the owner to check their wallet activity and report the payment to the seller.`);
+  expect(human).toContain(`Next: Run \`superstables status --testnet ${attempt.id}\`: it searches the chain for this payment. This attempt stays uncertain even after expiry. Ask the owner to check their wallet activity and report the payment to the seller.`);
   expect(human).not.toMatch(/has not confirmed it yet|no reason was recorded|until it says this payment was not made/);
   expect(records.getReceipt(attempt.receiptId!)?.chainReason).toMatch(/do not pay again/i);
   expect(records.spentToday("USDC")).toBe(0.01);

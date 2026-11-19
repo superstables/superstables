@@ -2759,7 +2759,7 @@ const waitNext = (id, r = {}, end = "waiting_owner does not mean approved. If th
 /** The next step of a wait that is still waiting: poll again. A new link (recover can ask twice) is written first. */
 /** An approval whose command sent a transaction of its own (recover's revoke) before it needed the owner. */
 const OWN_SEND = "this command already began sending its own transaction for this approval; its outcome is not known yet.";
-const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait${testnetArg()} --id ${id} --shown again when they say they've approved. If the url is not the one you showed, send the new message_for_owner first. The owner has not finished approving; do not approve for the owner.`;
+const stillWaiting = (id) => `the owner has not finished. Say so in one line and end your turn; run superstables budget wait --id ${id} --shown${testnetArg()} again when they say they've approved. If the url is not the one you showed, send the new message_for_owner first. The owner has not finished approving; do not approve for the owner.`;
 const approvalFields = (r) => ({ id: r.id, action: r.action, url: r.url, matchCode: r.matchCode, expires: r.expires, terms: r.terms, message_for_owner: messageForOwner(r) });
 
 function refusePending(ctx, pending) {

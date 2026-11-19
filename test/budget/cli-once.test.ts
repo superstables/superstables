@@ -496,7 +496,7 @@ describe("buy-once: the owner approves, the agent polls", () => {
     const pending = await budget(["wait", "--shown", "--id", id, "--timeout", "0"]);
     expect(pending.code).toBe(0);
     expect(pending.result).toMatchObject({ state: "waiting_owner", id, matchCode: "KPT-RWD", service: "demo-market-data" });
-    expect(pending.result.next).toMatch(/wait --id \S+ --shown again/);
+    expect(pending.result.next).toMatch(/wait --id \S+ --shown --testnet again/);
     expect(pending.result.reason).toMatch(/waiting for the owner to open the approval link on 127\.0\.0\.1:\d+, signed in with their wallet, and pick the match code/);
 
     site.settle(site.purchases[0], { asset: "BTC", price_usd: 65000 });

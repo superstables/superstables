@@ -74,7 +74,7 @@ afterEach(async () => {
   await wallet.close();
 });
 
-/** Run `superstables pay <quote> [--json]` as the installed command does: its action, its exit code, its output. */
+/** Run `superstables pay --testnet <quote> [--json]` as the installed command does: its action, its exit code, its output. */
 async function pay(json: boolean): Promise<{ code: number | string | undefined; out: string; err: string }> {
   const taken = await quote({ url: URL_PAID }, { records: deps.records, policy: POLICY });
   unpaidReadsStart();
@@ -130,7 +130,7 @@ describe("pay when it fails while following a payment that started", () => {
     release(new Response("{}", { status: 500 }));
     const attempt = deps.records.listAttempts()[0];
     expect(result.code).toBe(5);
-    expect(result.out).toContain(`superstables status ${attempt?.id}`);
+    expect(result.out).toContain(`superstables status --testnet ${attempt?.id}`);
   });
 
   it("is unknown, never done, when the record is not final either", async () => {

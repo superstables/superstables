@@ -333,7 +333,7 @@ describe("seller top-up", () => {
       expect(result.exitCode).toBe(5);
       expect(result.message).toContain("unknown");
       expect(result.message).not.toContain("not started");
-      expect(result.next).toContain("superstables status a-1");
+      expect(result.next).toContain("superstables status --testnet a-1");
       expect(result.next).not.toContain("superstables seller top-up");
     }
     // A record that ended says how it ended.
