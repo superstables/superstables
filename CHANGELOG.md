@@ -18,7 +18,8 @@ Testnet by default. Only the operator opens mainnet, with `SUPERSTABLES_ALLOW_MA
 
 ### Changed
 
-- **Mainnet wording:** Messages to the owner, the approval pages, `--help` and the skill name a mainnet the way wallets do, with the amount and token: for example, `5 USDC on Base. This is on Base (mainnet).` The agent still names the mainnet and the amount before the owner approves. Testnets keep `(testnet)` and say they use test tokens.
+- **Mainnet wording:** Messages to the owner, the approval pages, `--help` and the skill name a mainnet the way wallets do, with the amount and token: for example, `5 USDC on Base (mainnet).` The agent still names the mainnet and the amount before the owner approves. Testnets keep `(testnet)` and say they use test tokens.
+- **Network named once:** A message to the owner about an approval, a Single purchase, a spent budget or a settled payment names the mainnet once, next to the amount, and then says only the operator turns mainnet on.
 
 ## [1.4.0] - Mainnet behind the operator switch, purchase reports
 

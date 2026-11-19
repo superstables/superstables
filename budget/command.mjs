@@ -52,7 +52,7 @@ import { LABEL, LABEL_WORDS } from "./tempo/lib/args.mjs";
 import { CHAIN_ENV, TEMPO_CHAINS, TEMPO_CHAIN_KEYS, TEMPO_DEFAULT_CHAIN } from "./tempo/lib/constants.mjs";
 import { SOLANA_CHAINS, SOLANA_CHAIN_KEYS, SOLANA_DEFAULT_CHAIN } from "./solana/chains.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
-import { ONCE_CHAINS, ONCE_MAINNETS, RECORD_GONE, moneyLineFor, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
+import { ONCE_CHAINS, ONCE_MAINNETS, RECORD_GONE, moneyLineFor, networkOf, switchLineFor, TESTNET_LINE, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -1588,15 +1588,16 @@ function normalize(cmd, f, rail, code) {
 function budgetSpent(f, rail) {
   const why = `${rail.reason ?? ""}`;
   const facts = chainFacts(f.rail, f.chain);
-  const net = facts.label;
   const mainnet = !facts.testnet;
+  const rec = { rail: f.rail, chain: f.chain };
+  const net = networkOf(rec, facts.label);
   const unit = f.rail === "tempo" ? "pathUSD" : mainnet ? facts.unit : `test ${facts.unit}`;
-  const line = mainnet ? `This is on ${net} (mainnet).` : TESTNET_LINE;
+  const line = switchLineFor(rec);
   const m = /price ([0-9.]+)(?: [A-Za-z]+)?(?: plus up to ([0-9.]+)(?: [A-Za-z]+)? for the network fee)? exceeds the (?:allowance|remaining budget) ([0-9.]+)/.exec(why);
   if (m) return { budget_spent: true, message_for_owner: m[2]
-    ? `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}) and its network fee (up to ${m[2]} ${unit}), which counts against the budget. Nothing was paid. ${line}`
-    : `The budget left on ${net} (${m[3]} ${unit}) doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${line}` };
-  if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net} (it is spent, revoked or was never granted). Nothing was paid. ${line}` };
+    ? `The ${m[3]} ${unit} budget left on ${net} doesn't cover this purchase (${m[1]} ${unit}) and its network fee (up to ${m[2]} ${unit}), which counts against the budget. Nothing was paid. ${line}`
+    : `The ${m[3]} ${unit} budget left on ${net} doesn't cover this purchase (${m[1]} ${unit}). Nothing was paid. ${line}` };
+  if (/allowance is 0|no delegate|no_budget/i.test(why)) return { budget_spent: true, message_for_owner: `There is no budget left on ${net}: it is spent, revoked or was never granted. Nothing was paid. ${line}` };
   return {};
 }
 

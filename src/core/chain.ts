@@ -13,7 +13,7 @@ import { createPublicClient, http } from "viem";
 import type { PaymentRequirements } from "@x402/core/types";
 import { mainnetSwitchRefusal } from "./chain-gate.js";
 import { tokenFactsProblem, type EvmTokenFacts, type TokenFacts } from "./token-facts.js";
-import { mainnetChains, type MainnetChain } from "./mainnet-policy.js";
+import { MAINNET_MARK, mainnetChains, type MainnetChain } from "./mainnet-policy.js";
 
 export type Rail = "evm" | "tempo" | "solana";
 
@@ -414,8 +414,7 @@ export function describeNetwork(name: string): string {
   return name;
 }
 
-/** What a mainnet's name carries where the client names the network, as a testnet's label carries " (testnet)". One string, so its wording changes here only. */
-export const MAINNET_MARK = " (mainnet)";
+export { MAINNET_MARK };
 
 /** The network as a quote names it: a mainnet's name gets MAINNET_MARK, the way a testnet's label says "(testnet)". */
 export function networkWords(network: string, label: string): string {
