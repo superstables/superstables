@@ -60,6 +60,25 @@ const reasonOf = (o: Out) => String(o.result?.reason ?? "");
 const BUY = ["--url", "http://127.0.0.1:9/paid", "--max", "0.01", "--op", "m1"];
 const GRANT = ["--amount", "0.05", "--expiry-seconds", "86400"];
 
+describe("the mainnet's budget token", () => {
+  it("is OUSD on Tempo and pathUSD on Moderato, and the seller check takes only the chain's own", () => {
+    const probe = `
+      const c = await import(${JSON.stringify(resolve(ROOT, "budget/tempo/lib/constants.mjs"))});
+      const p = await import(${JSON.stringify(resolve(ROOT, "budget/tempo/lib/precheck.mjs"))});
+      const charge = (currency) => ({ amount: "1000", currency, recipient: "0x2222222222222222222222222222222222222222", methodDetails: { chainId: c.CHAIN_ID } });
+      const verdict = (currency) => { const r = p.precheckCharge(charge(currency), { maxBase: 1000n }); return r.ok ? "ok" : r.code };
+      console.log(JSON.stringify({ chain: c.CHAIN.key, token: c.TOKEN_ADDRESS, label: c.TOKEN_LABEL, decimals: c.TOKEN_DECIMALS,
+        ousd: verdict("0x20c0000000000000000000006a37da5c996874be"), pathusd: verdict("0x20C0000000000000000000000000000000000000") }));`;
+    const read = (env: Record<string, string>) => {
+      const o = run(process.execPath, ["--input-type=module", "-e", probe], env);
+      expect(o.code, o.stderr).toBe(0);
+      return JSON.parse(o.stdout.trim().split("\n").pop()!);
+    };
+    expect(read({ SUPERSTABLES_BUDGET_CHAIN: "tempo", ...ON })).toEqual({ chain: "tempo", token: "0x20c0000000000000000000006a37DA5C996874BE", label: "OUSD", decimals: 6, ousd: "ok", pathusd: "wrong_token" });
+    expect(read({ SUPERSTABLES_BUDGET_CHAIN: "moderato", SUPERSTABLES_TESTNET: "1" })).toEqual({ chain: "moderato", token: "0x20C0000000000000000000000000000000000000", label: "pathUSD", decimals: 6, ousd: "wrong_token", pathusd: "ok" });
+  }, 60_000);
+});
+
 describe("the switch is off", () => {
   it.each([
     ["setup", ["setup", "--rail", "tempo", "--chain", "tempo"]],

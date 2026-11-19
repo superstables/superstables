@@ -72,7 +72,7 @@ export function precheckCharge(request, opts) {
     const badSplit = badRecipient('a split recipient', s.recipient, opts)
     if (badSplit) return refuse('bad_recipient', badSplit)
   }
-  // mppx's machine-token route (methodDetails.machineTokenEnabled) pays through a swap contract, not a plain pathUSD
+  // mppx's machine-token route (methodDetails.machineTokenEnabled) pays through a swap contract, not a plain budget-token
   // transfer: the owner's machine token is approved to the swapper and swapped into the price. mppx takes it on its own when
   // the owner holds enough of that token. Nothing in this client checks that route, so a challenge that asks for it is refused.
   if (details.machineTokenEnabled != null && details.machineTokenEnabled !== false) {

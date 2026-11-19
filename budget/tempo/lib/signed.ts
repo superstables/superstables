@@ -1,5 +1,6 @@
 // What the agent key signed for a purchase, read back from the signed transaction before it leaves this process: exactly the
-// quoted pathUSD transfers, and an expiry at most MAX_SIGNED_LIFETIME_S away. mppx builds the transaction; this checks it.
+// quoted transfers of the budget token, its network fee in that token too unless the seller pays it, and an expiry at most
+// MAX_SIGNED_LIFETIME_S away. mppx builds the transaction; this checks it.
 import { decodeFunctionData, isHex, type Hex } from 'viem'
 import { Abis, Transaction } from 'viem/tempo'
 import { TOKEN_ADDRESS, TOKEN_LABEL } from './common.ts'
@@ -11,7 +12,7 @@ export type Quoted = { recipient: string; primary: bigint; memo: string; splits:
 
 /** `problem` is '' when `raw` is the quoted payment, with its signed expiry; otherwise it says what differs. Pure. */
 export function signedPayment(raw: unknown, quoted: Quoted, nowS = Math.floor(Date.now() / 1000)): { problem: string; validBefore?: number } {
-  let tx: { calls?: readonly { to?: string | null; data?: Hex; value?: bigint }[]; validBefore?: number | bigint }
+  let tx: { calls?: readonly { to?: string | null; data?: Hex; value?: bigint }[]; validBefore?: number | bigint; feeToken?: string; feePayerSignature?: unknown }
   try {
     if (typeof raw !== 'string' || !isHex(raw)) throw new Error()
     tx = Transaction.deserialize(raw as Hex) as typeof tx
@@ -31,6 +32,13 @@ export function signedPayment(raw: unknown, quoted: Quoted, nowS = Math.floor(Da
       || String(to).toLowerCase() !== w.to.toLowerCase() || amount !== w.amount || (w.memo && String(memo).toLowerCase() !== w.memo.toLowerCase())) {
       return { problem: `call ${i + 1} is not the quoted ${TOKEN_LABEL} transfer` }
     }
+  }
+  // The fee: a sponsored payment (signed over a blank fee token, feePayerSignature null) leaves it to the seller. Otherwise the
+  // account pays it, and the keychain counts it against the key's limit on the fee token: a fee in any token but the budget
+  // token (or none named, which falls to the owner's FeeManager preference) fails with SpendingLimitExceeded.
+  const sponsored = tx.feePayerSignature === null
+  if (!sponsored && String(tx.feeToken ?? '').toLowerCase() !== TOKEN_ADDRESS.toLowerCase()) {
+    return { problem: tx.feeToken ? `it pays its network fee in ${tx.feeToken}, not ${TOKEN_LABEL}` : `it names no fee token, so its network fee would not be paid in ${TOKEN_LABEL}` }
   }
   const vb = Number(tx.validBefore ?? 0)
   if (!vb) return { problem: 'it has no expiry' }

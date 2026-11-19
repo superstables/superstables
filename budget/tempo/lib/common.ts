@@ -12,7 +12,7 @@ import { tempo as tempoMainnet, tempoModerato } from 'viem/tempo/chains'
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts'
 import type { Address, Hex } from 'viem'
 
-import { CHAIN, CHAIN_ENV, CHAIN_ID as CHAIN_ID_, CHAIN_PROBLEM, RPC_URL as RPC_URL_, TESTNET, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
+import { CHAIN, CHAIN_ENV, CHAIN_ID as CHAIN_ID_, CHAIN_PROBLEM, RPC_URL as RPC_URL_, TESTNET, TOKEN_ADDRESS as TOKEN_ADDRESS_, TOKEN_DECIMALS as TOKEN_DECIMALS_, TOKEN_LABEL as TOKEN_LABEL_ } from './constants.mjs'
 import { HOME, agentKeyFile, ensurePrivateDir, ownerKeyFile, publicFile } from '../../paths.mjs'
 import { UNSAFE_SECRET_FILE, readSecretFile, replaceSecretFile } from '../../secret-file.mjs'
 import { RPC_MAX_BYTES, cappedRpcFetch } from '../../rpc.mjs'
@@ -35,11 +35,10 @@ if (VIEM_CHAIN.id !== CHAIN.chainId) throw new Error(`the chain table says ${CHA
 /** ` --testnet` on Moderato, '' on Tempo (the default): added to every command a message tells the owner to run. */
 export const CHAIN_FLAG = CHAIN.testnet ? ' --testnet' : ''
 
-// pathUSD: Tempo's protocol-level reference USD stablecoin. Fixed address on
-// every Tempo chain (mainnet and testnets share the same precompile-style
-// address). 6 decimals. Also the default fallback fee token.
-// (constants.mjs holds the same values for the plain .mjs helpers.)
-export const TOKEN_ADDRESS: Address = Addresses.pathUsd
+// The budget token (constants.mjs): OUSD on Tempo, pathUSD on Moderato. The agent's key has its one limit on it, and every
+// transaction this client builds pays its fee in it (makeClient's feeToken): the keychain counts an account-paid fee against
+// the key's limit on the fee token, so a fee in any other token fails with SpendingLimitExceeded.
+export const TOKEN_ADDRESS: Address = TOKEN_ADDRESS_ as Address
 export const TOKEN_DECIMALS: number = TOKEN_DECIMALS_
 export const TOKEN_LABEL: string = TOKEN_LABEL_
 

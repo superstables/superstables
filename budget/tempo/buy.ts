@@ -12,6 +12,8 @@
 //      (required), token is pathUSD on the chain, whole base units, recipient == --pay-to when given, the
 //      challenge names a realm, stays open at most 600 s and does not turn on mppx's machine-token route.
 //      A refusal exits 3 with RESULT state refused_precheck. Nothing has been signed.
+//      The agent's payment pays its own network fee (when the seller does not) in the budget token, the one token its key
+//      has a limit on: mppx builds it on a client whose feeToken is that token, and signedPayment refuses any other.
 //   4. Write the operation journal (state quoted, with the purchase memo and the seller's referral, which
 //      the memo names through MPP's client id), then sign. In pull mode (the
 //      default for an access key) the signed payment is a bearer transaction that expires when mppx says, 25 s,
@@ -46,7 +48,8 @@ import { join } from 'node:path'
 import { requireRecordLock } from '../op-lock.mjs'
 import { Mppx, tempo } from 'mppx/client'
 import { Credential, Receipt } from 'mppx'
-import { createClient, http, isHex, keccak256, type Address, type Hex } from 'viem'
+import { isHex, keccak256, type Address, type Hex } from 'viem'
+import { createClient, http } from 'viem/tempo'
 import { addressCheck, decimalCheck, labelCheck, opIdCheck, parseCli, urlCheck } from './lib/args.mjs'
 import {
   CHAIN,
@@ -240,7 +243,7 @@ async function main() {
 
   // tempo.charge only: a seller that offers a session (a deposit of its choosing) is never selected.
   const mppx = Mppx.create({
-    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: VIEM_CHAIN, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }) }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
+    methods: [tempo.charge({ account: agent, getClient: () => createClient({ chain: VIEM_CHAIN, transport: http(RPC_URL, { onFetchRequest: (_request, init) => { beforeBroadcast(init.body) } }), feeToken: TOKEN_ADDRESS }), expectedChainId: CHAIN_ID, ...(clientId ? { clientId } : {}), ...(payTo ? { expectedRecipients: [payTo as Address] } : {}) })],
     polyfill: false,
   })
   // no redirects on either request to the seller (lib/seller.ts says why)

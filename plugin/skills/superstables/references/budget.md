@@ -53,7 +53,7 @@ Without `--hosted` the owner approves on a page on your machine instead, with no
 | `--rail` | `--chain` | Token | Sellers | Budget on chain |
 | --- | --- | --- | --- | --- |
 | `evm` | `base` (default), `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`; with `--testnet`, `base-sepolia` (default), `arc-testnet`, `arbitrum-sepolia`, `polygon-amoy`, `skale-base-sepolia`, `ethereum-sepolia`, `robinhood-testnet` | USDC (USDG on `robinhood-testnet` and `robinhood`) | x402 | An ERC-20 allowance (`approve`) from the owner to the agent key |
-| `tempo` | `tempo`; with `--testnet`, `moderato` | pathUSD | MPP (`tempo` charge) | A keychain access key with a limit |
+| `tempo` | `tempo`; with `--testnet`, `moderato` | OUSD; pathUSD on `moderato` | MPP (`tempo` charge) | A keychain access key with a limit |
 | `solana` | `solana`; with `--testnet`, `devnet` | USDC | x402 | An SPL token delegate on the owner's USDC account |
 
 A mainnet has no faucet: the owner adds the tokens, and the gas token on `evm` and `solana`, to their own wallet. Its agent key must be in the OS keychain: `superstables budget setup --rail R --chain C --key-store os-keychain`.

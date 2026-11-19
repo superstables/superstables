@@ -249,12 +249,14 @@ export const MAINNET_MANIFEST = {
         { url: "https://rpc.tempo.xyz", operator: "tempo", source: "https://tempo.com/developers/docs/quickstart/connection-details" },
         { url: "https://tempo-rpc.publicnode.com", operator: "publicnode", source: "https://tempo.publicnode.com" },
       ],
-      // pathUSD, Tempo's reference USD stablecoin (TIP-20). Same address as on Moderato; chain 4217 is mainnet.
+      // OUSD (TIP-20, quote token pathUSD), read on both endpoints at the finalized block on 19 November 2026: symbol() OUSD,
+      // decimals() 6, currency() USD. Not pathUSD: "For balances and payments, most integrations should use OUSD" and
+      // "The user and merchant never hold pathUSD directly".
       token: {
-        symbol: "pathUSD",
-        address: "0x20C0000000000000000000000000000000000000",
+        symbol: "OUSD",
+        address: "0x20c0000000000000000000006a37DA5C996874BE",
         decimals: 6,
-        source: ["https://tempo.com/developers/docs/protocol/exchange/quote-tokens"],
+        source: ["https://tempo.com/developers/docs/guide/ousd", "https://tempo.com/developers/docs/protocol/exchange/quote-tokens"],
       },
       finality: { kind: "finalized", typicalSeconds: 1, maxSpread: 1000, measured: `0 s; finalized jumped 18 blocks; ${MEASURED}` },
       sources: {

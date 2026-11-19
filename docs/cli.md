@@ -87,7 +87,7 @@ Commands:
   help [command]                 display help for command
 
 What this is:
-  A client for paying per request with stablecoins (USDC; pathUSD on Tempo, USDG on Robinhood Chain):
+  A client for paying per request with stablecoins (USDC; OUSD on Tempo, USDG on Robinhood Chain):
   find a paid service, quote it, and pay it. Mainnet by default. --testnet (or SUPERSTABLES_TESTNET=1)
   uses the testnets and test tokens instead, for that run.
   The agent can ask for a payment but cannot approve one.

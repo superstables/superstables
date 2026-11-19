@@ -64,7 +64,7 @@ Rails and chains (--chain; the default is marked):
           base (Base, default), arc (Arc), arbitrum (Arbitrum One), polygon (Polygon), skale-base (SKALE Base),
           ethereum (Ethereum), robinhood (Robinhood Chain)
           The budget is USDC (USDG on Robinhood Chain and its testnet). Sellers: x402.
-  tempo   moderato (Tempo Moderato), tempo (Tempo, default). The budget is pathUSD.
+  tempo   moderato (Tempo Moderato), tempo (Tempo, default). The budget is OUSD on tempo, pathUSD on moderato.
           Sellers: MPP (tempo.charge).
   solana  devnet (Solana devnet), solana (Solana, default). The budget is USDC. Sellers: x402.
   Chain to rail: Base Sepolia, Arc Testnet, Arbitrum Sepolia, Polygon Amoy, SKALE Base Sepolia, Ethereum Sepolia, Robinhood Chain Testnet, Base, Arc, Arbitrum One, Polygon, SKALE Base, Ethereum and Robinhood Chain are evm;
@@ -81,7 +81,7 @@ The owner's steps, in order, once per rail and chain:
           separate from the budget allowance. A mainnet has no faucet: the owner adds the real tokens to their wallet.
           grant: an allowance (USDC approve; USDG on Robinhood Chain and its testnet) from the owner's wallet to the agent key.
           The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
-  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
+  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato) up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.
@@ -130,7 +130,7 @@ on this machine is offered the chain's public RPC.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, USDG on Robinhood Chain and its testnet, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+Amounts are in the budget token (USDC, USDG on Robinhood Chain and its testnet, OUSD on tempo, or pathUSD on moderato); an unknown amount is null, never "0". final is false
 while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), for an owner
 transaction that landed but is not final on chain yet (state landed, or a setup step landed; chain_final is false), and for a
 buy-once unknown that a later wait can still read, true otherwise, as before chain_final existed. Scripts test final for
@@ -264,7 +264,7 @@ The owner's steps, in order, once per rail and chain:
           separate from the budget allowance. A mainnet has no faucet: the owner adds the real tokens to their wallet.
           grant: an allowance (USDC approve; USDG on Robinhood Chain and its testnet) from the owner's wallet to the agent key.
           The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
-  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
+  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato) up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.
@@ -391,11 +391,11 @@ Exit codes: 0 every check passed, 1 a check failed (read the FAIL lines), 2 bad 
 superstables budget grant --rail evm|tempo|solana --amount A [--chain C] [--expiry ISO] [--period SECONDS] [--sellers a,b]
   [--agent LABEL] [--timeout S] [--no-open] [--detach|--wait|--sign-only]
 
-Grants the agent a budget of A, in the budget token (--amount 5 is 5 USDC on evm and solana, 5 pathUSD on tempo).
+Grants the agent a budget of A, in the budget token (--amount 5 is 5 USDC on evm and solana, 5 OUSD on tempo, 5 pathUSD on moderato).
 Prints the terms first: the cap, the true maximum, and what the chain enforces and what it does not.
   evm     an allowance (USDC approve) from the owner's wallet to the agent key, in total (no reset, no expiry). The USDC
           stays in the owner's wallet: each purchase pulls exactly its price. Run fund-agent first.
-  tempo   authorizes the agent's access key to spend the owner's pathUSD: --expiry (default 24 hours from now), and
+  tempo   authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato): --expiry (default 24 hours from now), and
           optionally --period (the limit resets every SECONDS) and --sellers (only these may be paid).
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
@@ -523,7 +523,7 @@ superstables budget buy --rail evm|tempo|solana --url U --max M [--chain C] [--p
 One purchase from the seller at U, paid from the budget the owner granted, signed by the agent key on this machine.
 Nobody approves it: the chain enforces the budget. It asks the seller for its price, checks it, then pays and fetches.
 --max M is the most this one purchase may cost, in the budget token's own units: --max 0.02 means 0.02 USDC (0.02
-  pathUSD on tempo, 0.02 USDG on Robinhood Chain and its testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
+  OUSD on tempo, pathUSD on moderato, 0.02 USDG on Robinhood Chain and its testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
   Only what is actually paid comes off the budget. Required, with no default.
 --pay-to ADDR refuses unless the seller's payee is exactly ADDR (preflight prints it). --op ID names this purchase
 (default: a generated id, printed): a purchase is never paid twice under one id, and reconcile takes it.
@@ -548,7 +548,7 @@ The owner's steps, in order, once per rail and chain:
           separate from the budget allowance. A mainnet has no faucet: the owner adds the real tokens to their wallet.
           grant: an allowance (USDC approve; USDG on Robinhood Chain and its testnet) from the owner's wallet to the agent key.
           The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
-  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
+  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato) up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.
@@ -908,10 +908,10 @@ Single purchase on superstables.com: the owner approves on superstables.com. No 
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on
 Base, Arc and Robinhood Chain, or with --testnet on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato
 or Solana devnet: the chain comes from the listing. --max
-is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain and its testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
+is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain and its testnet, OUSD on Tempo, or pathUSD on Tempo Moderato); a service that costs more is refused before anything is
 created. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or
 per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset.
-Limits count USDC, USDG and pathUSD token units together across chains; the daily limit uses UTC.
+Limits count USDC, USDG, OUSD and pathUSD token units together across chains; the daily limit uses UTC.
 --param K=V (repeatable) or --params JSON give the service's inputs.
 The command asks the site for the purchase and prints the owner's approval link and match code as an APPROVE line, the
 same as the owner commands. Reply to the owner with message_for_owner from the RESULT, word for word (you may add one

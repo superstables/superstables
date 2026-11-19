@@ -30,7 +30,7 @@ import { agreedAtBlock, chainHead, keychainError, readKey, simulateRevokeAt, typ
 import { closeGracePeriod, findOpenChannels, type OpenChannel } from './lib/channels.ts'
 import { OWNER_KEY_FILE, checkOwnerKeyFile, exitAfterError } from '../owner-page.ts'
 import { readRegularFile } from '../secret-file.mjs'
-import { KEYCHAIN, MIN_FEE_BALANCE, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, feeTokenOf, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
+import { KEYCHAIN, agentFlag, askTransaction, closeOwnerPage, emit, endUnapproved, ownerFee, findKeyEvent, readSent, revertedReceiptOf, revokeCalldata, revokeTerms, tokenBalance, useHostedAgent } from './owner.ts'
 import { differsFromRequest, mismatchPage, mismatchReason } from '../site.mjs'
 import { agreementWords } from '../../src/core/rpc-quorum.mjs'
 import type { OwnerVerdict } from '../../src/core/signer/owner-approval-server.ts'
@@ -175,20 +175,20 @@ async function main() {
     }
     if (reverted) await revertedRevoke(reverted, [])
   } else {
-    let feeToken: Address
+    let fee: Awaited<ReturnType<typeof ownerFee>>
     try {
-      feeToken = await feeTokenOf(owner)
+      fee = await ownerFee(owner)
     } catch (err) {
       const reason = `could not read the owner's fee token from the FeeManager (${oneLine((err as Error)?.message ?? err, 120)})`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
       process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: `check the ${CHAIN.short} RPC (superstables budget doctor --rail tempo${CHAIN_FLAG}), then revoke again` }))
     }
-    const feeBalance = await tokenBalance(feeToken, owner)
-    if (feeBalance < MIN_FEE_BALANCE) {
-      const reason = `the owner ${owner} holds ${fromBaseUnits(feeBalance)} of its fee token ${feeToken}, less than the ${fromBaseUnits(MIN_FEE_BALANCE)} the revoke's network fee may need`
+    if (fee.problem || !fee.token) {
+      const reason = `the owner ${owner} ${fee.problem}`
       console.log(`REFUSED: ${reason}. Nothing was sent.`)
-      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: CHAIN.faucet ? 'fund the owner (superstables budget setup --rail tempo' + CHAIN_FLAG + ' --fund-only), then revoke again' : 'the owner adds pathUSD (the network fee is paid in it), then revoke again' }))
+      process.exit(emit('revokeBudget', 3, { state: 'refused_precheck', reason, next: `${'next' in fee ? fee.next : ''} revoke again` }))
     }
+    const feeToken = fee.token as Address
     const data = revokeCalldata(agentAddress)
     useHostedAgent(agentAddress) // a hosted chain: this agent key signs the request to the site
     const { handle, outcome } = await askTransaction('revoke', owner, { to: KEYCHAIN, data }, revokeTerms({ owner, agent: agentAddress, remaining: before.remaining, expiry: before.expiry, feeToken, label: agentLabel }))

@@ -19,7 +19,7 @@ import { DEFAULT_RPC, evmRpcFromEnv, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { siteOrigin, siteText } from "./site.mjs";
 import { SOLANA_CHAINS, SOLANA_DEFAULT_CHAIN } from "./solana/chains.mjs";
 import { staleOwnerLine } from "./evm-owner-line.mjs";
-import { TEMPO_CHAINS, TEMPO_DEFAULT_CHAIN, TOKEN_DECIMALS as PATH_USD_DECIMALS } from "./tempo/lib/constants.mjs";
+import { TEMPO_CHAINS, TEMPO_DEFAULT_CHAIN } from "./tempo/lib/constants.mjs";
 import { testnetArg } from "../src/core/mainnet-policy.js";
 
 // EVM chains come from evm/chains.mjs. Tempo and Solana must match tempo/lib/constants.mjs and solana/lib.mjs (RPC, token). Minimums in whole tokens.
@@ -35,7 +35,7 @@ const solanaChain = (key) => {
 const tempoChain = (key) => {
   const c = TEMPO_CHAINS[key];
   if (!c) throw new Error(`${key} is not a Tempo chain this process holds`);
-  return { ...c, rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", c.rpc, c.gateKey), pathUsd: "0x20C0000000000000000000000000000000000000", minOwner: 1 };
+  return { ...c, rpc: rpcEnv("SUPERSTABLES_TEMPO_RPC", c.rpc, c.gateKey), minOwner: 1 };
 };
 
 const rpc = (url, method, params = []) => jsonRpc(url, method, params);
@@ -128,9 +128,10 @@ const RAILS = {
       mainnetKeyFix: c.testnet ? undefined : `superstables budget setup --rail tempo${flag} --key-store os-keychain`,
       keyAddress: evmKeyAddress, caseSensitive: false,
       rpc: async () => { const id = Number(await rpc(c.rpc, "eth_chainId")); if (id !== c.chainId) throw new Error(`chain id ${id}, expected ${c.chainId}`); return `chain id ${id}`; },
-      // The agent's access key spends the owner's pathUSD and fees come from the owner, so only the owner needs funds. A mainnet has no faucet.
+      // The agent's access key spends the owner's budget token (OUSD on Tempo, pathUSD on Moderato), its fees included, so only the
+      // owner needs funds. A mainnet has no faucet.
       balances: async (owner) => [
-        { who: "owner", addr: owner, token: "pathUSD", have: await erc20Balance(c.rpc, c.pathUsd, owner, PATH_USD_DECIMALS), need: c.minOwner, hint: c.faucet ? "superstables budget setup --rail tempo" + testnetArg() + " --fund-only uses the Moderato faucet" : "the owner adds pathUSD to this wallet (network fees are paid in it)" },
+        { who: "owner", addr: owner, token: c.token.symbol, have: await erc20Balance(c.rpc, c.token.address, owner, c.token.decimals), need: c.minOwner, hint: c.faucet ? "superstables budget setup --rail tempo" + testnetArg() + " --fund-only uses the Moderato faucet" : `the owner adds ${c.token.symbol} to this wallet (the budget and its network fees are paid in it)` },
       ],
     };
   },

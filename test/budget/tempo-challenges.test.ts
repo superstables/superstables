@@ -96,10 +96,10 @@ describe("precheckChallenge", () => {
 describe("signedPayment", () => {
   const transferWithMemo = (to: string, amount: bigint, memo: Hex) => ({ to: PATH_USD as Hex, data: encodeFunctionData({ abi: Abis.tip20, functionName: "transferWithMemo", args: [to as Hex, amount, memo] }) });
   const transfer = (to: string, amount: bigint) => ({ to: PATH_USD as Hex, data: encodeFunctionData({ abi: Abis.tip20, functionName: "transfer", args: [to as Hex, amount] }) });
-  const sign = (calls: { to: Hex; data: Hex }[], validBefore: number | null = nowS() + 25, feePayer = false) =>
+  const sign = (calls: { to: Hex; data: Hex }[], validBefore: number | null = nowS() + 25, feePayer = false, feeToken: string | null = PATH_USD) =>
     Account.fromSecp256k1(KEY, { access: OWNER }).signTransaction({
       type: "tempo", chainId: 42431, calls, gas: 100_000n, maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, nonce: 0n, nonceKey: 2n ** 256n - 1n,
-      ...(validBefore === null ? {} : { validBefore }), ...(feePayer ? { feePayer: true } : { feeToken: PATH_USD as Hex }),
+      ...(validBefore === null ? {} : { validBefore }), ...(feePayer ? { feePayer: true } : feeToken ? { feeToken: feeToken as Hex } : {}),
     } as any);
   const quoted = { recipient: RECIPIENT, primary: 10_000n, memo: MEMO, splits: [] as { recipient: string; amount: string; memo?: string }[] };
   const read = async () => (await import(new URL("../../budget/tempo/lib/signed.ts", import.meta.url).href)).signedPayment;
@@ -140,6 +140,18 @@ describe("signedPayment", () => {
     expect(signedPayment(await sign([transferWithMemo(RECIPIENT, 10_000n, MEMO), transfer(SPLIT, 1n)]), quoted).problem).toMatch(/2 calls, not the 1/);
     const withSplit = { ...quoted, primary: 9_000n, splits: [{ recipient: SPLIT, amount: "1000" }] };
     expect(signedPayment(await sign([transferWithMemo(RECIPIENT, 9_000n, MEMO)]), withSplit).problem).toMatch(/1 calls, not the 2 pathUSD transfers/);
+  });
+
+  it("refuses a payment whose own fee is in another token, or names none, unless the seller pays it", async () => {
+    // The keychain counts an account-paid fee against the key's limit on the fee token: a fee in a token the key has no
+    // limit on fails with SpendingLimitExceeded (Moderato, 19 November 2026), and none named falls to the owner's preference.
+    const signedPayment = await read();
+    const call = [transferWithMemo(RECIPIENT, 10_000n, MEMO)];
+    const OUSD = "0x20c0000000000000000000006a37DA5C996874BE";
+    expect(signedPayment(await sign(call, nowS() + 25, false, OUSD), quoted).problem).toBe(`it pays its network fee in ${OUSD.toLowerCase()}, not pathUSD`);
+    expect(signedPayment(await sign(call, nowS() + 25, false, null), quoted).problem).toBe("it names no fee token, so its network fee would not be paid in pathUSD");
+    expect(signedPayment(await sign(call, nowS() + 25, true), quoted).problem).toBe("");
+    expect(signedPayment(await sign(call, nowS() + 25, false, PATH_USD), quoted).problem).toBe("");
   });
 
   it("refuses a payment valid for more than 600 s, or with no expiry", async () => {
