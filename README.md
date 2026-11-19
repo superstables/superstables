@@ -78,7 +78,7 @@ Read the [security model](docs/security.md) before granting a budget: it says wh
 Install the CLI from npm:
 
 ```bash
-npm install -g @superstables/client@1.4.5
+npm install -g @superstables/client@1.4.6
 superstables --help
 superstables budget --help
 superstables seller credit
