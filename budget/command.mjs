@@ -3345,7 +3345,7 @@ async function find({ f, ctx }) {
   Object.assign(ctx, f.rail ? { rail: f.rail } : {}, f.chain ? { chain: f.chain } : {});
   const chainByNetwork = { ...Object.fromEntries(Object.entries(EVM_CHAINS).map(([k, c]) => [`eip155:${c.chainId}`, k])), ...Object.fromEntries(Object.values(TEMPO_CHAINS).map((c) => [`eip155:${c.chainId}`, c.key])), ...Object.fromEntries(Object.values(SOLANA_CHAINS).map((c) => [c.network, c.key])) };
   const r = await listSiteServices({ site: site.origin, chainByNetwork });
-  const any = "any seller URL works too: superstables budget preflight --rail R${testnetArg()} --url U reads its price, then buy";
+  const any = `any seller URL works too: superstables budget preflight --rail R${testnetArg()} --url U reads its price, then buy`;
   if (!r.ok) {
     log(`superstables budget: ${r.reason}`);
     return emit(1, { ...ctx, state: "failed", site: site.origin, services: r.absent ? [] : undefined, next: r.absent ? `no list to show; ${any}` : `check the network and ${site.origin}, or ${any}`, reason: r.reason });
