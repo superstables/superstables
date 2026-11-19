@@ -5,6 +5,7 @@ import { createIdentitySource } from './lock-identity.mjs';
 import { childStartedAt } from './child-identity.mjs';
 import { inspectProcess } from '../src/core/process-identity.mjs';
 import { basename, dirname, join } from 'node:path';
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 export const HEARTBEAT_MS = 15_000;
 const systemIdentity = createIdentitySource();
@@ -253,7 +254,7 @@ export function lockRecord(dir, op, options = {}) {
 }
 export function lockNext(lock, op, rail, chain) {
   if (lock.possiblyAlive) return operationBusy(op);
-  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail} --chain ${chain} --op ${op}. Stop and ask the owner to check it in their own terminal, outside the agent's sandbox. Agents must not clear operation locks. Never pay again for this op while its outcome is unknown`;
+  return `${lock.details}. Another process (buy or reconcile) may be working on this op; wait for its RESULT, then superstables budget reconcile --rail ${rail}${testnetArg()} --chain ${chain} --op ${op}. Stop and ask the owner to check it in their own terminal, outside the agent's sandbox. Agents must not clear operation locks. Never pay again for this op while its outcome is unknown`;
 }
 export function requireRecordLock(dir, op) {
   const lock = lockRecord(dir, op);

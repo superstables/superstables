@@ -6,7 +6,7 @@
 // The creation-time boundary allows a minute of clock skew in addition to the purchase identity check.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { finalityFor } from "../src/core/finality-policy.js";
-import { EVM_CHAINS } from "./evm/chains.mjs";
+import { EVM_CHAINS, EVM_DEFAULT_CHAIN } from "./evm/chains.mjs";
 import { DEFAULT_RPC, builtinRpc, jsonRpc, rpcFromEnv } from "./rpc.mjs";
 import { budgetChainKey } from "../src/core/owner-settings.js";
 import { siteText } from "./site.mjs";
@@ -76,7 +76,7 @@ export function settlementRpc(rail, chain) {
   if (rail === "solana") return rpcFromEnv("SUPERSTABLES_SOLANA_RPC", builtinRpc(rail, chain) ?? DEFAULT_RPC.solana, "read", key).url;
   // a chain the table does not hold now (a mainnet read in a testnet-only run): nothing is read in its place
   if (chain !== undefined && !EVM_CHAINS[chain]) return undefined;
-  return rpcFromEnv("B4_RPC", EVM_CHAINS[chain]?.rpc ?? EVM_CHAINS["base-sepolia"].rpc, "read", EVM_CHAINS[chain] ? key : "base-sepolia").url;
+  return rpcFromEnv("B4_RPC", EVM_CHAINS[chain]?.rpc ?? EVM_CHAINS[EVM_DEFAULT_CHAIN].rpc, "read", EVM_CHAINS[chain] ? key : EVM_DEFAULT_CHAIN).url;
 }
 
 const topicAddress = (t) => (typeof t === "string" && t.length === 66 ? `0x${t.slice(26)}`.toLowerCase() : null);

@@ -48,6 +48,7 @@ import { clearFileLock, inspectLockText, recoveryResult, paymentBusy } from '../
 import { groupAlive as groupOf, sameProcess } from "./procs.mjs";
 import { accountWaitingWords, cancelSiteRequest, readSiteRequest, siteText, siteWord, viewEvidence } from "./site.mjs";
 import { readCapped } from "./response.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 /** A lock younger than this is never taken over, whatever its processes look like (startup: the record is being written). */
 export const STARTUP_GRACE_MS = 30_000;
@@ -1365,7 +1366,7 @@ function abandoned(record, hostedCancelled = false) {
 
 /** The final answer for an approval that may have sent and has no RESULT of its own: unknown, exit 5, read the chain next. */
 function sentUnknown(record, reason) {
-  const status = `superstables budget status --rail ${record.rail}${record.chain ? ` --chain ${record.chain}` : ""}`;
+  const status = `superstables budget status --rail ${record.rail}${testnetArg()}${record.chain ? ` --chain ${record.chain}` : ""}`;
   return { code: 5, result: { ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "unknown", id: record.id, url: record.url, next: `${status}: read whether it landed before running this again`, reason } };
 }
 
@@ -1513,7 +1514,7 @@ export async function finishExpiredSetup(record) {
       before.hosted?.requestId !== h.requestId || recordMayHaveSent(before) || processesAlive(before) || startingUp(before) ? null : {
         code: 3, result: {
           ok: false, command: record.command, rail: record.rail, chain: record.chain, state: "refused_precheck", id: record.id, url: record.url,
-          reason: "the approval link expired on the site without a completed approval", next: `superstables budget setup --rail ${record.rail}${record.rail === "evm" ? ` --chain ${record.chain}` : ""} --hosted --site ${h.site}`,
+          reason: "the approval link expired on the site without a completed approval", next: `superstables budget setup --rail ${record.rail}${testnetArg()}${record.rail === "evm" ? ` --chain ${record.chain}` : ""} --hosted --site ${h.site}`,
         },
       }, { strict: record });
     return stored;

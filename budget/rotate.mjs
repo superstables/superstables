@@ -21,6 +21,7 @@
 //                                                  live: the chain shows authority still standing
 //   confirmSweep(chain, tx) -> { code, result }    solana: whether a sweep's recorded signatures are finalized (state final, pending,
 //                                                  failed or not_found); sweep reports final: true only for finalized transfers
+import { testnetArg } from "../src/core/mainnet-policy.js";
 const same = (rail, a, b) => (rail === "solana" ? a === b : String(a).toLowerCase() === String(b).toLowerCase());
 const FINAL_OP = new Set(["settled", "failed", "not_found"]);
 
@@ -79,7 +80,7 @@ export async function rotate({ rail, currentAgent, existing, chains, steps, plan
     code,
     fields: {
       state: "incomplete", oldAgent, retired: true, chains: summary(record), reason: `${step}${c ? ` on ${c}` : ""} did not finish: ${why}`,
-      next: `fix what the output above says, then run superstables budget rotate --rail ${rail} again; it continues where it stopped`,
+      next: `fix what the output above says, then run superstables budget rotate --rail ${rail}${testnetArg()} again; it continues where it stopped`,
     },
   });
 
@@ -88,7 +89,7 @@ export async function rotate({ rail, currentAgent, existing, chains, steps, plan
     code: 5,
     fields: {
       state: "incomplete", oldAgent, retired: true, chains: summary(record), reason: `${what} on ${[].concat(chains).join(" and ")} is not final: ${why}`,
-      next: `${[].concat(chains).map((c) => `superstables budget status --rail ${rail}${rail === "evm" ? ` --chain ${c}` : ""}`).join(" and ")} shows when it is final. Then run superstables budget rotate --rail ${rail} again: it checks the transactions it recorded and does not send them again. Nothing was replaced`,
+      next: `${[].concat(chains).map((c) => `superstables budget status --rail ${rail}${testnetArg()}${rail === "evm" ? ` --chain ${c}` : ""}`).join(" and ")} shows when it is final. Then run superstables budget rotate --rail ${rail}${testnetArg()} again: it checks the transactions it recorded and does not send them again. Nothing was replaced`,
     },
   });
 
@@ -234,7 +235,7 @@ export async function rotate({ rail, currentAgent, existing, chains, steps, plan
   // an old key that lived in the OS keychain stays there, like a retired key file: what is left at the retired address
   // (gas, a late deposit) can still be moved by hand
   const hosted = [...new Set(keys.map((c) => record.chains[c].hosted).filter(Boolean))];
-  const grants = keys.map((c) => `superstables budget grant --rail ${rail}${rail === "evm" ? ` --chain ${c}` : ""} --amount A`);
+  const grants = keys.map((c) => `superstables budget grant --rail ${rail}${testnetArg()}${rail === "evm" ? ` --chain ${c}` : ""} --amount A`);
   const nothingSent = keys.filter((c) => record.chains[c].sweepSentNothing);
   return {
     code: 0,

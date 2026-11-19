@@ -44,7 +44,7 @@ import { ALLOW_SITE_ENV, DEFAULT_SITE, agentTokenScrubber, chosenSite, isSiteReq
 import { purchaseReportsOn, reportSettled } from "./purchase-report.mjs";
 import { RECOVERY_CHAINS, adviseOrder, atomicOf, freezeOp, nextWait, notThisOrder, provesUnsigned, readRecord, recordOwns, recoverOrder } from "./recovery.mjs";
 import { customRpc, ownerRpcNext, ownerRpcProblem, refusedRpcEnv } from "./rpc.mjs";
-import { TESTNET_FLAG, mainnetOffReason, testnetOffReason } from "../src/core/chain-gate.js";
+import { TESTNET_FLAG, mainnetOffReason, networkMode, testnetOffReason, testnetRun } from "../src/core/chain-gate.js";
 import { shippedManifest } from "../src/core/mainnet-policy.js";
 import { finalWords } from "../src/core/finality-policy.js";
 import { ownerSettingsProblem, shownUrl, siteFor } from "../src/core/owner-settings.js";
@@ -53,6 +53,7 @@ import { CHAIN_ENV, TEMPO_CHAINS, TEMPO_CHAIN_KEYS, TEMPO_DEFAULT_CHAIN } from "
 import { SOLANA_CHAINS, SOLANA_CHAIN_KEYS, SOLANA_DEFAULT_CHAIN } from "./solana/chains.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
 import { ONCE_CHAINS, ONCE_MAINNETS, RECORD_GONE, moneyLineFor, networkOf, networkLineAfter, abandonOnce, listOnceServices, mayBeUnpaid, messageForOwner, showFirst, startOnce, unshownNext, waitOnce } from "./once.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 // The rail scripts run in their own folders: a relative SUPERSTABLES_HOME would point each of them somewhere else.
@@ -912,6 +913,9 @@ function parse(argv) {
     const off = mainnetOffReason();
     if (off) return refuse({ command: cmd }, `--mainnet is refused: ${off}`);
   }
+  // an invalid SUPERSTABLES_TESTNET closes every chain: refused here, once, before anything is read
+  const mode = networkMode();
+  if ("error" in mode) return badInput({ command: cmd }, mode.error);
   // SUPERSTABLES_ALLOW_SITE used to let an environment variable allow another approval site: the owner's settings do that now
   if (process.env[ALLOW_SITE_ENV]?.trim()) log(`superstables budget: warning: ${ALLOW_SITE_ENV} is no longer read. To use another approval site, the owner runs superstables owner settings site <origin> in their own terminal.`);
   // The owner's settings file, when there is one, must be usable by every command that depends on it. A file that exists and
@@ -1066,7 +1070,7 @@ function parse(argv) {
     for (const k of ["method", "body"]) if (f[k] !== undefined && !(k === "method" && f.method.toUpperCase() === "GET")) badInput(ctx, `evm preflight is GET only (no --${k})`);
   }
   if (cmd === "rotate") {
-    if (f.rail === "tempo") badInput(ctx, "rotate is for evm and solana; on tempo, add a new key with superstables budget setup --rail tempo --agent LABEL");
+    if (f.rail === "tempo") badInput(ctx, `rotate is for evm and solana; on tempo, add a new key with superstables budget setup --rail tempo${testnetArg()} --agent LABEL`);
     if (rest.some((a) => a === "--chain" || a.startsWith("--chain="))) badInput(ctx, "rotate covers every chain the key is set up on; --chain is not taken");
   }
   if (cmd === "recover" && f.rail !== "evm") badInput(ctx, "recover is EVM only (tempo and solana have no stranded funds: the agent never holds the budget)");
@@ -1539,12 +1543,12 @@ function exitFor(cmd, state, delivered) {
   }
 }
 const nextFor = (state, delivered, f, cmd) => {
-  const rc = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
+  const rc = `superstables budget reconcile --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain} --op ${f.op}`;
   if (state === "settled") return delivered === true ? "none" : "paid but not delivered: never pay again; report the tx to the seller";
   if (state === "unknown") return `${rc} (never pay again for this op)`;
   if (state === "refused_precheck") return "respect the refusal; nothing was signed; never raise --max to get around it";
   if (state === "not_found") return "no funds moved; buy again with a new --op if you still want it";
-  if (state === "refused_chain" || state === "failed") return `read reason; do not retry blindly; superstables budget status --rail ${f.rail}`;
+  if (state === "refused_chain" || state === "failed") return `read reason; do not retry blindly; superstables budget status --rail ${f.rail}${chainFlag(f)}`;
   return "none";
 };
 
@@ -1577,7 +1581,7 @@ function normalize(cmd, f, rail, code) {
   const amount = state === "unknown" ? null : nothingMoved ? "0" : rail.debit == null ? null : String(rail.debit);
   return {
     code: exitFor(cmd, state, delivered),
-    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, agreement: rail.agreement, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : state === "not_found" && f.rail === "tempo" && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
+    fields: { ...base, state, paid, delivered, chain_final: rail.chain_final ?? null, amount, remaining: rail.remaining ?? null, tx, agreement: rail.agreement, ...responseOf(rail), next: state === "refused_precheck" ? refusalNext(f, rail) : rail.state === "unknown" && ownWayOut(rail) ? neverPayAgain(rail.next) : (state === "failed" || state === "refused_chain") && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : state === "not_found" && f.rail === "tempo" && typeof rail.next === "string" && rail.next && rail.next !== "none" ? rail.next : rail.chain_final === false && state === "settled" ? `Run superstables budget reconcile --rail ${f.rail}${testnetArg()}${f.rail === "evm" ? ` --chain ${f.chain}` : ""} --op ${f.op} later to check finality. Do not pay again.${delivered === false ? " Contact the seller." : ""}` : cmd === "buy" && state === "settled" && delivered === true ? afterPurchase({ amount, remaining: rail.remaining ?? null, unit: unitOf(f) }) : nextFor(state, delivered, f, cmd), reason: rail.reason, ...(cmd === "buy" && state === "refused_precheck" ? budgetSpent(f, rail) : {}) },
   };
 }
 
@@ -1656,7 +1660,7 @@ async function preflight({ f, ctx }) {
   // the seller's payee enters the command only when it is an address on this rail (buy checks --pay-to the same way);
   // anything else a rail let through stays a placeholder
   const payTo = RAILS[f.rail].addr.test(String(rr.payTo ?? "")) ? rr.payTo : "<payTo from preflight>";
-  const buy = `superstables budget buy --rail ${f.rail} --chain ${f.chain} --url ${q(f.url)}${req} --max <your ceiling> --pay-to ${payTo} --op <new id>${agentFlag(f)}`;
+  const buy = `superstables budget buy --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain} --url ${q(f.url)}${req} --max <your ceiling> --pay-to ${payTo} --op <new id>${agentFlag(f)}`;
   const failed = rr.reason ?? (r.code === 0 && (rr.state === "ok" || rr.state === "quoted") && price === null ? "the rail's answer gives no price as a number" : `${rr.checks?.failed ?? "some"} preflight check(s) failed`);
   emit(ok ? 0 : r.code === 2 ? 2 : 1, {
     ...ctx, state: ok ? "ok" : "failed", amount: ok ? rr.price : null, payTo: ok ? rr.payTo : null, offer, url: f.url,
@@ -1718,7 +1722,10 @@ async function status({ f, ctx }) {
   emit(0, { ...ctx, state: "ok", remaining: s.remaining, expiry: s.expiry, revoked: s.revoked, ...tempoFields, atRisk: s.atRisk, lastOwnerAction: s.lastOwnerAction ?? null, owner: owner ?? undefined, next, ...(s.unconfirmed ? { reason: s.unconfirmed } : {}) });
 }
 
-const chainFlag = (f) => (f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`);
+/** --testnet when a run's chain is a testnet: a printed command without it would run on a mainnet. */
+const testnetFlag = (f) => (chainFacts(f.rail, f.chain).testnet ? " --testnet" : "");
+/** The flags after --rail R that name the chain a command ran on: --testnet on a testnet, and --chain unless it is the default. */
+const chainFlag = (f) => `${testnetFlag(f)}${f.chain === RAILS[f.rail].chain ? "" : ` --chain ${f.chain}`}`;
 /** tempo: the named agent key (--agent LABEL) a command was run with, so the next step names the same key. */
 const agentFlag = (f) => (f.rail === "tempo" && f.agent ? ` --agent ${f.agent}` : "");
 /** The status command for this rail, chain and (tempo) agent label: what a caller reads after an uncertain owner result. */
@@ -1740,7 +1747,7 @@ function journalAnswer(f, ctx) {
   log(`superstables budget: operation ${f.op} is already ${state}. Not paying again.`);
   const tx = (j?.tx ?? j?.settleTx) ? { settle: j.tx ?? j.settleTx } : {};
   // that purchase may have paid: its outcome is unknown until reconcile reads the chain, never a refusal before signing
-  if (pending) return () => emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${state}` });
+  if (pending) return () => emit(5, { ...ctx, op: f.op, state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx, next: `superstables budget reconcile --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason: `op_already_${state}` });
   return () => emit(3, { ...ctx, op: f.op, state: "refused_precheck", paid: true, delivered: j.delivered ?? null, amount: null, remaining: null, tx, next: "none: already settled; use a new --op for a new purchase", reason: "op_already_settled" });
 }
 
@@ -1770,7 +1777,7 @@ const NOT_THIS_ORDER = {
  * so it is unknown and exit 5. It is never claimed as this order's payment, and nothing of the order is paid again.
  */
 function collisionResult(f2, c2, why = "another_request") {
-  return { code: 5, fields: { ...c2, command: "buy", state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f2.rail} --chain ${f2.chain} --op ${f2.op} (never pay again for this order)`, reason: `operation ${f2.op} has ${NOT_THIS_ORDER[why] ?? NOT_THIS_ORDER.another_request}, so this order's outcome is unknown` } };
+  return { code: 5, fields: { ...c2, command: "buy", state: "unknown", paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f2.rail}${testnetFlag(f2)} --chain ${f2.chain} --op ${f2.op} (never pay again for this order)`, reason: `operation ${f2.op} has ${NOT_THIS_ORDER[why] ?? NOT_THIS_ORDER.another_request}, so this order's outcome is unknown` } };
 }
 
 /** One attempt of a recovered order: the ordinary buy on another rail, chain or seller, under the attempt's op, answered instead of emitted. */
@@ -1940,7 +1947,7 @@ function originalAnswer(f, ctx) {
   if (said) return said();
   const reason = `operation ${f.op} may have signed on its own; its outcome is unknown`;
   log(`superstables budget: ${reason}. Not paying again.`);
-  return emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason });
+  return emit(5, { ...ctx, op: f.op, state: "unknown", final: false, paid: null, delivered: null, amount: null, remaining: null, tx: {}, next: `superstables budget reconcile --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain} --op ${f.op} (never pay again for this op)`, reason });
 }
 
 /** The answer when auto recovery could not mark an op of the order: unknown, final: false, never "not paid". */
@@ -2155,7 +2162,7 @@ async function emitReported(f, code, fields) {
 async function unlock({ f, ctx }) {
   if (f["agent-key"]) return unlockAgentKey({ f, ctx });
   if (!f.op) return unlockPayment({ f, ctx });
-  const next = `superstables budget reconcile --rail ${f.rail} --chain ${f.chain} --op ${f.op}`;
+  const next = `superstables budget reconcile --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain} --op ${f.op}`;
   const ownerNext = operationBusy(f.op);
   const refuse = reason => emit(3, { ...ctx, op: f.op, state: "refused_precheck", reason, next: ownerNext });
   if (!f.confirm) return refuse("confirmation_required");
@@ -2356,7 +2363,7 @@ async function grant({ f, ctx }) {
     log(`  sellers:   ${f.sellers ?? "any"}`);
     log(`  Planned maximum by expiry: ${decimal(micro(f.amount) * BigInt(windows))} ${unit} (${windows} window${windows === 1 ? "" : "s"})`);
     log(`  enforced by the chain: cap and expiry, plus a period and seller list when requested. No per-payment maximum. Fees come out of the same limit.`);
-    log(`  a revoked or expired key can never be granted again: make a new one with superstables budget setup --rail tempo --agent LABEL.`);
+    log(`  a revoked or expired key can never be granted again: make a new one with superstables budget setup --rail tempo${chainFlag(f)} --agent LABEL.`);
   } else if (f.rail === "solana") {
     log(`  cap:       ${f.amount} USDC delegated to the agent in total for this grant (no reset)`);
     log(`  Available now: min(${f.amount}, the owner's USDC balance). There is no automatic expiry. Later deposits remain exposed while allowance remains.`);
@@ -2439,7 +2446,7 @@ async function recover({ f, ctx }) {
   const revocation = rr && (rr.selfRevokeTx || rr.ownerRevokeTx || typeof rr.revokeFinal === "boolean")
     ? { final: rr.revokeFinal === true, selfTx: rr.selfRevokeTx ?? null, selfBlock: rr.selfRevokeBlock ?? null, ownerTx: rr.ownerRevokeTx ?? null, ownerBlock: rr.ownerRevokeBlock ?? null } : undefined;
   const whose = rr?.ownerRevokeFinal === false || rr?.ownerRevokeTx ? "the owner's revoke" : "the agent's own revoke";
-  emit(o.code, { ...ctx, state: o.state, ...(revokeNotFinal ? { final: false } : {}), ...(typeof rr?.ownerRevokeFinal === "boolean" ? { ownerRevokeFinal: rr.ownerRevokeFinal } : {}), ...(revocation ? { revocation } : {}), proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? (revokeNotFinal ? `${statusCommand(f)} later: ${whose} is final when status says so` : "none") : ownerNext(o, rr, `superstables budget status --rail ${f.rail}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
+  emit(o.code, { ...ctx, state: o.state, ...(revokeNotFinal ? { final: false } : {}), ...(typeof rr?.ownerRevokeFinal === "boolean" ? { ownerRevokeFinal: rr.ownerRevokeFinal } : {}), ...(revocation ? { revocation } : {}), proof: o.proof, amount: rr?.swept ?? null, remaining: rr?.allowance ?? null, tx, url: approvalUrl, next: o.code === 0 ? (revokeNotFinal ? `${statusCommand(f)} later: ${whose} is final when status says so` : "none") : ownerNext(o, rr, `superstables budget status --rail ${f.rail}${testnetArg()}; then superstables budget recover again`), reason: o.code === 0 ? undefined : o.reason ?? `the rail script exited ${r.code}` });
 }
 
 async function setup({ f, ctx }) {
@@ -2447,8 +2454,8 @@ async function setup({ f, ctx }) {
     log("\nsetup --fund-only on tempo: tops up the owner on record from the Moderato faucet (test pathUSD). No page, nothing to sign.");
     const r = await run(railCommand("setup", f));
     const rr = railResult(r.stdout);
-    if (r.code !== 0 || !rr) return emit(r.code === 3 ? 3 : 1, { ...ctx, state: rr?.state ?? "failed", owner: rr?.owner, next: rr?.next ?? "read the output above, then rerun superstables budget doctor --rail tempo", reason: rr?.reason ?? `the setup script exited ${r.code} without a RESULT line` });
-    return emit(0, { ...ctx, state: "ok", owner: rr.owner, next: rr.next ?? "superstables budget doctor --rail tempo" });
+    if (r.code !== 0 || !rr) return emit(r.code === 3 ? 3 : 1, { ...ctx, state: rr?.state ?? "failed", owner: rr?.owner, next: rr?.next ?? `read the output above, then rerun superstables budget doctor --rail tempo${chainFlag(f)}`, reason: rr?.reason ?? `the setup script exited ${r.code} without a RESULT line` });
+    return emit(0, { ...ctx, state: "ok", owner: rr.owner, next: rr.next ?? `superstables budget doctor --rail tempo${chainFlag(f)}` });
   }
   if (f.hosted) {
     log(`\nsetup on ${f.rail} (${f.chain}), hosted on ${f.site}: the agent key stays on this machine; the owner adds this agent to their account there, signed in with their wallet. No owner key is created.`);
@@ -2482,9 +2489,9 @@ async function fundAgent({ f, ctx }) {
   const r = await run(railCommand("fund-agent", f));
   const rr = railResult(r.stdout);
   const o = ownerOutcome(r.code, rr);
-  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
+  if (o.code !== 0) return emit(o.code, { ...ctx, state: o.state, proof: o.proof, tx: rr?.tx ? { fundAgent: rr.tx } : {}, url: approvalUrl, next: ownerNext(o, rr, `superstables budget doctor --rail ${f.rail}${chainFlag(f)}`), reason: o.reason ?? `the fund-agent script exited ${r.code}` });
   if (o.state === "landed") return emit(0, { ...ctx, state: "landed", final: false, amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: rr?.next ?? `landed, not final yet: the transfer is final once its block is. Start the next owner command (grant) only then. superstables budget doctor --rail ${f.rail}${chainFlag(f)} reads the balance` });
-  emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? "superstables budget doctor --rail solana, then superstables budget grant --rail solana --amount A" : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
+  emit(0, { ...ctx, state: "settled", amount: rr?.sent ?? null, tx: { fundAgent: rr?.tx ?? null }, url: approvalUrl, next: f.rail === "solana" ? `superstables budget doctor --rail solana${chainFlag(f)}, then superstables budget grant --rail solana${chainFlag(f)} --amount A` : `superstables budget doctor --rail evm${chainFlag(f)}, then superstables budget grant --rail evm${chainFlag(f)} --amount A` });
 }
 
 // ---- rotate: replace the agent key and retire the old one (rotate.mjs holds the order) --------------------------------
@@ -2653,7 +2660,7 @@ async function rotateLocked({ f, ctx }) {
     if (!existsSync(agentKeyFile(rail))) {
       try { moved = unfinishedRotation(rail, null); } catch (err) { return refusal(err.message, err.next ?? "repair that file or move it away, then run rotate again. Nothing was sent"); }
     }
-    if (!moved) return refusal(current?.reason ?? `there is no agent key to rotate (${agentKeyFile(rail)})`, `superstables budget setup --rail ${rail} creates one. Nothing was changed`);
+    if (!moved) return refusal(current?.reason ?? `there is no agent key to rotate (${agentKeyFile(rail)})`, `superstables budget setup --rail ${rail}${testnetArg()} creates one. Nothing was changed`);
     existing = moved;
     current = { agent: moved.oldAgent };
     log(`superstables budget: the key file of ${moved.oldAgent} was already moved to ${retiredKeyFile(rail, moved.oldAgent)}: finishing that rotation`);
@@ -2675,7 +2682,7 @@ async function rotateLocked({ f, ctx }) {
   const names = (c) => { const a = publicAgent({ rail, chain: c }); return Boolean(a) && sameAgent(rail, a, oldAgent); };
   for (const c of RAILS[rail].chains) if (publicAgent({ rail, chain: c }) && !names(c)) log(`superstables budget: ${rail} ${c} names another agent (${publicAgent({ rail, chain: c })}): left as it is`);
   const chains = [...new Set([...Object.keys(existing?.chains ?? {}), ...RAILS[rail].chains.filter(names)])];
-  if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail} connects it to an owner first. Nothing was changed`);
+  if (!chains.length) return refusal(`no ${rail} chain's public file names the agent key ${current.agent}`, `superstables budget setup --rail ${rail}${testnetArg()} connects it to an owner first. Nothing was changed`);
   // recover, which rotate runs after it retires the old address, refuses this key file, so the rotation would stop half done
   if (rail === "evm" && !existing && existsSync(agentKeyFile(rail))) {
     const { staleOwnerLine } = await import("./evm-owner-line.mjs");
@@ -2789,7 +2796,7 @@ async function ownerGate({ cmd, f, ctx }) {
     const disagree = ownerFilesDisagree(f);
     if (disagree) {
       const site = recordedSite({ rail: f.rail, chain: f.chain }, "read");
-      return emit(3, { ...ctx, state: "refused_precheck", reason: `${disagree}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`, next: `superstables budget setup --rail ${f.rail}${site ? ` --hosted --site ${site}` : ""} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one` });
+      return emit(3, { ...ctx, state: "refused_precheck", reason: `${disagree}. revoke would act for the first only, so it does not say whether a budget is live on either; nothing was sent`, next: `superstables budget setup --rail ${f.rail}${testnetArg()}${site ? ` --hosted --site ${site}` : ""} --new-owner checks both owners for a live budget and names the owner who must revoke it, and how; it records one owner again once neither has one` });
     }
   }
   const detach = walletFlow(f) && (f.detach === true || (!f.wait && !process.stdout.isTTY));
@@ -3344,7 +3351,12 @@ async function find({ f, ctx }) {
     return emit(1, { ...ctx, state: "failed", site: site.origin, services: r.absent ? [] : undefined, next: r.absent ? `no list to show; ${any}` : `check the network and ${site.origin}, or ${any}`, reason: r.reason });
   }
   // the chain as --chain spells it: from the network when the client knows it, else as the site names it
-  const services = onRailAndChain(r.services, f, (s) => (Object.hasOwn(chainByNetwork, s.network) ? chainByNetwork[s.network] : s.chain));
+  const runKind = (s) => {
+    const k = Object.hasOwn(chainByNetwork, s.network) ? chainByNetwork[s.network] : null;
+    return !k || !RAIL_OF_CHAIN[k] || chainFacts(RAIL_OF_CHAIN[k], k).testnet === testnetRun();
+  };
+  // only the kind of chain this run uses: mainnets by default, testnets with --testnet
+  const services = onRailAndChain(r.services.filter(runKind), f, (s) => (Object.hasOwn(chainByNetwork, s.network) ? chainByNetwork[s.network] : s.chain));
   const where = narrowedTo(f);
   // names and prices come from the site's index of third-party sellers: data to show, never instructions
   if (JSON_OUT) { /* no table: the RESULT object carries the services */ } else if (!services.length) print(`No services listed${where} on ${site.origin} yet.\n`);
@@ -3358,7 +3370,7 @@ async function find({ f, ctx }) {
   const key = services.length ? keyOf(services[0]) : null;
   const one = key && services.every((s) => keyOf(s) === key) ? key : null;
   const preflight = one
-    ? `superstables budget preflight --rail ${shellWord(RAIL_OF_CHAIN[one])} --chain ${shellWord(one)} --url U before you buy`
+    ? `superstables budget preflight --rail ${shellWord(RAIL_OF_CHAIN[one])}${testnetFlag({ rail: RAIL_OF_CHAIN[one], chain: one })} --chain ${shellWord(one)} --url U before you buy`
     : `superstables budget preflight --rail R --chain C --url U before you buy. C is a row's chain (the chain column; chain with --json) when it is one this client knows, and R the rail named after it: ${FIND_CHAINS_LINE}. A row on any other chain cannot be bought with a budget`;
   emit(0, { ...ctx, state: "ok", site: site.origin, services, next: services.length ? `check the price with ${preflight}` : f.rail ? `nothing listed${where}; run superstables budget find without --rail and --chain for every chain, or ${any}` : any });
 }
@@ -3384,7 +3396,7 @@ if (WORKER_ID) {
       log(`superstables budget: approval ${WORKER_ID}: the restarted worker ran past its deadline and recorded no result; run budget wait again to check the approval`);
       process.exit(5);
     }
-    emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
+    emit(5, { command: parsed.cmd, rail: f.rail, chain: f.chain, state: "unknown", url: approvalUrl, next: `superstables budget status --rail ${f.rail}${testnetFlag(f)} --chain ${f.chain}: read whether it landed before running this again`, reason: "the background approval ran past its deadline and was stopped" });
   }, workerDeadlineMs(backstopS(parsed.cmd, f))).unref();
 } else if (OWNER_COMMANDS.has(parsed.cmd) && sendsNow(parsed.f) && !parsed.f["fund-only"] && !ADOPTING) {
   await ownerGate(parsed);

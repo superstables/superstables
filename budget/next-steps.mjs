@@ -1,5 +1,6 @@
 // What a command tells the agent and the owner to do next. Pure: the dispatcher passes the values.
 import { siteName } from "./site.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 /**
  * After a purchase that settled and was delivered: "none" while the budget left covers another purchase at the same price;
@@ -24,12 +25,12 @@ export function afterPurchase({ amount, remaining, unit }) {
 export function ownerCheck({ rail, chain, owner, site }) {
   if (!site) {
     return {
-      next: `the owner on record is now ${owner}: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing, and run superstables budget setup --rail ${rail} --chain ${chain} --new-owner with the owner present`,
+      next: `the owner on record is now ${owner}: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing, and run superstables budget setup --rail ${rail}${testnetArg()} --chain ${chain} --new-owner with the owner present`,
       words: `OWNER CONNECTED: ${owner}\n  Check that this is your own wallet's address. If it is not, someone else completed setup: grant nothing, and run setup --new-owner yourself.`,
     };
   }
   const host = siteName(site);
-  const again = `superstables budget setup --rail ${rail} --chain ${chain} --hosted --site ${site} --new-owner`;
+  const again = `superstables budget setup --rail ${rail}${testnetArg()} --chain ${chain} --hosted --site ${site} --new-owner`;
   return {
     next: `the owner on record is now ${owner}, the ${host} account this agent was added to: the owner checks that this is their own wallet's address. If it is not, stop: grant nothing. The agent stays on that account until it is removed on that account's page on ${host}; then run ${again} with the owner present`,
     words: `AGENT ADDED to the ${host} account ${owner}\n  Check that this is your own wallet's address. If it is not, someone else added this agent to their account: grant nothing. Once the agent is removed on that account's page on ${host}, run ${again} yourself.`,

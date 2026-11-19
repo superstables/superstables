@@ -88,6 +88,11 @@ export function testnetRun(env) {
   return !("error" in m) && m.testnet;
 }
 
+/** What a printed command adds so it runs on the same kind of chain as this run: " --testnet" in a testnet-only run, else "". */
+export function testnetArg(env) {
+  return testnetRun(env) ? " --testnet" : "";
+}
+
 /**
  * Why mainnet is refused whatever the chain, in words, or "" when it is open (the default). Every refusal of a mainnet
  * asks this. An invalid TESTNET_ENV refuses too.

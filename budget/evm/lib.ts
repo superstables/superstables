@@ -27,6 +27,7 @@ import { mainnetSendRefusal } from "../../src/core/mainnet-spend.js";
 import { agreeAtFinalEvm, agreementWords as engineWords, endpointSetErrorWords } from "../../src/core/rpc-quorum.mjs";
 import { finalityFor, finalWords } from "../../src/core/finality-policy.js";
 import { rpcPause, rpcWaitMs } from "../rpc-pause.mjs";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 export { CFG, type GasOp };
 export const CHAIN_ID = CFG.chainId;
@@ -160,8 +161,8 @@ export const agentEnv = (): Record<string, string> => {
 export const publicEnv = () => parseLines(PUBLIC_ENV);
 export function need(env: Record<string, string>, k: string, file: string): string {
   if (!env[k]) {
-    console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm creates the agent key and the public file)`);
-    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" }));
+    console.error(`error: missing ${k} in ${file} (superstables budget setup --rail evm${testnetArg()} creates the agent key and the public file)`);
+    process.exit(emit(basename(process.argv[1] ?? "unknown").replace(/\.(?:ts|mjs)$/, ""), 1, { state: "failed", reason: `missing ${k} in ${file}`, next: "run superstables budget setup --rail evm" + testnetArg() }));
   }
   return env[k];
 }
@@ -324,7 +325,7 @@ export function gasWords(g: GasNeed, what: string, extra = ""): string {
 export function fundAgentNext(g: GasNeed): string {
   const byDefault = parseUnits((EVM_CHAINS as Record<string, any>)[CFG.key].doctor.fundAgent, GAS.decimals);
   const short = g.need - g.have;
-  return `owner: superstables budget fund-agent --rail evm --chain ${CFG.key}${short > byDefault ? ` --amount ${gasRound(short, "up")}` : ""}`;
+  return `owner: superstables budget fund-agent --rail evm${testnetArg()} --chain ${CFG.key}${short > byDefault ? ` --amount ${gasRound(short, "up")}` : ""}`;
 }
 
 /** The agent cannot pay for this transaction and what a failure would need after it. Nothing was signed. */

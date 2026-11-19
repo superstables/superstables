@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 import { Command, CommanderError, InvalidArgumentError, Option } from "commander";
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { isAddress, networkWords } from "../core/chain.js";
-import { TESTNET_FLAG, mainnetOffReason } from "../core/chain-gate.js";
+import { TESTNET_FLAG, mainnetOffReason, networkMode } from "../core/chain-gate.js";
 import { catalogue, findServices, getService, resolveRequest } from "../core/discovery.js";
 import {
   DEFAULT_DEMO_SERVICE_PORT,
@@ -110,6 +110,7 @@ program
     "Find services that charge per request, quote them, and pay them with stablecoins from a wallet " +
       "the owner controls. Mainnet by default; --testnet uses the testnets.",
   )
+  .option("--testnet", "use the testnets and test tokens for this run (SUPERSTABLES_TESTNET=1); mainnets are the default")
   .option("--home <dir>", "where this client keeps its state (default: SUPERSTABLES_HOME or ~/.superstables)")
   .addOption(
     new Option(
@@ -130,6 +131,12 @@ program
   // --home and --wallet have to win before anything reads a path or builds a signer, so they
   // are applied to the environment before any action runs.
   .hook("preAction", (thisCommand) => {
+    // an invalid SUPERSTABLES_TESTNET closes every chain: refused once, before anything is read
+    const mode = networkMode();
+    if ("error" in mode) {
+      console.error(`superstables: ${mode.error}. Nothing was read or sent.`);
+      process.exit(2);
+    }
     const home = thisCommand.opts().home as string | undefined;
     if (home) process.env.SUPERSTABLES_HOME = resolve(home);
     const wallet = thisCommand.opts().wallet as WalletMode | undefined;

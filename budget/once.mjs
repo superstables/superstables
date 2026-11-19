@@ -84,7 +84,7 @@ export function onceClosed(net) {
 /** The rail and chain flags buy-once accepts: each names one of ONCE_NETWORKS. */
 export const ONCE_CHAINS = Object.fromEntries(Object.values(ONCE_NETWORKS).map((n) => [n.chain, n.rail]));
 const networkOfChain = (chain) => Object.values(ONCE_NETWORKS).find((n) => n.chain === chain);
-export const TESTNET_LINE = "This is a testnet: it uses test tokens.";
+export const TESTNET_LINE = "This uses test tokens.";
 /**
  * The mainnet of the manifest a record is on (a budget command's, or buy-once's), or undefined on a testnet. Read from
  * the manifest, not the chain table, so a record made on a mainnet still says so in a testnet-only run.

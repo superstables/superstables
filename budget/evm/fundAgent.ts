@@ -9,6 +9,7 @@ import { type Hex } from "viem";
 import { SYM, CFG, GAS, emit, arg, gasFmt, OWNER_KEY_FILE, ownerCtx, ownerPlanCtx, nativeBalance, usdcBalance, usdc, readUntil, sendNative, usageError, assertRpcChain, tx, finalityOf, thatTakes, usuallyWords } from "./lib.ts";
 import { fundInWallet, fundValue, DEFAULT_FUND_AMOUNT, chainFlag } from "./owner.ts";
 import { requestFact, resuming } from "../owner-page.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 const amt = arg("amount") ?? DEFAULT_FUND_AMOUNT;
 let value = 0n;
@@ -21,7 +22,7 @@ console.log(`${CFG.label}: owner ${gasFmt(ob)} ${GAS.symbol} (native), agent ${g
 // a resumed worker asks nothing again, and the owner has spent the gas it is checking
 if (ob < value && !resuming()) {
   console.log(`REFUSED: the owner has less than ${amt} ${GAS.symbol}`);
-  process.exit(emit("fundAgent", 3, { state: "refused_precheck", reason: `the owner ${p.owner} has less than ${amt} ${GAS.symbol}`, next: `fund the owner first (superstables budget doctor --rail evm names the faucet)` }));
+  process.exit(emit("fundAgent", 3, { state: "refused_precheck", reason: `the owner ${p.owner} has less than ${amt} ${GAS.symbol}`, next: `fund the owner first (superstables budget doctor --rail evm${testnetArg()} names the faucet)` }));
 }
 
 let hash: Hex;

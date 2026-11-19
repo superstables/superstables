@@ -24,7 +24,7 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import { ensurePrivateDir, privateDirProblem, syncDirectory } from "./private-dir.mjs";
 import { isSolanaAddress, verifyEd25519 } from "./ed25519-verify.mjs";
-import { mainnetChains, shippedManifest } from "./mainnet-policy.js";
+import { mainnetChains, shippedManifest, testnetRun } from "./mainnet-policy.js";
 
 export const OWNER_SETTINGS_VERSION = 1;
 /** Production: the only approval site with no setting. superstables.com (the apex) is the same site. */
@@ -326,11 +326,12 @@ export function siteFor(purpose, candidate, options = {}) {
 
 /**
  * The settings key of a budget rail and chain: the core chain table's key ("base-sepolia", "tempo-moderato",
- * "solana-devnet"). A Tempo or Solana mainnet is its manifest key ("tempo", "solana"); a rail with no chain is its testnet.
+ * "solana-devnet"). A Tempo or Solana mainnet is its manifest key ("tempo", "solana"); a rail with no chain is the run's
+ * default: its mainnet, or its testnet in a testnet-only run (--testnet).
  */
 export function budgetChainKey(rail, chain) {
-  if (rail === "tempo") return chain === undefined || chain === "moderato" ? "tempo-moderato" : chain;
-  if (rail === "solana") return chain === undefined || chain === "devnet" ? "solana-devnet" : chain;
+  if (rail === "tempo") return chain === undefined ? (testnetRun() ? "tempo-moderato" : "tempo") : chain === "moderato" ? "tempo-moderato" : chain;
+  if (rail === "solana") return chain === undefined ? (testnetRun() ? "solana-devnet" : "solana") : chain === "devnet" ? "solana-devnet" : chain;
   return chain === "moderato" ? "tempo-moderato" : chain === "devnet" ? "solana-devnet" : chain;
 }
 

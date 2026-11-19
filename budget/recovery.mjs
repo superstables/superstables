@@ -30,6 +30,7 @@ import { STATE_DIR, opsDir } from "./paths.mjs";
 import { EVM_CHAINS } from "./evm/chains.mjs";
 import { SOLANA_CHAINS } from "./solana/chains.mjs";
 import { sellerUrlProblem } from "../src/core/seller-url.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 /** The site's announcement in GET /api/v1/budget/services `features`. */
 export const RECOVERY_FEATURE = "recovery_advice_v1";
@@ -374,7 +375,7 @@ export const supersededNext = (by) => (by?.closed ? "use a new --op for a new pu
 /** The words a rail gives for an op that auto recovery marked: never paid, and where the order went or that it ended. */
 export function supersededWords(op, by) {
   if (by?.closed) return `operation ${op} was closed by auto recovery (order ${by.order_ref ?? "?"}): the order ended without a payment, and this operation is never paid. Buy again with a new --op`;
-  return `operation ${op} was superseded by auto recovery (order ${by?.order_ref ?? "?"}) and is never paid again. The order continues as operation ${by?.op ?? "?"} on ${by?.rail ?? "?"} ${by?.chain ?? "?"}: read it with superstables budget reconcile --rail ${by?.rail ?? "R"} --chain ${by?.chain ?? "C"} --op ${by?.op ?? "ID"}`;
+  return `operation ${op} was superseded by auto recovery (order ${by?.order_ref ?? "?"}) and is never paid again. The order continues as operation ${by?.op ?? "?"} on ${by?.rail ?? "?"} ${by?.chain ?? "?"}: read it with superstables budget reconcile --rail ${by?.rail ?? "R"}${testnetArg()} --chain ${by?.chain ?? "C"} --op ${by?.op ?? "ID"}`;
 }
 
 // ---- 3. validating the site's advice -------------------------------------------------------------------------------------
@@ -1100,7 +1101,7 @@ function recordedFields(a) {
     command: "buy", rail: a.rail, chain: a.chain, op: a.op, evidence: "record", state: paidOnRecord ? "settled" : "unknown", ...(paidOnRecord ? { chain_final: chainFinal } : {}),
     paid: paidOnRecord ? true : null, delivered, amount: null,
     tx: { ...(a.tx ? { settle: a.tx } : {}), ...(a.tx_pull ? { pull: a.tx_pull } : {}), ...(a.tx_unknown_kind ? { recorded: a.tx_unknown_kind } : {}) },
-    next: `superstables budget reconcile --rail ${a.rail} --chain ${a.chain} --op ${a.op} (never pay again for this order${paidOnRecord && delivered !== true ? "; if it was not delivered, report the transaction to the seller" : ""})`,
+    next: `superstables budget reconcile --rail ${a.rail}${testnetArg()} --chain ${a.chain} --op ${a.op} (never pay again for this order${paidOnRecord && delivered !== true ? "; if it was not delivered, report the transaction to the seller" : ""})`,
     reason: `the recovery record says operation ${a.op} ${what}${a.tx ? ` (transaction ${a.tx})` : a.tx_pull ? ` (pull ${a.tx_pull})` : a.tx_unknown_kind ? ` (recorded transaction ${a.tx_unknown_kind}, kind unknown)` : ""}, but its journal cannot be read: this is what was recorded, and it is never paid again`,
   };
 }

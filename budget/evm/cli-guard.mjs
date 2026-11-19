@@ -102,7 +102,7 @@ const movingToKeychain = scriptName === "setup" && argv.includes("--key-store") 
 const gate = gateEntry ? chainGate({ rail: "evm", key: gateKey, testnet: gateEntry.testnet, token: gateEntry.token, agentKey: AGENT_KEY_SCRIPTS.has(scriptName) && !movingToKeychain }) : "";
 if (gate) {
   process.stderr.write(`REFUSED: ${gate}. Nothing was signed or sent.\n`);
-  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: gateEntry?.testnet === true ? "nothing was signed or sent; run it again with --testnet if the owner asked for a testnet" : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}\n`);
+  process.stdout.write(`RESULT ${JSON.stringify({ ok: false, command: basename(rel, ".ts"), rail: "evm", chain: gateKey, state: "refused_precheck", reason: gate, next: gateEntry?.testnet === true ? "nothing was signed or sent; run it again with --testnet if the owner asked for a testnet" : scriptName === "setup" && /OS keychain/.test(gate) ? `nothing was signed or sent; the key is kept in the OS keychain only: superstables budget setup --rail evm${gateKey === EVM_DEFAULT_CHAIN ? "" : ` --chain ${gateKey}`} --key-store os-keychain` : "nothing was signed or sent; ask the owner: the refusal says what this mainnet still needs" })}\n`);
   process.exit(3);
 }
 

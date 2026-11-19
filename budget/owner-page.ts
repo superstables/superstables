@@ -258,7 +258,7 @@ export function ownerPageFor(rail: OwnerRail) {
   const pageFacts = () => ({ ...rail.pageFacts?.(), binding: bindingFacts() });
   /** What the link's sentence says about the network: test tokens on a testnet; the mainnet's name with (mainnet). */
   const moneyWords = rail.chain.testnet
-    ? "This is a testnet: it uses test tokens."
+    ? "This uses test tokens."
     : `This is on ${rail.chain.chainName} (mainnet).`;
   const inMinutes = (expiresAt: number) => {
     const minutes = Math.round((expiresAt - Date.now()) / 60000);

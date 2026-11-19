@@ -46,6 +46,7 @@ import { staleOwnerLine } from "../evm-owner-line.mjs";
 import { resumeKeychainMove } from "../keychain-move.mjs";
 import { SETUP_KEYS, agentBinding, bindingLines, signLocalBinding } from "../owner-binding.mjs";
 import type { OwnerVerdict } from "../../src/core/signer/owner-approval-server.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 /** "test " on a testnet; "" on a mainnet, where the token is real. */
 const TEST = (EVM_CHAINS as Record<string, { testnet?: unknown }>)[CFG.key]?.testnet === true ? "test " : "";
@@ -197,7 +198,7 @@ const keyWhere = keyStore === "os-keychain" ? "in its OS keychain (only its addr
 const retired = retiredProblem("evm", agentAddr);
 if (retired) {
   console.log(`REFUSED: ${retired}. Nothing was changed.`);
-  process.exit(emit("setup", 3, { state: "refused_precheck", reason: retired, next: `move the agent key file away (superstables budget rotate --rail evm does this), then run setup again` }));
+  process.exit(emit("setup", 3, { state: "refused_precheck", reason: retired, next: `move the agent key file away (superstables budget rotate --rail evm${testnetArg()} does this), then run setup again` }));
 }
 
 const p = publicEnv();

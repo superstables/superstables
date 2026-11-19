@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { agentKeyFile, publicFile } from "./paths.mjs";
 import { UNSAFE_SECRET_FILE, readRegularFile, readSecretFile } from "./secret-file.mjs";
+import { testnetArg } from "../src/core/mainnet-policy.js";
 
 const VARS = {
   evm: (label) => ({ key: "B4_AGENT_KEY", store: "B4_AGENT_KEY_STORE", owner: "B4_OWNER_ADDRESS", agent: "B4_AGENT_ADDRESS", ownerInAgentFile: false, label }),
@@ -65,7 +66,7 @@ export function setupGaps({ rail, chain, agent }) {
  */
 export function ownerSteps(rail, chain, defaultChain, owner) {
   const c = chain && chain !== defaultChain ? ` --chain ${chain}` : "";
-  const r = `--rail ${rail}${c}`;
+  const r = `--rail ${rail}${testnetArg()}${c}`;
   const fund = rail === "tempo" ? "" : `superstables budget fund-agent ${r}, superstables budget doctor ${r}, `;
   const local = `superstables budget setup ${r}, ${fund}superstables budget grant ${r} --amount A`;
   if (owner) return local;

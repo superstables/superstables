@@ -41,6 +41,7 @@ import {
   newJournal, readJournal, writeJournal, reconcileJournal, readSettlement, readPull, makeSafe, otherOpWithTx, addFee, exitCodeFor, pendingJournalsFor, scanJournals, atomicUsdc, REUSABLE, PENDING,
   type Journal, type JournalReferral, type OpState,
 } from "./ops.ts";
+import { testnetArg } from "../../src/core/mainnet-policy.js";
 
 /** The longest authorization a budget purchase signs: a seller asking for longer is refused (the x402 client signs exactly the seller's window). */
 export const MAX_AUTH_LIFETIME_S = 600;
@@ -369,7 +370,7 @@ async function noteArrivals(j: Journal, agent: Address, tag?: string) {
   const now = await usdcBalance(agent);
   const extra = now - (before - gas);   // before - floor(fee/1e12) is the HIGHEST balance the purchase can leave: never a false report
   if (extra <= 0n) return;
-  const note = `the agent key holds ${usdc(extra)} ${SYM} more than before this purchase less its gas: money arrived from outside (a seller refund?). It is not gas reserve; the owner returns it with superstables budget recover --rail evm --chain ${CFG.key}`;
+  const note = `the agent key holds ${usdc(extra)} ${SYM} more than before this purchase less its gas: money arrived from outside (a seller refund?). It is not gas reserve; the owner returns it with superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key}`;
   j.notes.push(note); writeJournal(j);
   console.log(oneLine(tag ? `[${tag}] ${note}` : note, 2000));
 }
@@ -415,7 +416,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   if (o.recoveryOrder !== undefined && prior && collides(prior, url)) {
     const why = `operation ${o.op} has a journal for a different request than this order's attempt, so its outcome is unknown`;
     log(`REFUSED: ${why}`);
-    return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
+    return { ...res, state: "unknown", journal: { ...j, state: "unknown", reason: why, next: `superstables budget reconcile --rail evm${testnetArg()} --chain ${CFG.key} --op ${o.op} (never pay again for this order)` }, exitCode: 5 };
   }
   if (prior && !REUSABLE.includes(prior.state)) {
     const why = PENDING.includes(prior.state)
@@ -564,7 +565,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
       });
       if (!key.ok) throw new Stop("precheck",
         `REFUSED: another purchase is still using this agent key on ${CFG.label} after ${KEY_WAIT_MS / 1000} s (${oneLine(key.details, 300)}). Nothing was signed or pulled.`,
-        `buy again with the same --op once it has ended; if none is running, the owner checks in their own terminal and runs "superstables budget unlock --rail evm --chain ${CFG.key} --agent-key --confirm"`);
+        `buy again with the same --op once it has ended; if none is running, the owner checks in their own terminal and runs "superstables budget unlock --rail evm${testnetArg()} --chain ${CFG.key} --agent-key --confirm"`);
       hold.key = key;
       if (precheck) {
         const now = Math.floor(Date.now() / 1000);
@@ -597,11 +598,11 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
             const ops = open.slice(0, 5).map((p) => p.op).join(", ");
             throw new Stop("precheck",
               `REFUSED: ${open.length === 1 ? "operation" : "operations"} ${ops} pulled ${unreadable ? "an unknown amount of" : usdc(owed)} ${SYM} into the agent key and ${open.length === 1 ? "is" : "are"} not settled or returned in the journal; on ${CFG.label} that money is not gas reserve. Nothing was signed or pulled.`,
-              `run "${cmd("reconcile.ts", `--op ${open[0].op}`)}"; if it is still not settled, the owner runs "superstables budget recover --rail evm --chain ${CFG.key} --op ${open[0].op}", then buy again`);
+              `run "${cmd("reconcile.ts", `--op ${open[0].op}`)}"; if it is still not settled, the owner runs "superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key} --op ${open[0].op}", then buy again`);
           }
         }
         if (GAS.isUsdc ? held > GAS.reserveMax! : held > 0n) {
-          const recover = `superstables budget recover --rail evm --chain ${CFG.key}`;
+          const recover = `superstables budget recover --rail evm${testnetArg()} --chain ${CFG.key}`;
           throw new Stop("precheck",
             `REFUSED: the agent key already holds ${usdc(held)} ${SYM}${GAS.isUsdc ? ` (more than the ${usdc(GAS.reserveMax!)} ${SYM} gas reserve it should hold)` : ""}: a seller refund or funds stranded by an earlier purchase arrived there. Nothing was signed or pulled.`,
             `owner: run "${recover}" to return the ${usdc(held)} ${SYM} to the owner (the agent key sends it back; the owner approves in their wallet only if something is left for them to do), then buy again with a new --op`);
