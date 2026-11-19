@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.6] - Budget fee token and stablecoin list
+
 ### Changed
 
 - **The agent pays its Tempo network fee in the budget token:** The keychain counts a fee the account pays against the key's limit on the fee token, so a fee in any other token fails with `SpendingLimitExceeded`. `budget buy` now names the budget token as the fee token, and refuses (before anything is sent) a signed payment that names another or none, unless the seller pays the fee. Before, an owner whose wallet set another fee token could not pay from the budget.
@@ -442,7 +444,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.5...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.6...HEAD
+[1.4.6]: https://github.com/superstables/superstables/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/superstables/superstables/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/superstables/superstables/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/superstables/superstables/compare/v1.4.2...v1.4.3
