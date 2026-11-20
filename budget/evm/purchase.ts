@@ -51,6 +51,10 @@ export const MIN_AUTH_LIFETIME_S = 30;
 export const CLOCK_SLACK_S = 5;
 /** How long a purchase waits for another purchase (or recover) on the same agent key and chain before it refuses. */
 const KEY_WAIT_MS = 600_000;
+/** How long a purchase reads the chain for its own payment before it answers `unknown` and leaves the rest to reconcile. */
+const SETTLE_CHECK_MS = 45_000;
+/** The shortest log search a late read still gets. */
+const SETTLE_CHECK_FLOOR_MS = 5_000;
 /** The most of a 402 answer that is read: the x402 client reads the whole body of one, and a seller can send an endless one. */
 const MAX_CHALLENGE_BYTES = 65_536;
 /** The most of the seller's answer that is kept (buy saves it next to the journal). A longer answer is cut here and flagged. */
@@ -713,6 +717,8 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   res.response = { ...got, contentType: r.headers.get("content-type") ?? undefined };
   res.body = oneLine(got.bytes.subarray(0, 4096).toString("utf8").replace(/\s+/g, " "), 160);
   res.settleTx = res.settle?.transaction;
+  // kept as a place to look on chain, for this run and for reconcile; the journal's settleTx still comes from the chain alone
+  if (j.pullTx && typeof res.settleTx === "string" && /^0x[0-9a-fA-F]{64}$/.test(res.settleTx)) { j.settleHint = res.settleTx as Hex; writeJournal(j); }
   if (!res.settle && r.status === 402) {
     const pr = r.headers.get("payment-required");
     if (pr) try { res.sellerError = oneLine(JSON.parse(Buffer.from(pr, "base64").toString()).error); } catch {}
@@ -729,8 +735,12 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   }
 
   // The seller's word is not evidence. Read the chain (own authorization nonce). RPC lag: a few short retries.
-  let s = await readSettlement(j);
-  for (let i = 0; !s.used && !s.canceled && i < 5 && (res.settle?.success || r.ok); i++) { await rpcPause(3000); s = await readSettlement(j); }
+  // One bounded check: a rate-limited RPC must not hold the purchase past an agent's tool limit. What it leaves unread is `unknown`, for reconcile.
+  const settleBy = Date.now() + SETTLE_CHECK_MS;
+  const left = () => ({ searchMs: Math.max(SETTLE_CHECK_FLOOR_MS, settleBy - Date.now()) });
+  console.log("checking the payment on chain");
+  let s = await readSettlement(j, left());
+  for (let i = 0; !s.used && !s.canceled && i < 5 && Date.now() < settleBy && (res.settle?.success || r.ok); i++) { await rpcPause(3000); s = await readSettlement(j, left()); }
   if (s.used && s.settleTx) {
     const rec = await reconcileJournal(j, { quiet: true });
     res.settleTx = rec.j.settleTx;
@@ -744,7 +754,7 @@ async function purchaseLocked(o: PurchaseOpts, hold: { key: { release(): void } 
   if (r.ok) {
     // The seller delivered but the chain does not show the payment yet. Do not cancel it (that would take the goods without paying):
     // the authorization stays valid until validBefore. Reconcile after that.
-    const rec = await reconcileJournal(j, { quiet: !!o.tag });
+    const rec = await reconcileJournal(j, { quiet: !!o.tag, ...left() });
     res.state = rec.j.state;
     res.settleTx = rec.j.settleTx;
     res.exitCode = exitCodeFor(rec.j.state, j.delivered);

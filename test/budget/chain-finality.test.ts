@@ -462,6 +462,53 @@ describe("EVM landed results and recovery", () => {
     expect(result.j.reason).toContain("could not be read");
     expect(result.j.reason).not.toContain("does not match");
   });
+  // Property: the seller's transaction hash only says where to look. A payment is settled when that transaction's own
+  // receipt carries this operation's nonce and transfer; on every other path the outcome stays unknown, never paid or unpaid.
+  describe("the transaction the seller named", () => {
+    const HINT: Hex = `0x${"77".repeat(32)}`;
+    const hinted = () => ({ ...journal(), settleHint: HINT });
+    const receipts = (forHint: unknown) => rpc.getTransactionReceipt.mockImplementation(async ({ hash }) => {
+      if (hash !== HINT) return receipt();
+      if (forHint instanceof Error) throw forHint;
+      return forHint;
+    });
+    it("settles from that transaction's receipt when the token's logs cannot be searched", async () => {
+      receipts({ ...receipt(), transactionHash: HINT });
+      rpc.getLogs.mockRejectedValue(new Error("RPC offline"));
+      const module = await ops();
+      expect(await module.readSettlement(hinted())).toMatchObject({ kind: "used", settleTx: HINT, transferOk: true });
+      const result = await module.reconcileJournal(hinted(), { quiet: true });
+      expect(result.verdict).toBe("settled");
+      expect(result.j.settleTx).toBe(HINT);
+      expect(rpc.getLogs).not.toHaveBeenCalled();
+    });
+    it.each([
+      ["has no receipt", null],
+      ["reverted", { ...receipt(), transactionHash: HINT, status: "reverted" }],
+      ["used another authorization", { ...receipt([{ ...used(), topics: encodeEventTopics({ abi, eventName: "AuthorizationUsed", args: { authorizer: AGENT, nonce: BLOCK_HASH } }) }, transfer()]), transactionHash: HINT }],
+    ])("decides nothing when the named transaction %s: unknown while the logs cannot be searched", async (_what, forHint) => {
+      receipts(forHint);
+      rpc.getLogs.mockRejectedValue(new Error("RPC offline"));
+      const module = await ops();
+      expect(await module.readSettlement(hinted())).toMatchObject({ kind: "unread", used: false });
+      const result = await module.reconcileJournal(hinted(), { quiet: true });
+      expect(result.verdict).toBe("unknown");
+      expect(result.j.settleTx).toBeUndefined();
+      expect(result.j.next).toContain(`/address/${AGENT}`);
+      expect(result.j.next).toContain(HINT);
+      expect(result.j.next).toMatch(/A matching transfer alone does not confirm this purchase\. Do not pay again\.$/);
+    });
+    it("pays to another recipient: the authorization is used, the transfer does not match, unknown", async () => {
+      receipts({ ...receipt([used(), transfer(AGENT, OWNER)]), transactionHash: HINT });
+      const result = await (await ops()).reconcileJournal(hinted(), { quiet: true });
+      expect(result.verdict).toBe("unknown");
+      expect(result.j.reason).toContain("does not match");
+    });
+    it("falls back to the token's logs when the named transaction cannot be read", async () => {
+      receipts(new Error("RPC unavailable"));
+      expect(await (await ops()).readSettlement(hinted())).toMatchObject({ kind: "used", settleTx: HASH });
+    });
+  });
   it("a landed cancellation pending finality is separate from a used payment", async () => {
     rpc.getLogs.mockImplementation(async ({ event }) => event.name === "AuthorizationCanceled" ? [used("AuthorizationCanceled")] : []);
     rpc.getTransactionReceipt.mockResolvedValue(receipt([used("AuthorizationCanceled")]));

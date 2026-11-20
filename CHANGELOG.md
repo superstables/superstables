@@ -7,6 +7,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Budget purchases on a rate-limited RPC:** `budget buy` and `budget reconcile` on EVM chains now read the transaction the seller named and accept it only when its receipt on chain carries the purchase's own authorization and transfer. Rate-limited log searches could leave a settled purchase `unknown`.
+- **`budget buy` settlement checks:** EVM purchases use shorter log searches and show progress while checking payment on chain. Unresolved payments remain `unknown`; run `budget reconcile` again later.
+
+### Changed
+
+- **`unknown` says where to look:** unresolved EVM settlement checks now include the agent's explorer address in `next`, plus the seller's transaction when provided.
+- **Skill:** Base (mainnet) budget setup explains gas, the expected finality wait and checking the agent's address in the wallet.
+
 ## [1.4.6] - Budget fee token and stablecoin list
 
 ### Changed

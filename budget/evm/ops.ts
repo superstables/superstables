@@ -22,7 +22,7 @@ import { parseEventLogs, encodeFunctionData, parseSignature, parseAbi, toEventSe
 import {
   assertMainnetOpen,
   SYM,
-  OPS_DIR, USDC, CFG, RAIL, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
+  OPS_DIR, USDC, CFG, RAIL, EXPLORER, cmd, erc20Abi, publicClient, usdc, sleep, tx, retry, allowanceOf, usdcBalance, readUntil, feeOf, sendJournaled, receiptOf,
   GasShort, gasWords, oneLine, receiptAgreed, txAgreed, authorizationStateAgreed, agreementWords,
   type Wallet,
 } from "./lib.ts";
@@ -67,6 +67,8 @@ export type Journal = {
   auth?: { nonce: Hex; validBefore: number; validAfter: number; value: string; to: Address; from: Address };
   settleTx?: Hex;
   settleStatus?: "success" | "reverted";
+  /** The transaction the seller named in its answer. A place to look, never evidence: settleTx is set only from the chain. */
+  settleHint?: Hex;
   // an unsettled authorization is cancelled on chain before the pulled price is returned
   cancelTx?: Hex;
   cancelNonce?: number;
@@ -384,7 +386,7 @@ export type Settlement =
   | { kind: "used"; used: true; canceled: false; settleTx: Hex; status: "success"; transferOk: boolean; final: boolean; block: bigint };
 
 /** Latest use, canonical inclusion, and finality are separate observations. Read errors never imply use. */
-export async function readSettlement(j: Journal): Promise<Settlement> {
+export async function readSettlement(j: Journal, opts: { searchMs?: number } = {}): Promise<Settlement> {
   const auth = j.auth;
   if (!auth) return { kind: "unused", used: false, canceled: false };
   try {
@@ -423,15 +425,18 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
       const transferOk = parseEventLogs({ abi: erc20Abi, logs: receipt.logs, eventName: "Transfer" }).some((l) => l.address.toLowerCase() === USDC.toLowerCase() && l.args.from.toLowerCase() === auth.from.toLowerCase() && l.args.to.toLowerCase() === auth.to.toLowerCase() && l.args.value === BigInt(auth.value));
       return { kind: "used", used: true, canceled: false, settleTx: hash, status: "success", transferOk, final, block: receipt.blockNumber };
     };
-    for (const hash of [j.settleTx, j.cancelTx]) {
+    // The seller's hash is read like any other: its receipt must carry this operation's own nonce and transfer, or it decides nothing.
+    for (const hash of [j.settleTx, j.cancelTx, j.settleHint]) {
       if (!hash) continue;
-      const found = await inspect(hash);
+      const found = await inspect(hash).catch((e) => { if (hash === j.settleHint) return undefined; throw e; });
       if (found) return found;
     }
     // Older Base journals without a pull block still cover the former 6,000-second fallback.
     const lookback = CFG.chainId === 8453 || CFG.chainId === 84532 ? BigInt(Math.ceil(6_000 / CFG.blockSeconds)) : 3000n;
     const fromBlock = j.pullBlock ? BigInt(j.pullBlock) : latest.number > lookback ? latest.number - lookback : 0n;
     const top = latest.number;
+    // one allowance for both searches, so a caller's limit is the whole search's
+    const searchBy = opts.searchMs === undefined ? undefined : Date.now() + opts.searchMs;
     let covered = true;
     for (const event of events) {
       const search = await searchLogs(
@@ -445,6 +450,7 @@ export async function readSettlement(j: Journal): Promise<Settlement> {
           }
           return undefined;
         },
+        searchBy === undefined ? {} : { searchMs: Math.max(1_000, searchBy - Date.now()) },
       );
       if (search.found) return search.found;
       if (!search.covered) covered = false;
@@ -514,7 +520,7 @@ async function replacementNotAgreed(j: Journal, replacement: Hex): Promise<strin
  *   not_found nothing can land for this operation: no pull was ever signed, or the agent's nonce at the pull's position was used
  *             by a different transaction while this pull is not on chain
  */
-export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {}): Promise<{ j: Journal; verdict: "settled" | "failed" | "unknown" | "not_found" }> {
+export async function reconcileJournal(j: Journal, opts: { quiet?: boolean; searchMs?: number } = {}): Promise<{ j: Journal; verdict: "settled" | "failed" | "unknown" | "not_found" }> {
   if (j.state === "settled" && j.final !== false) return { j, verdict: "settled" };
   const log = (s: string) => { if (!opts.quiet) console.log(s); };
   const save = (state: OpState, reason: string | undefined, next: string, note: string) => {
@@ -569,10 +575,11 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
   }
   j.pulled = usdc(pull.moved ?? 0n);
 
-  let s = await readSettlement(j);
+  const settleOpts = opts.searchMs === undefined ? {} : { searchMs: opts.searchMs };
+  let s = await readSettlement(j, settleOpts);
   if (j.inclusionObserved && !s.used) {
     if (s.kind === "unused" || (s.kind === "canceled" && s.final)) {
-      const confirmation = await readSettlement(j);
+      const confirmation = await readSettlement(j, settleOpts);
       if (confirmation.kind === "unused" || (confirmation.kind === "canceled" && confirmation.final)) return lostInclusion();
       if (confirmation.used) s = confirmation;
       else return { j, verdict: j.state === "settled" ? "settled" : "unknown" };
@@ -594,7 +601,9 @@ export async function reconcileJournal(j: Journal, opts: { quiet?: boolean } = {
 
   if (s.kind === "unread" || s.kind === "pending" || (s.kind === "canceled" && !s.final) || !pull.final) {
     const reason = s.kind === "unread" || s.kind === "pending" ? s.reason : s.kind === "canceled" ? "the cancellation landed, but is not final on chain yet" : "the pull landed, but is not final on chain yet";
-    save("unknown", reason, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again later. Do not pay again.`, "chain read unresolved");
+    // an unread payment: say where it can be seen, so the agent can look before it asks the owner to
+    const look = s.kind === "unread" || s.kind === "pending" ? ` Check the agent's transfers at ${EXPLORER}/address/${j.agent}.${j.settleHint ? ` The seller named ${tx(j.settleHint)}.` : ""} A matching transfer alone does not confirm this purchase.` : "";
+    save("unknown", reason, `run "${cmd("reconcile.ts", `--op ${j.op}`)}" again later.${look} Do not pay again.`, "chain read unresolved");
     return { j, verdict: "unknown" };
   }
 
