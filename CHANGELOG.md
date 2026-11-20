@@ -7,6 +7,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.4.7] - Budget purchase checks on a rate-limited RPC
+
 ### Fixed
 
 - **Budget purchases on a rate-limited RPC:** `budget buy` and `budget reconcile` on EVM chains now read the transaction the seller named and accept it only when its receipt on chain carries the purchase's own authorization and transfer. Rate-limited log searches could leave a settled purchase `unknown`.
@@ -455,7 +457,8 @@ extension and how to confirm which build is running.
 - With `--wallet local` the key is a file on the machine, readable by any process running as the
   owner. That mode exists for a machine with no browser.
 
-[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.6...HEAD
+[Unreleased]: https://github.com/superstables/superstables/compare/v1.4.7...HEAD
+[1.4.7]: https://github.com/superstables/superstables/compare/v1.4.6...v1.4.7
 [1.4.6]: https://github.com/superstables/superstables/compare/v1.4.5...v1.4.6
 [1.4.5]: https://github.com/superstables/superstables/compare/v1.4.4...v1.4.5
 [1.4.4]: https://github.com/superstables/superstables/compare/v1.4.3...v1.4.4
