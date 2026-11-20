@@ -29,7 +29,7 @@ function badRecipient(who, to, opts) {
 }
 
 /**
- * The seller's tempo.charge challenge request must be: pathUSD on this chain (Moderato, or Tempo mainnet), whole base units (no more
+ * The seller's tempo.charge challenge request must be: the budget token on this chain (pathUSD on Moderato, OUSD on Tempo mainnet), whole base units (no more
  * precision than the token has), at most `maxBase`, paid to `payTo` when one is given, and never to the zero address,
  * the token itself, the agent or the owner (the same for each split). `request.amount`
  * is in base units on the wire; any `decimals` field must match the token.

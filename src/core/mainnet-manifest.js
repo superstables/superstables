@@ -21,7 +21,7 @@
 //
 // Facts read on 18 Nov 2026 with read-only calls (eth_chainId, eth_call of name, symbol, decimals, version and
 // DOMAIN_SEPARATOR, recomputed from the stated domain; getGenesisHash and getTokenSupply on Solana). Nothing was signed
-// or sent. Arc and Tempo use the same token address on mainnet as on their testnets: the chain id tells them apart.
+// or sent. Arc uses the same token address on mainnet as on its testnet: the chain id tells them apart.
 
 const MEASURED = "measured 18 Nov 2026 (latest minus finalized timestamp, finalized jumps over two minutes)";
 const RECHECKED = "measured 19 Nov 2026 (latest minus finalized block time on both endpoints, every 20 s for 10 minutes)";

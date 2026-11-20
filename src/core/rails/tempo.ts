@@ -1,8 +1,8 @@
 import { finalityFor } from "../finality-policy.js";
 import { inclusion } from "../finality.js";
 // The MPP tempo.charge rail on Tempo (Moderato, and Tempo mainnet unless the run is testnet-only (--testnet)), push mode: the
-// owner's own wallet sends one pathUSD transferWithMemo, with the memo bound to the seller's challenge, and the seller is
-// then shown the transaction's hash. Pinned in code: the Tempo chains of the chain table and their pathUSD. A challenge that asks for anything else is refused before the owner is asked: another
+// owner's own wallet sends one transferWithMemo of the chain's token, with the memo bound to the seller's challenge, and the seller is
+// then shown the transaction's hash. Pinned in code: the Tempo chains of the chain table and their tokens. A challenge that asks for anything else is refused before the owner is asked: another
 // chain or token, a split between several recipients, the zero address or the token as recipient, the machine-token route, a memo of the seller's own, a seller that will not take a payment
 // the owner's wallet sends (pull only), a credential in a header of the seller's choosing, or an expiry that leaves no
 // time to approve.
