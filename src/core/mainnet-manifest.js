@@ -234,6 +234,36 @@ export const MAINNET_MANIFEST = {
         explorer: "https://docs.robinhood.com/chain/add-network-to-wallet",
       },
     },
+    tempo: {
+      rail: "tempo",
+      chainId: 4217,
+      caip2: "eip155:4217",
+      label: "Tempo",
+      v1Name: "",
+      explorer: "https://explore.tempo.xyz",
+      blockSeconds: 0.5,
+      logRange: 100000,
+      // There is no native token: fees are paid in USD stablecoins. MetaMask requires 18 decimals here.
+      nativeCurrency: { name: "USD", symbol: "USD", decimals: 18 },
+      rpc: [
+        { url: "https://rpc.tempo.xyz", operator: "tempo", source: "https://tempo.com/developers/docs/quickstart/connection-details" },
+        { url: "https://tempo-rpc.publicnode.com", operator: "publicnode", source: "https://tempo.publicnode.com" },
+      ],
+      // OUSD (TIP-20, quote token pathUSD), read on both endpoints at the finalized block on 19 November 2026: symbol() OUSD,
+      // decimals() 6, currency() USD. Not pathUSD: "For balances and payments, most integrations should use OUSD" and
+      // "The user and merchant never hold pathUSD directly".
+      token: {
+        symbol: "OUSD",
+        address: "0x20c0000000000000000000006a37DA5C996874BE",
+        decimals: 6,
+        source: ["https://tempo.com/developers/docs/guide/ousd", "https://tempo.com/developers/docs/protocol/exchange/quote-tokens"],
+      },
+      finality: { kind: "finalized", typicalSeconds: 1, maxSpread: 1000, measured: `0 s; finalized jumped 18 blocks; ${MEASURED}` },
+      sources: {
+        chainId: "https://tempo.com/developers/docs/quickstart/connection-details",
+        explorer: "https://tempo.com/developers/docs/quickstart/connection-details",
+      },
+    },
     solana: {
       rail: "solana",
       chainId: 0,

@@ -116,7 +116,7 @@ function chainFacts(rail, chain) {
   return { label: c?.label ?? chain, testnet: c?.testnet === true, unit: c?.token.symbol ?? "USDC" };
 }
 // A chain name that is a mainnet's, or a chain id, in a --chain value. In a testnet-only run it is refused as a mainnet.
-const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
+const LOOKS_MAINNET = /mainnet|^(base|ethereum|eth|arc|tempo|solana|polygon|optimism|op|arbitrum|avalanche|monad|sei|celo|robinhood|skale-base|bsc)$|^\d+$|^eip155:/i;
 /** find and buy-once name the kind of chain this run uses, without naming one: mainnets by default, testnets with --testnet. */
 const RUN_NETWORK_LINE = () => (mainnetOffReason() ? "This run is testnet-only: payments use test tokens." : `Mainnet by default; testnets need ${TESTNET_FLAG}.`);
 /** Every chain key the budget commands take, and its rail. */
@@ -139,7 +139,7 @@ function wrapList(items, width, indent) {
 const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   evm     ${wrapList(EVM_CHAIN_KEYS.map((k) => `${k} (${EVM_CHAINS[k].label}${k === EVM_DEFAULT_CHAIN ? ", default" : ""})`), 100, "          ")}
           The budget is USDC (USDG on Robinhood Chain and its testnet). Sellers: x402.
-  tempo   ${TEMPO_CHAIN_KEYS.map((k) => `${k} (${TEMPO_CHAINS[k].label}${k === TEMPO_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is pathUSD.
+  tempo   ${TEMPO_CHAIN_KEYS.map((k) => `${k} (${TEMPO_CHAINS[k].label}${k === TEMPO_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is OUSD on tempo, pathUSD on moderato.
           Sellers: MPP (tempo.charge).
   solana  ${SOLANA_CHAIN_KEYS.map((k) => `${k} (${SOLANA_CHAINS[k].label}${k === SOLANA_DEFAULT_CHAIN ? ", default" : ""})`).join(", ")}. The budget is USDC. Sellers: x402.${mainnetOffReason() ? `
   Mainnets, without ${TESTNET_FLAG}: ${["evm", "tempo", "solana"].filter((r) => Object.values(shippedManifest().chains).some((c) => c.rail === r)).map((r) => `${r} ${Object.entries(shippedManifest().chains).filter(([, c]) => c.rail === r).map(([k]) => k).join(", ")}`).join("; ")}.` : ""}
@@ -147,7 +147,7 @@ const CHAINS_HELP = `Rails and chains (--chain; the default is marked):
   ${TEMPO_CHAIN_KEYS.map((k) => TEMPO_CHAINS[k].label).join(" and ")} ${TEMPO_CHAIN_KEYS.length > 1 ? "are" : "is"} tempo; ${SOLANA_CHAIN_KEYS.map((k) => SOLANA_CHAINS[k].label).join(" and ")} ${SOLANA_CHAIN_KEYS.length > 1 ? "are" : "is"} solana. superstables find --budget names the rail and chain for a listing,
   and prints the commands to buy it.`;
 const MAX_HELP = `--max M is the most this one purchase may cost, in the budget token's own units: --max 0.02 means 0.02 USDC (0.02
-  pathUSD on tempo, 0.02 USDG on Robinhood Chain and its testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
+  OUSD on tempo, pathUSD on moderato, 0.02 USDG on Robinhood Chain and its testnet). It is your ceiling, not the price: when the seller asks more, buy refuses (exit 3) and signs nothing.
   Only what is actually paid comes off the budget. Required, with no default.`;
 const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
   evm     setup, fund-agent, doctor, grant.
@@ -159,7 +159,7 @@ const FLOW_HELP = `The owner's steps, in order, once per rail and chain:
           separate from the budget allowance. A mainnet has no faucet: the owner adds the real tokens to their wallet.
           grant: an allowance (USDC approve; USDG on Robinhood Chain and its testnet) from the owner's wallet to the agent key.
           The token stays in the owner's wallet until a purchase: each buy pulls exactly its price, then pays the seller.
-  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's pathUSD up to a limit, until an
+  tempo   setup, grant. grant authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato) up to a limit, until an
           expiry (default 24 hours). The agent needs no gas: fees come from the owner.
   solana  setup, fund-agent, doctor, grant. fund-agent sends the agent SOL for fees (default 0.01). grant makes the agent
           the delegate of the owner's USDC account, up to the amount; the USDC stays in the owner's account until a purchase.`;
@@ -246,7 +246,8 @@ setup --new-owner without --hosted moves a chain with approvals on superstables.
 keychain on standard input and never written to a file. A key already in the key file is moved there and the file's old
 bytes are overwritten. A locked keychain makes buy, grant, fund-agent, recover and owner requests on chains approved on
 superstables.com refuse; a local revoke still works. Rotate keeps the retired key's keychain entry. It does not protect
-the key from code running as you while the keychain is unlocked.
+the key from code running as you while the keychain is unlocked. On tempo it is for the mainnet only (--chain tempo), where
+it is required, and Tempo Moderato keys stay in the key file.
 --grant A and --fund [AMOUNT] (with --hosted): one approval link for the whole set-up. After the owner adds this agent,
 the same page asks their wallet for the gas (--fund: what fund-agent sends, AMOUNT or its default for the chain; not on
 tempo) and then the grant of A (tempo: for 24 hours), in that order. The command reads each transaction from the chain
@@ -331,11 +332,11 @@ choosing --max for buy stays with you (or the owner's instructions).`,
     flags: { amount: "v", expiry: "v", period: "v", sellers: "v", yes: "b", agent: "v", ...OWNER_FLAGS }, required: ["amount"],
     help: helpText({
       usage: "superstables budget grant --rail evm|tempo|solana --amount A [--chain C] [--expiry ISO] [--period SECONDS] [--sellers a,b]\n  [--agent LABEL] [--timeout S] [--no-open] [--detach|--wait|--sign-only]",
-      about: `Grants the agent a budget of A, in the budget token (--amount 5 is 5 USDC on evm and solana, 5 pathUSD on tempo).
+      about: `Grants the agent a budget of A, in the budget token (--amount 5 is 5 USDC on evm and solana, 5 OUSD on tempo, 5 pathUSD on moderato).
 Prints the terms first: the cap, the true maximum, and what the chain enforces and what it does not.
   evm     an allowance (USDC approve) from the owner's wallet to the agent key, in total (no reset, no expiry). The USDC
           stays in the owner's wallet: each purchase pulls exactly its price. Run fund-agent first.
-  tempo   authorizes the agent's access key to spend the owner's pathUSD: --expiry (default 24 hours from now), and
+  tempo   authorizes the agent's access key to spend the owner's OUSD (pathUSD on moderato): --expiry (default 24 hours from now), and
           optionally --period (the limit resets every SECONDS) and --sellers (only these may be paid).
   solana  makes the agent the delegate of the owner's USDC account up to A, in total. Run fund-agent first.
 evm and solana refuse --expiry, --period and --sellers: the chain cannot enforce them. A live budget is never replaced
@@ -566,7 +567,7 @@ Adopt that request with --site-request; only if it was never sent, run the owner
 The services are the ones superstables budget find --once lists (GET /api/v1/purchase/services on the site), on
 Base, Arc and Robinhood Chain, or with --testnet on Base Sepolia, Arc Testnet, Robinhood Chain Testnet, Tempo Moderato
 or Solana devnet: the chain comes from the listing. --max
-is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain and its testnet, or pathUSD on Tempo); a service that costs more is refused before anything is
+is required: the most you accept, in the service's token (USDC, USDG on Robinhood Chain and its testnet, OUSD on Tempo, or pathUSD on Tempo Moderato); a service that costs more is refused before anything is
 created. On superstables.com, the owner approves each purchase's exact amount and recipient. New accounts have no per-payment or
 per-day limits. Where owner controls are shown, the account's owner can set either limit up to 1,000 or leave it unset.
 Limits count USDC, USDG, OUSD and pathUSD token units together across chains; the daily limit uses UTC.
@@ -722,7 +723,7 @@ on this machine is offered the chain's public RPC.
 Output: logs go to stderr. stdout ends with one line
   RESULT {"ok","command","rail","chain","op","state","final","chain_final","proof","paid","delivered","amount","remaining",
           "tx","rpc","id","url","matchCode","message_for_owner","budget_spent","next","reason"}
-Amounts are in the budget token (USDC, USDG on Robinhood Chain and its testnet, or pathUSD on tempo); an unknown amount is null, never "0". final is false
+Amounts are in the budget token (USDC, USDG on Robinhood Chain and its testnet, OUSD on tempo, or pathUSD on moderato); an unknown amount is null, never "0". final is false
 while an owner approval is open (state waiting_owner, or unknown for recover after the agent's own revoke), for an owner
 transaction that landed but is not final on chain yet (state landed, or a setup step landed; chain_final is false), and for a
 buy-once unknown that a later wait can still read, true otherwise, as before chain_final existed. Scripts test final for
@@ -1046,12 +1047,12 @@ function parse(argv) {
   }
   if (f["key-store"] !== undefined) {
     if (cmd !== "setup") badInput(ctx, "--key-store goes with setup");
-    if (f.rail === "tempo" && chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--key-store goes with evm and solana; on Tempo Moderato the agent keys stay in the key file (they are limited on chain)");
+    if (f.rail === "tempo" && chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--key-store on tempo is for its mainnet; on Tempo Moderato the agent keys stay in the key file (they are limited on chain)");
     if (f["key-store"] !== "file" && f["key-store"] !== "os-keychain") badInput(ctx, "--key-store must be file or os-keychain");
   }
   if (f["fund-only"]) {
     if (f.rail !== "tempo") badInput(ctx, "--fund-only is for tempo only (it tops up the owner from the Moderato faucet)");
-    if (!chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--fund-only tops up the owner from the Moderato faucet; a mainnet has no faucet: the owner adds pathUSD to their wallet");
+    if (!chainFacts(f.rail, f.chain).testnet) badInput(ctx, "--fund-only tops up the owner from the Moderato faucet; a mainnet has no faucet: the owner adds OUSD to their wallet");
     const other = ["agent", "new-owner", "hosted", "site", "grant", "fund", "owner-key-file", "detach", "replace", "wait"].find((k) => f[k] !== undefined && f[k] !== false);
     if (other) badInput(ctx, `--fund-only tops up the owner on record and opens no page: it takes no --${other}`);
   }

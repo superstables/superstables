@@ -913,7 +913,7 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
 - **The mainnet manifest states the chain.** The manifest (`src/core/mainnet-manifest.js`) lists each mainnet with its chain
   id, its token's address, decimals and signing domain, its public RPCs and its finality, each fact with its source. The chain
   table entry must state the same facts, and a manifest with one malformed fact closes every mainnet. It lists Base, Arc,
-  Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain and Solana.
+  Arbitrum One, Polygon, SKALE Base, Ethereum, Robinhood Chain, Tempo and Solana.
 - **Mainnet is not paused.** `SUPERSTABLES_MAINNET_PAUSE` is unset or blank, and the file `mainnet-paused` is not in the client's home folder. A pause stops every new signature and send at once; it cannot undo what was already signed.
 - **The chain has what signing on it correctly needs.** The gate checks these and names each one that fails:
   - RPC endpoints that can decide a payment was never made: two operators from the built-in table, or the RPCs your
@@ -925,8 +925,9 @@ passes one chain gate first. A chain whose table entry is not marked as a testne
   - where an agent key signs (the budget rails), an agent key file that names the OS keychain and holds no key. `setup`
     stores a mainnet agent key there with `--key-store os-keychain`. `pay` holds no agent key, so this does not apply to it.
 
-  A check that cannot run counts as missing. Budgets on mainnet work on `evm` and
-  `solana` (`--chain solana`).
+  A check that cannot run counts as missing. Budgets on mainnet work on every rail: `evm`, `tempo` (`--chain tempo`) and
+  `solana` (`--chain solana`). On `tempo` the mainnet agent keys have their own key file, which names the OS keychain and
+  holds no key; `setup --key-store os-keychain` creates each key in the keychain before it writes the file.
 
 `buy-once` pays on Base, Arc and Robinhood Chain by default while mainnet is not paused, when superstables.com
 lists a service there. The owner signs on superstables.com and this client signs nothing, so the agent key and verdict RPC

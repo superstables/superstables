@@ -85,7 +85,7 @@ A mainnet listing has `testnet: false`. Name the network and the amount before t
 
 ## Chain names
 
-Mainnet by default. The testnets in the first table need `--testnet`, which turns the mainnets off for that run. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood` and `solana` are mainnets.
+Mainnet by default. The testnets in the first table need `--testnet`, which turns the mainnets off for that run. In the index, `base`, `arc`, `arbitrum`, `polygon`, `skale-base`, `ethereum`, `robinhood`, `tempo` and `solana` are mainnets.
 
 | Listing chain | `pay` | Budget `--rail` and `--chain` |
 | --- | --- | --- |
@@ -110,6 +110,7 @@ Without `--testnet`, the mainnets route, each by its key or its CAIP-2 id, and `
 | `skale-base` (`eip155:1187947933`) | `evm`, `skale-base` |
 | `ethereum` (`eip155:1`) | `evm`, `ethereum` |
 | `robinhood` (`eip155:4663`) | `evm`, `robinhood` (USDG) |
+| `tempo` (`eip155:4217`) | `tempo`, `tempo` (MPP only) |
 | `solana` (`solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`) | `solana`, `solana` |
 
 The `evm` and `solana` rails pay x402 sellers; `tempo` pays MPP sellers.

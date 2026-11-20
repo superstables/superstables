@@ -1,8 +1,8 @@
 # superstables budget
 
-An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (USDG on Robinhood Chain Testnet, pathUSD on Tempo) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
+An owner gives an AI agent a spending budget once. The agent then buys from paid APIs (x402 and MPP sellers) with USDC (USDG on Robinhood Chain Testnet, OUSD on Tempo, pathUSD on Tempo Moderato) until the budget runs out, expires on Tempo, or the owner revokes it. The budget lives on the blockchain. The agent uses `superstables budget` to check and journal purchases. The agent key can also be used outside the CLI, so only the limits enforced on chain constrain a compromised key.
 
-**Mainnet by default.** `--testnet` uses the testnets and test tokens instead.
+**Mainnet by default.** Every rail takes its mainnets (the EVM mainnets, `--chain tempo` and `--chain solana`). `--testnet` uses the testnets and test tokens instead.
 
 There are two ways to pay, and an agent can offer both:
 

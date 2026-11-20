@@ -11,24 +11,30 @@ const charge = (chainId: number) => ({
   recipient: "0x2222222222222222222222222222222222222222", methodDetails: { chainId },
 });
 
-// The process runs on Moderato; each value is the network mode at the check. Chain 4217 is refused as any other chain is.
-it.each(["1", "", "false", "yes"])("Tempo precheck refuses chain 4217 as it refuses any chain but Moderato (%s)", (value) => {
+// The process runs on Moderato (the chain table's default with --testnet); each value is the network mode at the check.
+it.each(["1", "", "false", "yes"])("Tempo precheck consults the network mode (%s)", (value) => {
   vi.stubEnv("SUPERSTABLES_TESTNET", value);
-  expect(precheckCharge(charge(4217), { maxBase: 1000n })).toEqual({ ok: false, code: "wrong_chain", reason: "chainId 4217 is not Tempo Moderato (42431)" });
-  expect(precheckCharge(charge(99999), { maxBase: 1000n })).toEqual({ ok: false, code: "wrong_chain", reason: "chainId 99999 is not Tempo Moderato (42431)" });
+  const r = precheckCharge(charge(4217), { maxBase: 1000n });
+  expect(r).toMatchObject({ ok: false, code: "wrong_chain" });
+  if (r.ok) throw new Error("mainnet must remain unsupported");
+  expect(r.reason).toContain(value === "" || value === "false" ? "not Tempo Moderato" : value === "yes" ? 'SUPERSTABLES_TESTNET is "yes"' : "testnet-only");
+  if (value === "yes") expect(r.reason).toContain('is "yes"');
+  expect(precheckCharge(charge(99999), { maxBase: 1000n })).toMatchObject({ reason: "chainId 99999 is not Tempo Moderato (42431)" });
   expect(precheckCharge(charge(42431), { maxBase: 1000n })).toMatchObject({ ok: true });
 });
 
-it.each([4217, 99999])("Tempo preflight on Moderato finds no offer from a seller on chain %i", async (chainId) => {
+// Moderato named explicitly: without --testnet the process would run on Tempo mainnet.
+it.each(["1", "yes"])("Tempo preflight consults the network mode (%s)", async (value) => {
   const seller = await startServer((_req, res) => {
-    const request = Buffer.from(JSON.stringify(charge(chainId))).toString("base64url");
+    const request = Buffer.from(JSON.stringify(charge(4217))).toString("base64url");
     res.writeHead(402, { "www-authenticate": `Payment method="tempo", intent="charge", request="${request}"` });
     res.end();
   });
   try {
-    const r = await guardedNode(["--import", "tsx", fileURLToPath(new URL("../../budget/tempo/preflight.ts", import.meta.url)), "--url", seller.url], { SUPERSTABLES_TESTNET: "1" });
-    expect(r.code, r.output).toBe(1);
-    expect(r.output).toContain("no tempo.charge offer on Moderato (chain 42431)");
+    const r = await guardedNode(["--import", "tsx", fileURLToPath(new URL("../../budget/tempo/preflight.ts", import.meta.url)), "--url", seller.url], { SUPERSTABLES_TESTNET: value });
+    expect(r.code, r.output).toBe(value === "yes" ? 3 : 1);
+    expect(r.output).toContain(value === "1" ? "testnet-only" : "SUPERSTABLES_TESTNET");
+    if (value === "yes") expect(r.output).toContain('is \\"yes\\"');
   } finally {
     await seller.close();
   }
