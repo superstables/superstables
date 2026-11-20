@@ -371,8 +371,10 @@ const MAINNETS: Record<string, string> = {
   "eip155:5042": "Arc (mainnet)",
   "eip155:1187947933": "SKALE Base (mainnet)",
   "skale-base": "SKALE Base (mainnet)",
+  "eip155:4217": "Tempo (mainnet)",
   "eip155:4663": "Robinhood Chain (mainnet)",
   robinhood: "Robinhood Chain (mainnet)",
+  tempo: "Tempo (mainnet)",
   "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp": "Solana (mainnet)",
   solana: "Solana (mainnet)",
 };

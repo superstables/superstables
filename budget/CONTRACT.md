@@ -39,7 +39,7 @@ An owner action is final only at a final block: `revoke`, `grant`, `fund-agent` 
 
 `buy` must refuse, before any signature, pull or transaction, when:
 - the price exceeds `--max <amount>` (required; no default);
-- the token is not the rail's expected token (the chain's USDC, Tempo pathUSD, the Solana devnet USDC mint) or decimals don't match;
+- the token is not the rail's expected token (the chain's USDC, OUSD on Tempo or pathUSD on Tempo Moderato, the Solana devnet USDC mint) or decimals don't match;
 - the recipient is not the one in `--pay-to <address>`, when given;
 - the recipient is the zero address, the token contract, the agent or the owner;
 - (evm) the authorization lifetime is missing, not a whole number of seconds, or outside 30 to 600;

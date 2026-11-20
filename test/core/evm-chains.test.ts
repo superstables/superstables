@@ -115,6 +115,7 @@ describe("judging an x402 offer on each EVM chain", () => {
       ["polygon", "Polygon (mainnet)"],
       ["eip155:5042", "Arc (mainnet)"],
       ["eip155:1187947933", "SKALE Base (mainnet)"],
+      ["eip155:4217", "Tempo (mainnet)"],
       ["eip155:4663", "Robinhood Chain (mainnet)"],
       ["robinhood", "Robinhood Chain (mainnet)"],
       ["solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", "Solana (mainnet)"],

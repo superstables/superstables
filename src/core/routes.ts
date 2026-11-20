@@ -109,7 +109,7 @@ export function routesFor(rails: string[] | undefined, chains: string[]): PayRou
 /** Mainnet names a listing may use, so a refusal can say which mainnet it is on. */
 const MAINNET_NAMES = new Set([
   "base", "ethereum", "solana", "polygon", "arbitrum", "optimism", "avalanche", "bsc", "sei", "iotex", "peaq",
-  "xlayer", "abstract", "skale", "stellar", "near", "sui", "aptos", "robinhood",
+  "xlayer", "abstract", "skale", "tempo", "stellar", "near", "sui", "aptos", "robinhood",
 ]);
 
 const KNOWN_CHAIN_NAMES = new Set([
